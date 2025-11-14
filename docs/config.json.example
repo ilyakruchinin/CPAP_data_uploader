@@ -1,0 +1,13 @@
+{
+  "WIFI_SSID": "YourNetworkName",
+  "WIFI_PASS": "YourNetworkPassword",
+  "ENDPOINT": "//192.168.1.100/cpap_backups",
+  "ENDPOINT_TYPE": "SMB",
+  "ENDPOINT_USER": "username",
+  "ENDPOINT_PASS": "password",
+  "UPLOAD_HOUR": 12,
+  "SESSION_DURATION_SECONDS": 5,
+  "MAX_RETRY_ATTEMPTS": 3,
+  "GMT_OFFSET_SECONDS": 0,
+  "DAYLIGHT_OFFSET_SECONDS": 0
+}

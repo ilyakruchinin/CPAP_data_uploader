@@ -49,6 +49,52 @@ This project uses a clean, class-based architecture with explicit dependency inj
 - **SD_MMC** - Built-in ESP32 SDIO library (4-bit mode)
 - **WiFi** - Built-in ESP32 WiFi library
 - **FS** - Built-in ESP32 filesystem library
+- **libsmb2** - SMB2/3 client library (ESP-IDF component, optional - only needed if SMB upload is enabled)
+
+## Upload Backend Configuration
+
+This project supports multiple upload backends through compile-time feature flags. Only enable the backend(s) you need to minimize binary size.
+
+### Available Backends
+
+| Backend | Status | Binary Size | Feature Flag |
+|---------|--------|-------------|--------------|
+| SMB/CIFS | ✅ Implemented | +220-270KB | `-DENABLE_SMB_UPLOAD` |
+| WebDAV | ⏳ TODO | +50-80KB (est.) | `-DENABLE_WEBDAV_UPLOAD` |
+| SleepHQ | ⏳ TODO | +40-60KB (est.) | `-DENABLE_SLEEPHQ_UPLOAD` |
+
+### Enabling/Disabling Backends
+
+Edit `platformio.ini` and uncomment the desired feature flag(s):
+
+```ini
+build_flags = 
+    -DCORE_DEBUG_LEVEL=3
+    -Icomponents/libsmb2/include
+    -DENABLE_SMB_UPLOAD          ; Enable SMB/CIFS upload support
+    ; -DENABLE_WEBDAV_UPLOAD     ; Enable WebDAV upload support (TODO)
+    ; -DENABLE_SLEEPHQ_UPLOAD    ; Enable SleepHQ direct upload (TODO)
+```
+
+**Note:** You can enable multiple backends simultaneously. The active backend is selected at runtime via the `ENDPOINT_TYPE` setting in `config.json`.
+
+### SMB Upload Setup
+
+**Quick Setup:**
+```bash
+./scripts/setup_libsmb2.sh
+```
+
+**Manual Setup:**
+```bash
+mkdir -p components
+git clone https://github.com/sahlberg/libsmb2.git components/libsmb2
+pio run
+```
+
+See [docs/LIBSMB2_INTEGRATION.md](docs/LIBSMB2_INTEGRATION.md) for detailed integration documentation.
+
+**To disable SMB support** (reduces binary size by ~220KB), comment out `-DENABLE_SMB_UPLOAD` in `platformio.ini`.
 
 ## Setup
 1. Activate Python virtual environment: `source venv/bin/activate`
@@ -96,8 +142,8 @@ Create a `config.json` file in the root of your SD card with the following forma
 - **SCHEDULE**: Upload schedule (e.g., "daily", "hourly") - TODO: implement scheduling logic
 - **ENDPOINT**: Remote location where files will be uploaded (required)
 - **ENDPOINT_TYPE**: Type of endpoint - `WEBDAV`, `SMB`, or `SLEEPHQ`
-  - `WEBDAV`: WebDAV share (e.g., NextCloud) - Format: `http://address/folder`
-  - `SMB`: Windows share - Format: `//address/folder` (e.g., `//10.0.0.5/backups/cpap_data`) - TODO: implement
+  - `WEBDAV`: WebDAV share (e.g., NextCloud) - Format: `http://address/folder` - TODO: implement
+  - `SMB`: Windows/Samba share - Format: `//address/share` (e.g., `//10.0.0.5/backups`) - ✅ Implemented
   - `SLEEPHQ`: Direct upload to SleepHQ - TODO: implement
 - **ENDPOINT_USER**: Username for the remote endpoint
 - **ENDPOINT_PASS**: Password for the remote endpoint
@@ -118,19 +164,29 @@ Create a `config.json` file in the root of your SD card with the following forma
 - ✅ Configuration file loading from SD card
 - ✅ WiFi station mode connection
 - ✅ Class-based architecture with dependency injection
+- ✅ SMB upload implementation (libsmb2-based)
+- ✅ File tracking with checksums (which files have been uploaded)
+- ✅ Schedule-based upload logic (NTP-synchronized daily uploads)
+- ✅ Time-budgeted SD card access (respects CPAP machine access needs)
+- ✅ Upload state persistence across reboots
+- ✅ Retry logic with adaptive time budgets
+- ✅ Feature flags for compile-time backend selection
 
 ### TODO
-- ⏳ File upload implementations (WebDAV, SMB, SleepHQ)
-- ⏳ File tracking (which files have been uploaded)
-- ⏳ Schedule-based upload logic
-- ⏳ Error handling and retry logic
+- ⏳ WebDAV upload implementation (placeholder created)
+- ⏳ SleepHQ upload implementation (placeholder created)
 - ⏳ Status LED indicators
 - ⏳ Low power mode when idle
+- ⏳ Web interface for configuration and monitoring
 
-## Reference Firmware
+## References
 
-The `docs/` folder contains reference implementations:
-- **SdWiFiBrowser** - Basic WiFi file browser
-- **ESP3D v3.0** - Advanced firmware with WebDAV/FTP support
+### Hardware
+- [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) - FYSETC SD WIFI PRO hardware used in this project
+- [SD WIFI PRO GitHub](https://github.com/FYSETC/SD-WIFI-PRO) - Official hardware repository with schematics and documentation
 
-These are for reference only and not used directly in this project.
+### Reference Firmware
+- [SdWiFiBrowser](https://github.com/FYSETC/SdWiFiBrowser) - Basic WiFi file browser firmware for SD WIFI PRO
+- [ESP3D](https://github.com/luc-github/ESP3D) - Advanced 3D printer firmware with WebDAV/FTP support
+
+These projects provided hardware specifications and reference implementations but are not used directly in this project.

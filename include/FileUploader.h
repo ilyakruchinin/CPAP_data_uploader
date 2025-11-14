@@ -3,15 +3,64 @@
 
 #include <Arduino.h>
 #include <FS.h>
+#include <vector>
 #include "Config.h"
+#include "UploadStateManager.h"
+#include "TimeBudgetManager.h"
+#include "ScheduleManager.h"
+#include "WiFiManager.h"
+
+// Include uploader implementations based on feature flags
+#ifdef ENABLE_SMB_UPLOAD
+#include "SMBUploader.h"
+#endif
+
+#ifdef ENABLE_WEBDAV_UPLOAD
+#include "WebDAVUploader.h"
+#endif
+
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+#include "SleepHQUploader.h"
+#endif
 
 class FileUploader {
 private:
     Config* config;
+    UploadStateManager* stateManager;
+    TimeBudgetManager* budgetManager;
+    ScheduleManager* scheduleManager;
+    WiFiManager* wifiManager;
+    
+    // Uploader instances (only compiled if feature flag is enabled)
+#ifdef ENABLE_SMB_UPLOAD
+    SMBUploader* smbUploader;
+#endif
+#ifdef ENABLE_WEBDAV_UPLOAD
+    WebDAVUploader* webdavUploader;
+#endif
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    SleepHQUploader* sleephqUploader;
+#endif
+    
+    // File scanning
+    std::vector<String> scanDatalogFolders(fs::FS &sd);
+    std::vector<String> scanFolderFiles(fs::FS &sd, const String& folderPath);
+    std::vector<String> scanRootAndSettingsFiles(fs::FS &sd);
+    
+    // Upload logic
+    bool uploadDatalogFolder(fs::FS &sd, const String& folderName);
+    bool uploadSingleFile(fs::FS &sd, const String& filePath);
+    
+    // Session management
+    bool startUploadSession(fs::FS &sd);
+    void endUploadSession(fs::FS &sd);
 
 public:
-    FileUploader(Config* cfg);
+    FileUploader(Config* cfg, WiFiManager* wifi);
+    ~FileUploader();
     
+    bool begin(fs::FS &sd);
+    bool shouldUpload();
     bool uploadFile(const String& filePath, fs::FS &sd);
     bool uploadNewFiles(fs::FS &sd);
 };

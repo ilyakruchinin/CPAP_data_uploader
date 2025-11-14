@@ -1,0 +1,27 @@
+{
+  "name": "libsmb2",
+  "version": "6.1.0",
+  "description": "SMB2/3 client library for ESP32",
+  "keywords": "smb, smb2, smb3, cifs, network",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sahlberg/libsmb2.git"
+  },
+  "authors": [
+    {
+      "name": "Ronnie Sahlberg",
+      "email": "ronniesahlberg@gmail.com"
+    }
+  ],
+  "license": "LGPL-2.1",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": {
+    "srcFilter": [
+      "+<lib/*.c>"
+    ],
+    "includeDir": "include",
+    "libArchive": false,
+    "extraScript": "library_build.py"
+  }
+}

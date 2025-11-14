@@ -34,7 +34,7 @@
 // These pins control SD card sharing between ESP32 and CPAP machine
 #define SD_SWITCH_PIN 26    // SD card bus switch control (LOW = ESP has control)
 #define SD_POWER_PIN  27    // SD card power control (if available)
-#define CS_SENSE      32    // Chip Select sense - detects when CPAP machine accesses SD
+#define CS_SENSE      32    // Chip Select sense - detects when CPAP machine accesses SD, TODO validate it is usable
 
 // ============================================================================
 // Configuration Button
@@ -44,7 +44,8 @@
 // ============================================================================
 // SD Card Configuration
 // ============================================================================
-#define SDIO_BIT_MODE     4           // Use 4-bit SDIO mode for faster access
+#define SDIO_BIT_MODE_FAST     false      // Use 4-bit SDIO mode for faster access
+#define SDIO_BIT_MODE_SLOW     true      // Use 1-bit SDIO mode for faster access
 #define SPI_BLOCKOUT_PERIOD 10UL      // Seconds to block SD access after CPAP machine uses it
 
 // SD card sharing control values

@@ -38,8 +38,8 @@ bool SDCardManager::takeControl() {
     setControlPin(true);
     espHasControl = true;
 
-    // Initialize SD_MMC in 4-bit mode
-    if (!SD_MMC.begin("/sdcard", false)) {  // false = 4-bit mode
+    // Initialize SD_MMC
+    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {  // false = 4-bit mode
         Serial.println("SD card mount failed");
         releaseControl();
         return false;

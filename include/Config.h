@@ -13,6 +13,11 @@ private:
     String endpointType;  // SMB, WEBDAV, SLEEPHQ
     String endpointUser;
     String endpointPassword;
+    int uploadHour;
+    int sessionDurationSeconds;
+    int maxRetryAttempts;
+    long gmtOffsetSeconds;
+    int daylightOffsetSeconds;
     bool isValid;
 
 public:
@@ -27,6 +32,11 @@ public:
     const String& getEndpointType() const;
     const String& getEndpointUser() const;
     const String& getEndpointPassword() const;
+    int getUploadHour() const;
+    int getSessionDurationSeconds() const;
+    int getMaxRetryAttempts() const;
+    long getGmtOffsetSeconds() const;
+    int getDaylightOffsetSeconds() const;
     bool valid() const;
 };
 

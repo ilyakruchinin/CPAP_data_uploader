@@ -3,7 +3,26 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+.kiro/
 venv/
 __pycache__/
 *.pyc
 backup_*.tar.gz
+
+# Components (downloaded by setup script)
+components/
+
+# Build artifacts
+*.o
+*.a
+*.elf
+*.bin
+dependencies.lock
+sdkconfig*
+compile_commands.json
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
