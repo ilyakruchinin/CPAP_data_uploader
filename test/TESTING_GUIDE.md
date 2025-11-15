@@ -14,23 +14,39 @@ Run tests with verbose output:
 pio test -e native -vv
 ```
 
+Run specific test:
+```bash
+pio test -e native -f test_webserver
+```
+
 ## Test Structure
 
 Tests are organized in the `test/` directory:
 
 ```
 test/
-├── README.md              # Overview of test directory
-├── TESTING_GUIDE.md       # This file
-├── mocks/                 # Mock implementations
-│   ├── README.md          # Mock documentation
-│   ├── Arduino.h          # Mock Arduino core
-│   ├── Arduino.cpp        # Mock Arduino implementation
-│   ├── FS.h               # Mock filesystem wrapper
-│   ├── MockFS.h           # Mock filesystem implementation
-│   └── MockTime.h         # Mock time functions
-└── test_native/           # Native unit tests
-    └── test_*.cpp         # Test files
+├── README.md                      # Overview of test directory
+├── TESTING_GUIDE.md               # This file
+├── mocks/                         # Mock implementations
+│   ├── README.md                  # Mock documentation
+│   ├── Arduino.h                  # Mock Arduino core
+│   ├── Arduino.cpp                # Mock Arduino implementation
+│   ├── FS.h                       # Mock filesystem wrapper
+│   ├── MockFS.h                   # Mock filesystem implementation
+│   ├── MockTime.h                 # Mock time functions
+│   └── MockWebServer.h            # Mock WebServer for testing
+├── test_config/                   # Config tests
+│   └── test_config.cpp
+├── test_schedule_manager/         # ScheduleManager tests
+│   └── test_schedule_manager.cpp
+├── test_time_budget_manager/      # TimeBudgetManager tests
+│   └── test_time_budget_manager.cpp
+├── test_upload_state_manager/     # UploadStateManager tests
+│   └── test_upload_state_manager.cpp
+├── test_webserver/                # TestWebServer tests
+│   └── test_webserver.cpp
+└── test_native/                   # General native tests
+    └── test_*.cpp                 # Test files
 ```
 
 ## Writing Tests
@@ -265,6 +281,125 @@ If tests hang or crash:
 - Verify that mocks are properly initialized
 - Look for null pointer dereferences
 - Use `Serial.println()` to add debug output
+
+## Testing the TestWebServer
+
+The TestWebServer component provides a web interface for on-demand upload testing. It has its own unit tests that use a mock WebServer.
+
+### Running TestWebServer Tests
+
+```bash
+pio test -e native -f test_webserver
+```
+
+### TestWebServer Test Coverage
+
+The tests verify:
+- Server initialization and startup
+- Endpoint registration (/, /trigger-upload, /status, /reset-state, /config)
+- Global trigger flag setting (g_triggerUploadFlag, g_resetStateFlag)
+- HTTP response generation (status codes, content types, JSON bodies)
+- CORS header inclusion
+- Request handling
+
+### MockWebServer
+
+The `test/mocks/MockWebServer.h` provides a mock WebServer implementation for testing:
+
+```cpp
+#include "../mocks/MockWebServer.h"
+
+void test_endpoint() {
+    WebServer server(80);
+    
+    // Register handler
+    server.on("/test", []() {
+        server.send(200, "text/plain", "OK");
+    });
+    
+    server.begin();
+    
+    // Simulate request
+    server.simulateRequest("/test");
+    
+    // Verify response
+    TEST_ASSERT_EQUAL(200, server.getLastResponseCode());
+    TEST_ASSERT_EQUAL_STRING("text/plain", server.getLastResponseType().c_str());
+    TEST_ASSERT_EQUAL_STRING("OK", server.getLastResponseBody().c_str());
+}
+```
+
+### Testing Web Endpoints
+
+When testing components that use WebServer:
+
+1. **Include MockWebServer.h** before including the component
+2. **Use simulateRequest()** to trigger handlers
+3. **Verify responses** using getLastResponseCode(), getLastResponseType(), getLastResponseBody()
+4. **Check headers** using getResponseHeader()
+5. **Test flag setting** for trigger and reset endpoints
+
+Example:
+
+```cpp
+void test_trigger_upload() {
+    TestWebServer testServer(&config, &stateManager, &budgetManager, &scheduleManager);
+    testServer.begin();
+    
+    WebServer* server = testServer.getServer();
+    
+    // Verify flag is initially false
+    TEST_ASSERT_FALSE(g_triggerUploadFlag);
+    
+    // Simulate request
+    server->simulateRequest("/trigger-upload");
+    
+    // Verify flag was set
+    TEST_ASSERT_TRUE(g_triggerUploadFlag);
+    
+    // Verify response
+    TEST_ASSERT_EQUAL(200, server->getLastResponseCode());
+    TEST_ASSERT_EQUAL_STRING("application/json", server->getLastResponseType().c_str());
+}
+```
+
+## Hardware Testing with TestWebServer
+
+For hardware testing, the TestWebServer can be enabled to test uploads on-demand:
+
+1. **Enable the feature** in `platformio.ini`:
+   ```ini
+   build_flags = 
+       -DENABLE_TEST_WEBSERVER
+   ```
+
+2. **Build and upload**:
+   ```bash
+   pio run -e pico32 -t upload
+   ```
+
+3. **Access the web interface**:
+   - Note the IP address from serial output
+   - Open browser to `http://<device-ip>/`
+
+4. **Test endpoints**:
+   ```bash
+   # Trigger immediate upload
+   curl http://192.168.1.100/trigger-upload
+   
+   # Get status
+   curl http://192.168.1.100/status
+   
+   # Reset upload state
+   curl http://192.168.1.100/reset-state
+   
+   # View configuration
+   curl http://192.168.1.100/config
+   ```
+
+5. **Disable for production** - Comment out `-DENABLE_TEST_WEBSERVER` before deploying
+
+**⚠️ Security Note:** The test web server has no authentication. Only enable it on trusted networks during development/testing.
 
 ## Further Reading
 

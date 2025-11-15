@@ -38,3 +38,10 @@ void WiFiManager::disconnect() {
     WiFi.disconnect();
     connected = false;
 }
+
+String WiFiManager::getIPAddress() const {
+    if (connected && WiFi.status() == WL_CONNECTED) {
+        return WiFi.localIP().toString();
+    }
+    return "Not connected";
+}

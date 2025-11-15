@@ -311,8 +311,9 @@ SMB Share: //server/share/
 - ✅ Upload state persistence across reboots
 - ✅ Retry logic with adaptive time budgets
 - ✅ Feature flags for compile-time backend selection
-- ✅ Unit tests for core components (Config, UploadStateManager, TimeBudgetManager, ScheduleManager)
+- ✅ Unit tests for core components (Config, UploadStateManager, TimeBudgetManager, ScheduleManager, TestWebServer)
 - ✅ Comprehensive error handling and logging
+- ✅ Test web server for on-demand upload testing (optional, disabled by default)
 
 ### ⏳ In Progress
 - 🔄 Hardware testing and validation
@@ -323,10 +324,89 @@ SMB Share: //server/share/
 - ⏳ SleepHQ upload implementation (placeholder created)
 - ⏳ Status LED indicators
 - ⏳ Low power mode when idle
-- ⏳ Web interface for configuration and monitoring
 - ⏳ OTA (Over-The-Air) firmware updates
 
 ## Testing
+
+### Test Web Server (Development/Testing Only)
+
+For development and testing, you can enable a web server that allows on-demand upload triggering and state inspection.
+
+**⚠️ Warning:** This feature is disabled by default and should NOT be enabled in production as it bypasses the scheduled upload logic and could interfere with CPAP machine operation.
+
+#### Enabling Test Web Server
+
+1. Edit `platformio.ini` and uncomment the test server flag:
+   ```ini
+   build_flags = 
+       -DENABLE_TEST_WEBSERVER    ; Enable test web server
+   ```
+
+2. Rebuild and upload:
+   ```bash
+   pio run -e pico32 -t upload
+   ```
+
+3. After device connects to WiFi, note the IP address from serial output
+
+4. Access web interface in browser:
+   ```
+   http://<device-ip>/
+   ```
+
+#### Available Endpoints
+
+- **GET /** - HTML status page showing:
+  - System uptime and current time
+  - Next scheduled upload time
+  - Time budget remaining
+  - Pending files count
+  - Current configuration
+  - Action buttons for testing
+
+- **GET /trigger-upload** - Force immediate upload (bypasses schedule)
+  - Useful for testing without waiting for scheduled time
+  - Returns JSON: `{"status":"success","message":"Upload triggered..."}`
+
+- **GET /status** - JSON status information
+  - Returns system status, timing, and configuration
+  - Useful for automated testing or monitoring
+
+- **GET /reset-state** - Clear upload state
+  - Deletes `.upload_state.json` from SD card
+  - Resets all upload tracking (folders, checksums, retry counts)
+  - Useful for testing from clean state
+  - Returns JSON: `{"status":"success","message":"Upload state will be reset..."}`
+
+- **GET /config** - Display current configuration
+  - Returns all config.json values as JSON
+  - Useful for verifying configuration
+
+#### Example Usage
+
+**Trigger immediate upload:**
+```bash
+curl http://192.168.1.100/trigger-upload
+```
+
+**Get status:**
+```bash
+curl http://192.168.1.100/status
+```
+
+**Reset upload state:**
+```bash
+curl http://192.168.1.100/reset-state
+```
+
+**View in browser:**
+```
+http://192.168.1.100/
+```
+
+#### Security Note
+
+The test web server has no authentication. Only enable it on trusted networks during development/testing. Always disable it for production deployments by commenting out `-DENABLE_TEST_WEBSERVER` in `platformio.ini`.
 
 ### Unit Tests
 
@@ -335,11 +415,19 @@ Run unit tests in native environment:
 pio test -e native
 ```
 
+Run specific test suite:
+```bash
+pio test -e native -f test_webserver
+```
+
 Tests cover:
 - Configuration parsing and validation
 - Upload state management (checksums, folder tracking, retry logic)
 - Time budget enforcement and transmission rate calculation
 - Schedule management and NTP time handling
+- TestWebServer endpoints and request handling (when enabled)
+
+See [test/TESTING_GUIDE.md](test/TESTING_GUIDE.md) for detailed testing documentation.
 
 ### Hardware Testing Checklist
 

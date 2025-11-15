@@ -13,6 +13,7 @@ public:
     bool connectStation(const String& ssid, const String& password);
     bool isConnected() const;
     void disconnect();
+    String getIPAddress() const;
 };
 
 #endif // WIFI_MANAGER_H

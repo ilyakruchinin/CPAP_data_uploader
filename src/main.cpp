@@ -4,6 +4,10 @@
 #include "WiFiManager.h"
 #include "FileUploader.h"
 
+#ifdef ENABLE_TEST_WEBSERVER
+#include "TestWebServer.h"
+#endif
+
 // ============================================================================
 // Global Objects
 // ============================================================================
@@ -12,6 +16,10 @@ SDCardManager sdManager;
 WiFiManager wifiManager;
 FileUploader* uploader = nullptr;
 
+#ifdef ENABLE_TEST_WEBSERVER
+TestWebServer* testWebServer = nullptr;
+#endif
+
 // ============================================================================
 // Global State
 // ============================================================================
@@ -19,6 +27,12 @@ unsigned long lastNtpSyncAttempt = 0;
 const unsigned long NTP_RETRY_INTERVAL_MS = 5 * 60 * 1000;  // 5 minutes
 unsigned long nextUploadRetryTime = 0;
 bool budgetExhaustedRetry = false;  // True if waiting due to budget exhaustion
+
+#ifdef ENABLE_TEST_WEBSERVER
+// External trigger flags (defined in TestWebServer.cpp)
+extern volatile bool g_triggerUploadFlag;
+extern volatile bool g_resetStateFlag;
+#endif
 
 // ============================================================================
 // Setup Function
@@ -98,6 +112,24 @@ void setup() {
         lastNtpSyncAttempt = millis();
     }
 
+#ifdef ENABLE_TEST_WEBSERVER
+    // Initialize test web server for on-demand testing
+    Serial.println("Initializing test web server...");
+    
+    // We need to get references to the internal components from FileUploader
+    // For now, we'll create a new TestWebServer without these references
+    // In a production implementation, FileUploader would expose these via getters
+    testWebServer = new TestWebServer(&config, nullptr, nullptr, nullptr);
+    
+    if (testWebServer->begin()) {
+        Serial.println("Test web server started successfully");
+        Serial.print("Access web interface at: http://");
+        Serial.println(wifiManager.getIPAddress());
+    } else {
+        Serial.println("ERROR: Failed to start test web server");
+    }
+#endif
+
     Serial.println("Setup complete!");
 }
 
@@ -105,6 +137,79 @@ void setup() {
 // Loop Function
 // ============================================================================
 void loop() {
+#ifdef ENABLE_TEST_WEBSERVER
+    // Handle web server requests
+    if (testWebServer) {
+        testWebServer->handleClient();
+    }
+    
+    // Check for state reset trigger
+    if (g_resetStateFlag) {
+        Serial.println("=== State Reset Triggered via Web Interface ===");
+        g_resetStateFlag = false;
+        
+        // Take SD card control to reset state
+        if (sdManager.takeControl()) {
+            Serial.println("Resetting upload state...");
+            
+            // Delete the state file
+            if (sdManager.getFS().remove("/.upload_state.json")) {
+                Serial.println("Upload state file deleted successfully");
+            } else {
+                Serial.println("WARNING: Failed to delete state file (may not exist)");
+            }
+            
+            // Reinitialize uploader to load fresh state
+            if (uploader) {
+                delete uploader;
+                uploader = new FileUploader(&config, &wifiManager);
+                if (uploader->begin(sdManager.getFS())) {
+                    Serial.println("Uploader reinitialized with fresh state");
+                } else {
+                    Serial.println("ERROR: Failed to reinitialize uploader");
+                }
+            }
+            
+            sdManager.releaseControl();
+            Serial.println("State reset complete");
+        } else {
+            Serial.println("ERROR: Cannot reset state - SD card in use");
+            Serial.println("Will retry on next loop iteration");
+        }
+    }
+    
+    // Check for upload trigger
+    if (g_triggerUploadFlag) {
+        Serial.println("=== Upload Triggered via Web Interface ===");
+        g_triggerUploadFlag = false;
+        
+        // Force upload regardless of schedule
+        // We'll bypass the shouldUpload() check and go straight to upload
+        Serial.println("Forcing immediate upload session...");
+        
+        // Try to take control of SD card
+        if (sdManager.takeControl()) {
+            Serial.println("SD card control acquired, starting forced upload...");
+            
+            // Perform upload
+            bool uploadSuccess = uploader->uploadNewFiles(sdManager.getFS());
+            
+            // Release SD card
+            sdManager.releaseControl();
+            Serial.println("SD card control released");
+            
+            if (uploadSuccess) {
+                Serial.println("Forced upload completed successfully");
+            } else {
+                Serial.println("Forced upload incomplete (budget exhausted or errors)");
+            }
+        } else {
+            Serial.println("ERROR: Cannot start upload - SD card in use by CPAP");
+            Serial.println("Will retry on next loop iteration");
+        }
+    }
+#endif
+    
     // Check WiFi connection
     if (!wifiManager.isConnected()) {
         Serial.println("WARNING: WiFi disconnected, attempting to reconnect...");
