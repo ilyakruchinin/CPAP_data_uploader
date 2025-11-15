@@ -220,18 +220,18 @@ bool UploadStateManager::loadState(fs::FS &sd) {
     
     // Load file checksums
     fileChecksums.clear();
-    JsonObject checksums = doc.getObject("file_checksums");
+    JsonObject checksums = doc["file_checksums"];
     if (!checksums.isNull()) {
-        for (auto& kv : *checksums.data) {
-            fileChecksums[String(kv.first.c_str())] = String(kv.second.as<const char*>());
+        for (JsonPair kv : checksums) {
+            fileChecksums[String(kv.key().c_str())] = String(kv.value().as<const char*>());
         }
     }
     
     // Load completed folders
     completedDatalogFolders.clear();
-    JsonArray folders = doc.getArray("completed_datalog_folders");
+    JsonArray folders = doc["completed_datalog_folders"];
     if (!folders.isNull()) {
-        for (const auto& v : *folders.data) {
+        for (JsonVariant v : folders) {
             completedDatalogFolders.insert(String(v.as<const char*>()));
         }
     }
@@ -269,7 +269,7 @@ bool UploadStateManager::saveState(fs::FS &sd) {
     // Save file checksums
     JsonObject checksums = doc.createNestedObject("file_checksums");
     for (const auto& pair : fileChecksums) {
-        checksums[pair.first.c_str()] = JsonVariant(pair.second.c_str());
+        checksums[pair.first.c_str()] = pair.second.c_str();
     }
     
     // Save completed folders
@@ -279,7 +279,7 @@ bool UploadStateManager::saveState(fs::FS &sd) {
     }
     
     // Save retry tracking
-    doc["current_retry_folder"] = JsonVariant(currentRetryFolder.c_str());
+    doc["current_retry_folder"] = currentRetryFolder.c_str();
     doc["current_retry_count"] = currentRetryCount;
     
     // Write to temporary file first to avoid corruption

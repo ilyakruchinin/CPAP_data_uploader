@@ -19,29 +19,63 @@ TODO: add information on how this data can be used with Oscar or SleepHQ
 
 This project uses a clean, class-based architecture with explicit dependency injection:
 
+### Core Components
 - **Config** - Manages configuration from SD card
 - **SDCardManager** - Handles SD card sharing with CPAP machine
 - **WiFiManager** - Manages WiFi station mode connection
-- **FileUploader** - Handles file upload to remote endpoints
+- **FileUploader** - Orchestrates file upload to remote endpoints
+
+### Upload Management
+- **UploadStateManager** - Tracks which files/folders have been uploaded using checksums and completion status
+- **TimeBudgetManager** - Enforces time limits on SD card access to ensure CPAP machine priority
+- **ScheduleManager** - Manages daily upload scheduling with NTP time synchronization
+
+### Upload Backends
+- **SMBUploader** - Uploads files to SMB/CIFS shares (Windows shares, NAS, Samba)
+- **WebDAVUploader** - Uploads to WebDAV servers (TODO: not yet implemented)
+- **SleepHQUploader** - Direct upload to SleepHQ service (TODO: not yet implemented)
 
 ## Project Structure
 ```
-├── src/                  # Main application code
-│   ├── main.cpp         # Application entry point
-│   ├── Config.cpp       # Configuration management
-│   ├── SDCardManager.cpp # SD card control
-│   ├── WiFiManager.cpp  # WiFi connection handling
-│   └── FileUploader.cpp # File upload logic
-├── include/             # Header files
-│   ├── pins_config.h    # Pin definitions for SD WIFI PRO
+├── src/                      # Main application code
+│   ├── main.cpp             # Application entry point
+│   ├── Config.cpp           # Configuration management
+│   ├── SDCardManager.cpp    # SD card control
+│   ├── WiFiManager.cpp      # WiFi connection handling
+│   ├── FileUploader.cpp     # File upload orchestration
+│   ├── UploadStateManager.cpp # Upload state tracking
+│   ├── TimeBudgetManager.cpp  # Time budget enforcement
+│   ├── ScheduleManager.cpp    # Upload scheduling
+│   ├── SMBUploader.cpp        # SMB upload implementation
+│   ├── WebDAVUploader.cpp     # WebDAV upload (placeholder)
+│   └── SleepHQUploader.cpp    # SleepHQ upload (placeholder)
+├── include/                  # Header files
+│   ├── pins_config.h        # Pin definitions for SD WIFI PRO
 │   ├── Config.h
 │   ├── SDCardManager.h
 │   ├── WiFiManager.h
-│   └── FileUploader.h
-├── venv/                # Python virtual environment
-├── docs/                # Documentation and reference firmware
-├── platformio.ini       # PlatformIO configuration
-└── README.md           # This file
+│   ├── FileUploader.h
+│   ├── UploadStateManager.h
+│   ├── TimeBudgetManager.h
+│   ├── ScheduleManager.h
+│   ├── SMBUploader.h
+│   ├── WebDAVUploader.h
+│   └── SleepHQUploader.h
+├── test/                     # Unit tests
+│   ├── test_native/         # Native environment tests
+│   └── mocks/               # Mock implementations for testing
+├── components/               # ESP-IDF components
+│   └── libsmb2/             # SMB2/3 client library (git submodule)
+├── .kiro/                    # Kiro IDE configuration
+│   └── specs/               # Feature specifications
+│       └── file-tracking-and-upload-scheduling/
+│           ├── requirements.md
+│           ├── design.md
+│           └── tasks.md
+├── venv/                     # Python virtual environment
+├── docs/                     # Documentation
+├── platformio.ini           # PlatformIO configuration
+└── README.md               # This file
 ```
 
 ## Libraries (managed by PlatformIO)
@@ -127,39 +161,145 @@ Create a `config.json` file in the root of your SD card with the following forma
 {
   "WIFI_SSID": "YourNetworkName",
   "WIFI_PASS": "YourNetworkPassword",
-  "SCHEDULE": "daily",
-  "ENDPOINT": "http://your-server.com/upload",
-  "ENDPOINT_TYPE": "WEBDAV",
+  "ENDPOINT": "//192.168.1.100/cpap_backups",
+  "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "username",
-  "ENDPOINT_PASS": "password"
+  "ENDPOINT_PASS": "password",
+  "UPLOAD_HOUR": 12,
+  "SESSION_DURATION_SECONDS": 5,
+  "MAX_RETRY_ATTEMPTS": 3,
+  "GMT_OFFSET_SECONDS": 0,
+  "DAYLIGHT_OFFSET_SECONDS": 0
 }
 ```
 
 ### Configuration Fields
 
+#### Network Settings
 - **WIFI_SSID**: SSID of the WiFi network to connect to (required)
 - **WIFI_PASS**: Password for the WiFi network (required)
-- **SCHEDULE**: Upload schedule (e.g., "daily", "hourly") - TODO: implement scheduling logic
+
+#### Endpoint Settings
 - **ENDPOINT**: Remote location where files will be uploaded (required)
-- **ENDPOINT_TYPE**: Type of endpoint - `WEBDAV`, `SMB`, or `SLEEPHQ`
-  - `WEBDAV`: WebDAV share (e.g., NextCloud) - Format: `http://address/folder` - TODO: implement
-  - `SMB`: Windows/Samba share - Format: `//address/share` (e.g., `//10.0.0.5/backups`) - ✅ Implemented
-  - `SLEEPHQ`: Direct upload to SleepHQ - TODO: implement
-- **ENDPOINT_USER**: Username for the remote endpoint
-- **ENDPOINT_PASS**: Password for the remote endpoint
+- **ENDPOINT_TYPE**: Type of endpoint - `SMB`, `WEBDAV`, or `SLEEPHQ`
+  - `SMB`: Windows/Samba share - Format: `//server/share` (e.g., `//192.168.1.100/backups`) - ✅ Implemented
+  - `WEBDAV`: WebDAV share (e.g., NextCloud) - Format: `http://address/folder` - ⏳ TODO
+  - `SLEEPHQ`: Direct upload to SleepHQ - ⏳ TODO
+- **ENDPOINT_USER**: Username for the remote endpoint (required)
+- **ENDPOINT_PASS**: Password for the remote endpoint (required)
+
+#### Schedule Settings
+- **UPLOAD_HOUR**: Hour of day (0-23) when uploads should occur (default: 12 = noon)
+  - Uploads happen once per day at this hour
+  - Uses NTP-synchronized time
+
+#### Time Budget Settings
+- **SESSION_DURATION_SECONDS**: Maximum time (in seconds) to hold SD card access per session (default: 5)
+  - Keeps sessions short to ensure CPAP machine can access card when needed
+  - System will resume upload in next session if time budget is exhausted
+- **MAX_RETRY_ATTEMPTS**: Number of retry attempts before increasing time budget (default: 3)
+  - After this many interrupted uploads, time budget is multiplied by retry count
+  - Helps handle large files that don't fit in normal time budget
+
+#### Timezone Settings
+- **GMT_OFFSET_SECONDS**: Timezone offset from GMT in seconds (default: 0)
+  - Example: -28800 for PST (UTC-8), 3600 for CET (UTC+1)
+- **DAYLIGHT_OFFSET_SECONDS**: Daylight saving time offset in seconds (default: 0)
+  - Example: 3600 for DST (adds 1 hour)
 
 ## How It Works
 
-1. **Startup**: Device reads config from SD card
-2. **WiFi Connection**: Connects to specified WiFi network in station mode
-3. **File Detection**: Periodically checks SD card for new files
-4. **SD Card Sharing**: Respects CPAP machine access - only reads when CPAP is not using the card
-5. **Upload**: Uploads new files to configured endpoint
-6. **Monitoring**: Continuously monitors for new files and maintains WiFi connection
+### Upload Flow
+
+1. **Startup**
+   - Device reads `config.json` from SD card
+   - Connects to WiFi network
+   - Synchronizes time with NTP server
+   - Loads upload state from `.upload_state.json` (tracks what's been uploaded)
+
+2. **Scheduled Upload Window**
+   - Waits until configured `UPLOAD_HOUR` (once per day)
+   - Checks if it's time to upload using NTP-synchronized time
+
+3. **Upload Session**
+   - Takes exclusive control of SD card (CPAP machine must wait)
+   - Starts time-budgeted session (default: 5 seconds)
+   - Uploads files in priority order:
+     - **DATALOG folders** (newest first) - therapy data
+     - **Root files** (identification.json, identification.crc, SRT.edf)
+     - **SETTINGS files** (CurrentSettings.json, CurrentSettings.crc)
+   - Releases SD card control after session or budget exhaustion
+
+4. **Smart File Tracking**
+   - **DATALOG folders**: Tracks completion status (all files uploaded = complete)
+   - **Root/SETTINGS files**: Tracks checksums (only uploads if changed)
+   - Saves progress to `.upload_state.json` after each session
+
+5. **Budget Management**
+   - If time budget exhausted mid-upload:
+     - Saves progress
+     - Waits 2x session duration (gives CPAP priority)
+     - Resumes upload in same day's window
+   - If all files uploaded:
+     - Marks upload complete for the day
+     - Waits until next day's scheduled time
+
+6. **Retry Logic**
+   - Tracks retry attempts for folders that don't complete
+   - After `MAX_RETRY_ATTEMPTS`, increases time budget
+   - Helps handle large files that need more time
+
+### SD Card Sharing
+
+The device respects CPAP machine access to the SD card:
+- Only takes control when needed for uploads
+- Keeps sessions short (configurable, default 5 seconds)
+- Releases control immediately after session
+- Waits between sessions to give CPAP priority
+- CPAP machine can access card anytime device doesn't have control
+
+### File Structure on SD Card
+
+```
+/
+├── config.json              # Your configuration (you create this)
+├── .upload_state.json       # Upload tracking (auto-created)
+├── identification.json      # CPAP identification
+├── identification.crc       # Checksum
+├── SRT.edf                  # Summary data
+├── DATALOG/                 # Therapy data folders
+│   ├── 20241114/           # Date-named folders (YYYYMMDD)
+│   │   ├── file1.edf       # Therapy session data
+│   │   └── file2.edf
+│   └── 20241113/
+│       └── file1.edf
+└── SETTINGS/                # Settings folder
+    ├── CurrentSettings.json
+    └── CurrentSettings.crc
+```
+
+### Remote Folder Structure
+
+Files are uploaded maintaining the same structure:
+```
+SMB Share: //server/share/
+├── identification.json
+├── identification.crc
+├── SRT.edf
+├── DATALOG/
+│   ├── 20241114/
+│   │   ├── file1.edf
+│   │   └── file2.edf
+│   └── 20241113/
+│       └── file1.edf
+└── SETTINGS/
+    ├── CurrentSettings.json
+    └── CurrentSettings.crc
+```
 
 ## Development Status
 
-### Implemented
+### ✅ Implemented (v0.2.0)
 - ✅ SD card sharing with CPAP machine
 - ✅ Configuration file loading from SD card
 - ✅ WiFi station mode connection
@@ -171,13 +311,167 @@ Create a `config.json` file in the root of your SD card with the following forma
 - ✅ Upload state persistence across reboots
 - ✅ Retry logic with adaptive time budgets
 - ✅ Feature flags for compile-time backend selection
+- ✅ Unit tests for core components (Config, UploadStateManager, TimeBudgetManager, ScheduleManager)
+- ✅ Comprehensive error handling and logging
 
-### TODO
+### ⏳ In Progress
+- 🔄 Hardware testing and validation
+- 🔄 Integration testing on real CPAP data
+
+### 📋 TODO (Future Releases)
 - ⏳ WebDAV upload implementation (placeholder created)
 - ⏳ SleepHQ upload implementation (placeholder created)
 - ⏳ Status LED indicators
 - ⏳ Low power mode when idle
 - ⏳ Web interface for configuration and monitoring
+- ⏳ OTA (Over-The-Air) firmware updates
+
+## Testing
+
+### Unit Tests
+
+Run unit tests in native environment:
+```bash
+pio test -e native
+```
+
+Tests cover:
+- Configuration parsing and validation
+- Upload state management (checksums, folder tracking, retry logic)
+- Time budget enforcement and transmission rate calculation
+- Schedule management and NTP time handling
+
+### Hardware Testing Checklist
+
+Before testing on hardware, ensure:
+
+1. **Hardware Setup**
+   - [ ] ESP32 board connected
+   - [ ] SD card with CPAP data structure
+   - [ ] SD card reader/writer connected
+
+2. **Configuration**
+   - [ ] `config.json` created on SD card root
+   - [ ] WiFi credentials configured
+   - [ ] SMB share details configured
+   - [ ] Upload schedule configured
+
+3. **Network Setup**
+   - [ ] WiFi network available
+   - [ ] SMB share accessible and writable
+   - [ ] NTP server accessible (pool.ntp.org)
+   - [ ] No firewall blocking SMB ports (445, 139)
+
+4. **Flash and Monitor**
+   ```bash
+   pio run -e pico32 -t upload
+   pio device monitor -e pico32
+   ```
+
+5. **Verify**
+   - [ ] SD card detected
+   - [ ] Config loaded successfully
+   - [ ] WiFi connected
+   - [ ] NTP time synchronized
+   - [ ] SMB connection established
+   - [ ] Files uploaded to SMB share
+   - [ ] `.upload_state.json` created on SD card
+
+See [Hardware Testing Guide](#hardware-testing-guide) below for detailed testing procedures.
+
+## Hardware Testing Guide
+
+### Quick Start Test
+
+1. **Prepare Test SD Card**
+   ```
+   /config.json              # Your configuration
+   /DATALOG/
+     20241114/
+       test.edf              # Small test file (1-2 KB)
+   ```
+
+2. **Set Upload Time to Now**
+   In `config.json`, set `UPLOAD_HOUR` to current hour for immediate testing:
+   ```json
+   {
+     "UPLOAD_HOUR": 14,  // Set to current hour
+     ...
+   }
+   ```
+
+3. **Flash and Monitor**
+   ```bash
+   pio run -e pico32 -t upload && pio device monitor -e pico32
+   ```
+
+4. **Watch Serial Output**
+   Look for:
+   - "Configuration loaded successfully"
+   - "WiFi connected"
+   - "Time synchronized successfully"
+   - "Upload Window Active"
+   - "Upload session completed successfully"
+
+5. **Verify Upload**
+   - Check SMB share for uploaded files
+   - Check SD card for `.upload_state.json`
+
+### Integration Test Scenarios
+
+#### Test 1: Complete Upload Flow
+- **Goal**: Verify full upload cycle
+- **Setup**: Small DATALOG folder with 2-3 files
+- **Expected**: All files uploaded, folder marked complete in state file
+
+#### Test 2: Time Budget Exhaustion
+- **Goal**: Verify budget enforcement and retry
+- **Setup**: Large files, short session duration (2 seconds)
+- **Expected**: Session interrupted, waits 2x duration, resumes
+
+#### Test 3: Checksum Change Detection
+- **Goal**: Verify root/SETTINGS file tracking
+- **Setup**: Upload once, modify identification.json, upload again
+- **Expected**: Only changed file re-uploaded
+
+#### Test 4: Retry Logic
+- **Goal**: Verify retry count and budget multiplier
+- **Setup**: Very large file, short budget, max_retry_attempts=2
+- **Expected**: After 2 retries, budget increases
+
+#### Test 5: Schedule Enforcement
+- **Goal**: Verify once-per-day uploads
+- **Setup**: Set UPLOAD_HOUR to past hour
+- **Expected**: Waits until next day's scheduled time
+
+### Troubleshooting
+
+**SD Card Not Detected**
+- Check wiring and voltage (3.3V)
+- Verify SD card is formatted (FAT32)
+- Check serial output for error messages
+
+**WiFi Connection Fails**
+- Verify SSID and password in config.json
+- Check WiFi network is 2.4GHz (ESP32 doesn't support 5GHz)
+- Ensure network is in range
+
+**NTP Sync Fails**
+- Check internet connectivity
+- Try different NTP server in ScheduleManager.cpp
+- Verify firewall allows NTP (UDP port 123)
+
+**SMB Connection Fails**
+- Verify SMB share is accessible from network
+- Test credentials from another device
+- Check firewall allows SMB ports (445, 139)
+- Ensure share has write permissions
+
+**Upload Fails Mid-Session**
+- Check available space on SMB share
+- Verify network stability
+- Increase SESSION_DURATION_SECONDS if files are large
+- Check serial output for specific error messages
 
 ## References
 

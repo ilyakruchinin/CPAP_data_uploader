@@ -17,8 +17,8 @@ FileUploader* uploader = nullptr;
 // ============================================================================
 unsigned long lastNtpSyncAttempt = 0;
 const unsigned long NTP_RETRY_INTERVAL_MS = 5 * 60 * 1000;  // 5 minutes
-unsigned long nextUploadCheckTime = 0;
-bool uploadSessionActive = false;
+unsigned long nextUploadRetryTime = 0;
+bool budgetExhaustedRetry = false;  // True if waiting due to budget exhaustion
 
 // ============================================================================
 // Setup Function
@@ -84,14 +84,18 @@ void setup() {
     
     // Synchronize time with NTP server
     Serial.println("Synchronizing time with NTP server...");
-    // Note: shouldUpload() will trigger NTP sync internally
-    // We just check if it worked
-    if (!uploader->shouldUpload()) {
-        Serial.println("WARNING: Initial NTP synchronization may have failed");
-        Serial.println("Will retry NTP sync every 5 minutes until successful");
-        lastNtpSyncAttempt = millis();
-    } else {
+    // The ScheduleManager handles NTP sync internally during begin()
+    // We can check if time is synced by calling shouldUpload()
+    // (it will return false if time is not synced)
+    
+    // Trigger initial time sync check
+    if (uploader->shouldUpload()) {
         Serial.println("Time synchronized successfully");
+        Serial.println("Currently in upload window - will begin upload shortly");
+    } else {
+        Serial.println("Time sync status unknown or not in upload window");
+        Serial.println("Will retry NTP sync every 5 minutes if needed");
+        lastNtpSyncAttempt = millis();
     }
 
     Serial.println("Setup complete!");
@@ -117,41 +121,42 @@ void loop() {
     }
 
     // Handle NTP sync retry if time is not synchronized
+    // This runs periodically to ensure time stays synchronized
     if (uploader) {
         unsigned long currentTime = millis();
         if (currentTime - lastNtpSyncAttempt >= NTP_RETRY_INTERVAL_MS) {
-            Serial.println("Attempting NTP synchronization...");
-            if (uploader->shouldUpload()) {
-                Serial.println("NTP synchronization successful");
-            } else {
-                Serial.println("WARNING: NTP synchronization failed, will retry in 5 minutes");
-            }
+            Serial.println("Periodic NTP synchronization check...");
+            // Note: shouldUpload() checks time sync internally
+            // We just want to trigger the check periodically
             lastNtpSyncAttempt = currentTime;
         }
     }
 
-    // Check if we're in an active upload session
-    if (uploadSessionActive) {
-        // Wait for the appropriate time before next session
-        if (millis() < nextUploadCheckTime) {
+    // Check if we're waiting due to budget exhaustion
+    if (budgetExhaustedRetry) {
+        // Wait for the appropriate time before retrying
+        if (millis() < nextUploadRetryTime) {
             delay(1000);  // Check every second during wait period
             return;
         }
-        uploadSessionActive = false;
+        // Wait period over, clear the flag and continue
+        budgetExhaustedRetry = false;
+        Serial.println("Budget exhaustion wait period complete, resuming upload...");
     }
 
-    // Check if it's time to upload (scheduled window)
+    // Check if it's time to upload (scheduled window - once per day)
     if (!uploader || !uploader->shouldUpload()) {
         // Not upload time yet, wait before checking again
         delay(60000);  // Check every minute when not in upload window
         return;
     }
 
-    Serial.println("Upload time detected, attempting to start upload session...");
+    Serial.println("=== Upload Window Active ===");
+    Serial.println("Attempting to start upload session...");
 
     // Try to take control of SD card for upload session
     if (!sdManager.takeControl()) {
-        Serial.println("CPAP machine is using SD card, will retry...");
+        Serial.println("CPAP machine is using SD card, will retry in 5 seconds...");
         delay(5000);  // Wait 5 seconds before retrying
         return;
     }
@@ -159,26 +164,46 @@ void loop() {
     Serial.println("SD card control acquired, starting upload session...");
 
     // Perform upload session
+    // Note: uploadNewFiles() handles:
+    // - Time budget enforcement
+    // - File prioritization (DATALOG newest first, then root/SETTINGS)
+    // - State persistence
+    // - Retry count management
     bool uploadSuccess = uploader->uploadNewFiles(sdManager.getFS());
 
     // Release SD card back to CPAP machine
     sdManager.releaseControl();
     Serial.println("SD card control released");
 
+    // Determine if we need to wait before retrying
+    // The upload can fail for two reasons:
+    // 1. Budget exhausted (partial upload) - need to wait 2x session duration
+    // 2. All files uploaded or scheduled upload complete - wait until next day
+    
     if (uploadSuccess) {
-        Serial.println("Upload session completed successfully");
+        Serial.println("=== Upload Session Completed Successfully ===");
+        Serial.println("All pending files have been uploaded");
+        Serial.println("Next upload will occur at scheduled time tomorrow");
+        // The ScheduleManager has already marked upload as completed
+        // No need to set retry timer - will wait for next scheduled time
     } else {
-        Serial.println("Upload session completed with errors or budget exhaustion");
+        Serial.println("=== Upload Session Incomplete ===");
+        Serial.println("Session ended due to time budget exhaustion or errors");
+        
+        // Calculate wait time (2x session duration) before retry
+        unsigned long sessionDuration = config.getSessionDurationSeconds() * 1000;
+        unsigned long waitTime = sessionDuration * 2;
+        
+        Serial.print("Waiting ");
+        Serial.print(waitTime / 1000);
+        Serial.println(" seconds before retry...");
+        Serial.println("This allows CPAP machine priority access to SD card");
+        
+        nextUploadRetryTime = millis() + waitTime;
+        budgetExhaustedRetry = true;
+        
+        // Note: We stay in the same upload window (same day)
+        // The ScheduleManager will NOT mark upload as completed
+        // So shouldUpload() will continue to return true after wait period
     }
-
-    // Calculate wait time (2x session duration) before next upload attempt
-    unsigned long sessionDuration = config.getSessionDurationSeconds() * 1000;
-    unsigned long waitTime = sessionDuration * 2;
-    
-    Serial.print("Waiting ");
-    Serial.print(waitTime / 1000);
-    Serial.println(" seconds before next upload session...");
-    
-    nextUploadCheckTime = millis() + waitTime;
-    uploadSessionActive = true;
 }
