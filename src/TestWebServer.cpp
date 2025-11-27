@@ -1,4 +1,5 @@
 #include "TestWebServer.h"
+#include "Logger.h"
 #include <time.h>
 
 // Global trigger flags
@@ -25,7 +26,7 @@ TestWebServer::~TestWebServer() {
 
 // Initialize and start the web server
 bool TestWebServer::begin() {
-    Serial.println("[TestWebServer] Initializing web server on port 80...");
+    LOG("[TestWebServer] Initializing web server on port 80...");
     
     server = new WebServer(80);
     
@@ -35,18 +36,20 @@ bool TestWebServer::begin() {
     server->on("/status", [this]() { this->handleStatus(); });
     server->on("/reset-state", [this]() { this->handleResetState(); });
     server->on("/config", [this]() { this->handleConfig(); });
+    server->on("/logs", [this]() { this->handleLogs(); });
     server->onNotFound([this]() { this->handleNotFound(); });
     
     // Start the server
     server->begin();
     
-    Serial.println("[TestWebServer] Web server started successfully");
-    Serial.println("[TestWebServer] Available endpoints:");
-    Serial.println("[TestWebServer]   GET /              - Status page (HTML)");
-    Serial.println("[TestWebServer]   GET /trigger-upload - Force immediate upload");
-    Serial.println("[TestWebServer]   GET /status        - Status information (JSON)");
-    Serial.println("[TestWebServer]   GET /reset-state   - Clear upload state");
-    Serial.println("[TestWebServer]   GET /config        - Display configuration");
+    LOG("[TestWebServer] Web server started successfully");
+    LOG("[TestWebServer] Available endpoints:");
+    LOG("[TestWebServer]   GET /              - Status page (HTML)");
+    LOG("[TestWebServer]   GET /trigger-upload - Force immediate upload");
+    LOG("[TestWebServer]   GET /status        - Status information (JSON)");
+    LOG("[TestWebServer]   GET /reset-state   - Clear upload state");
+    LOG("[TestWebServer]   GET /config        - Display configuration");
+    LOG("[TestWebServer]   GET /logs          - Retrieve system logs (JSON)");
     
     return true;
 }
@@ -121,6 +124,7 @@ void TestWebServer::handleRoot() {
     html += "<a href='/trigger-upload' class='button'>Trigger Upload Now</a>";
     html += "<a href='/status' class='button'>View JSON Status</a>";
     html += "<a href='/config' class='button'>View Full Config</a>";
+    html += "<a href='/logs' class='button'>View System Logs</a>";
     html += "<a href='/reset-state' class='button danger' onclick='return confirm(\"Are you sure you want to reset upload state?\")'>Reset Upload State</a>";
     
     html += "</div></body></html>";
@@ -130,7 +134,7 @@ void TestWebServer::handleRoot() {
 
 // GET /trigger-upload - Force immediate upload
 void TestWebServer::handleTriggerUpload() {
-    Serial.println("[TestWebServer] Upload trigger requested via web interface");
+    LOG("[TestWebServer] Upload trigger requested via web interface");
     
     // Set global trigger flag
     g_triggerUploadFlag = true;
@@ -180,7 +184,7 @@ void TestWebServer::handleStatus() {
 
 // GET /reset-state - Clear upload state
 void TestWebServer::handleResetState() {
-    Serial.println("[TestWebServer] State reset requested via web interface");
+    LOG("[TestWebServer] State reset requested via web interface");
     
     // Set global reset flag
     g_resetStateFlag = true;
@@ -268,4 +272,71 @@ int TestWebServer::getPendingFilesCount() {
     // In a real implementation, we would scan the SD card
     // For now, return 0 as placeholder
     return 0;
+}
+
+// GET /logs - Retrieve system logs from circular buffer
+void TestWebServer::handleLogs() {
+    // Add CORS headers for cross-origin access
+    server->sendHeader("Access-Control-Allow-Origin", "*");
+    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    
+    // Retrieve logs from Logger
+    Logger::LogData logData = Logger::getInstance().retrieveLogs();
+    
+    // Build JSON response
+    String json = "{";
+    json += "\"status\":\"success\",";
+    json += "\"logs\":\"" + escapeJson(logData.content) + "\",";
+    json += "\"bytes_lost\":" + String(logData.bytesLost) + ",";
+    json += "\"bytes_returned\":" + String(logData.content.length()) + ",";
+    json += "\"timestamp\":\"" + getCurrentTimeString() + "\"";
+    json += "}";
+    
+    server->send(200, "application/json", json);
+}
+
+// Helper: Escape special characters for JSON string
+String TestWebServer::escapeJson(const String& str) {
+    String escaped = "";
+    escaped.reserve(str.length() + 20);  // Reserve extra space for escape sequences
+    
+    for (size_t i = 0; i < str.length(); i++) {
+        char c = str.charAt(i);
+        switch (c) {
+            case '"':
+                escaped += "\\\"";
+                break;
+            case '\\':
+                escaped += "\\\\";
+                break;
+            case '\b':
+                escaped += "\\b";
+                break;
+            case '\f':
+                escaped += "\\f";
+                break;
+            case '\n':
+                escaped += "\\n";
+                break;
+            case '\r':
+                escaped += "\\r";
+                break;
+            case '\t':
+                escaped += "\\t";
+                break;
+            default:
+                // Handle control characters (0x00-0x1F)
+                if (c >= 0 && c < 0x20) {
+                    char buf[7];
+                    snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+                    escaped += buf;
+                } else {
+                    escaped += c;
+                }
+                break;
+        }
+    }
+    
+    return escaped;
 }

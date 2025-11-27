@@ -62,7 +62,7 @@ public:
     bool begin(fs::FS &sd);
     bool shouldUpload();
     bool uploadFile(const String& filePath, fs::FS &sd);
-    bool uploadNewFiles(fs::FS &sd);
+    bool uploadNewFiles(fs::FS &sd, bool forceUpload = false);
 };
 
 #endif // FILE_UPLOADER_H

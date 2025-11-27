@@ -1,4 +1,5 @@
 #include "FileUploader.h"
+#include "Logger.h"
 #include <SD_MMC.h>
 
 // Constructor
@@ -38,12 +39,12 @@ FileUploader::~FileUploader() {
 
 // Initialize all components and load upload state
 bool FileUploader::begin(fs::FS &sd) {
-    Serial.println("[FileUploader] Initializing components...");
+    LOG("[FileUploader] Initializing components...");
     
     // Initialize UploadStateManager
     stateManager = new UploadStateManager();
     if (!stateManager->begin(sd)) {
-        Serial.println("[FileUploader] WARNING: Failed to load upload state, starting fresh");
+        LOG("[FileUploader] WARNING: Failed to load upload state, starting fresh");
         // Continue anyway - stateManager will work with empty state
     }
     
@@ -56,7 +57,7 @@ bool FileUploader::begin(fs::FS &sd) {
             config->getUploadHour(),
             config->getGmtOffsetSeconds(),
             config->getDaylightOffsetSeconds())) {
-        Serial.println("[FileUploader] ERROR: Failed to initialize ScheduleManager");
+        LOG("[FileUploader] ERROR: Failed to initialize ScheduleManager");
         return false;
     }
     
@@ -65,8 +66,7 @@ bool FileUploader::begin(fs::FS &sd) {
     
     // Initialize appropriate uploader based on endpoint type and build flags
     String endpointType = config->getEndpointType();
-    Serial.print("[FileUploader] Endpoint type: ");
-    Serial.println(endpointType);
+    LOGF("[FileUploader] Endpoint type: %s", endpointType.c_str());
     
 #ifdef ENABLE_SMB_UPLOAD
     if (endpointType == "SMB") {
@@ -78,7 +78,7 @@ bool FileUploader::begin(fs::FS &sd) {
         
         // Note: We don't call begin() here because we may not have WiFi yet
         // Connection will be established when needed during upload
-        Serial.println("[FileUploader] SMBUploader created (will connect during upload)");
+        LOG("[FileUploader] SMBUploader created (will connect during upload)");
     } else
 #endif
 #ifdef ENABLE_WEBDAV_UPLOAD
@@ -89,7 +89,7 @@ bool FileUploader::begin(fs::FS &sd) {
             config->getEndpointPassword()
         );
         
-        Serial.println("[FileUploader] WebDAVUploader created (will connect during upload)");
+        LOG("[FileUploader] WebDAVUploader created (will connect during upload)");
     } else
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
@@ -100,32 +100,31 @@ bool FileUploader::begin(fs::FS &sd) {
             config->getEndpointPassword()
         );
         
-        Serial.println("[FileUploader] SleepHQUploader created (will connect during upload)");
+        LOG("[FileUploader] SleepHQUploader created (will connect during upload)");
     } else
 #endif
     {
-        Serial.print("[FileUploader] ERROR: Unsupported or disabled endpoint type: ");
-        Serial.println(endpointType);
-        Serial.println("[FileUploader] Supported types (based on build flags):");
+        LOGF("[FileUploader] ERROR: Unsupported or disabled endpoint type: %s", endpointType.c_str());
+        LOG("[FileUploader] Supported types (based on build flags):");
 #ifdef ENABLE_SMB_UPLOAD
-        Serial.println("[FileUploader]   - SMB (enabled)");
+        LOG("[FileUploader]   - SMB (enabled)");
 #else
-        Serial.println("[FileUploader]   - SMB (disabled - compile with -DENABLE_SMB_UPLOAD)");
+        LOG("[FileUploader]   - SMB (disabled - compile with -DENABLE_SMB_UPLOAD)");
 #endif
 #ifdef ENABLE_WEBDAV_UPLOAD
-        Serial.println("[FileUploader]   - WEBDAV (enabled)");
+        LOG("[FileUploader]   - WEBDAV (enabled)");
 #else
-        Serial.println("[FileUploader]   - WEBDAV (disabled - compile with -DENABLE_WEBDAV_UPLOAD)");
+        LOG("[FileUploader]   - WEBDAV (disabled - compile with -DENABLE_WEBDAV_UPLOAD)");
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-        Serial.println("[FileUploader]   - SLEEPHQ (enabled)");
+        LOG("[FileUploader]   - SLEEPHQ (enabled)");
 #else
-        Serial.println("[FileUploader]   - SLEEPHQ (disabled - compile with -DENABLE_SLEEPHQ_UPLOAD)");
+        LOG("[FileUploader]   - SLEEPHQ (disabled - compile with -DENABLE_SLEEPHQ_UPLOAD)");
 #endif
         return false;
     }
     
-    Serial.println("[FileUploader] Initialization complete");
+    LOG("[FileUploader] Initialization complete");
     return true;
 }
 
@@ -139,60 +138,58 @@ bool FileUploader::shouldUpload() {
 
 // Legacy method - kept for compatibility
 bool FileUploader::uploadFile(const String& filePath, fs::FS &sd) {
-    Serial.print("[FileUploader] Uploading file: ");
-    Serial.println(filePath);
+    LOGF("[FileUploader] Uploading file: %s", filePath.c_str());
     return uploadSingleFile(sd, filePath);
 }
 
 // Main upload orchestration
-bool FileUploader::uploadNewFiles(fs::FS &sd) {
-    Serial.println("[FileUploader] Starting upload orchestration...");
+bool FileUploader::uploadNewFiles(fs::FS &sd, bool forceUpload) {
+    LOG("[FileUploader] Starting upload orchestration...");
     
     // Check WiFi connection first
     if (!wifiManager || !wifiManager->isConnected()) {
-        Serial.println("[FileUploader] ERROR: WiFi not connected - cannot upload");
-        Serial.println("[FileUploader] Please ensure WiFi connection is established before upload");
+        LOG("[FileUploader] ERROR: WiFi not connected - cannot upload");
+        LOG("[FileUploader] Please ensure WiFi connection is established before upload");
         return false;
     }
     
-    // Check if it's time to upload
-    if (!shouldUpload()) {
+    // Check if it's time to upload (unless forced)
+    if (!forceUpload && !shouldUpload()) {
         unsigned long secondsUntilNext = scheduleManager->getSecondsUntilNextUpload();
-        Serial.print("[FileUploader] Not upload time yet. Next upload in ");
-        Serial.print(secondsUntilNext / 3600);
-        Serial.println(" hours");
+        LOGF("[FileUploader] Not upload time yet. Next upload in %lu hours", secondsUntilNext / 3600);
         return false;
     }
     
-    Serial.println("[FileUploader] Upload time - starting session");
+    if (forceUpload) {
+        LOG("[FileUploader] FORCED UPLOAD - bypassing schedule check");
+    }
+    LOG("[FileUploader] Upload time - starting session");
     
     // Start upload session with time budget
     if (!startUploadSession(sd)) {
-        Serial.println("[FileUploader] Error: Failed to start upload session");
+        LOG("[FileUploader] Error: Failed to start upload session");
         return false;
     }
     
     bool anyUploaded = false;
     
     // Phase 1: Process DATALOG folders (newest first)
-    Serial.println("[FileUploader] Phase 1: Processing DATALOG folders");
+    LOG("[FileUploader] Phase 1: Processing DATALOG folders");
     std::vector<String> datalogFolders = scanDatalogFolders(sd);
     
     for (const String& folderName : datalogFolders) {
         // Check if we still have budget
         if (!budgetManager->hasBudget()) {
-            Serial.println("[FileUploader] Time budget exhausted during DATALOG processing");
+            LOG("[FileUploader] Time budget exhausted during DATALOG processing");
             break;
         }
         
         // Upload the folder
         if (uploadDatalogFolder(sd, folderName)) {
             anyUploaded = true;
-            Serial.print("[FileUploader] Completed folder: ");
-            Serial.println(folderName);
+            LOGF("[FileUploader] Completed folder: %s", folderName.c_str());
         } else {
-            Serial.print("[FileUploader] Folder upload interrupted: ");
-            Serial.println(folderName);
+            LOGF("[FileUploader] Folder upload interrupted: %s", folderName.c_str());
             // Budget exhausted or error - stop processing
             break;
         }
@@ -200,13 +197,13 @@ bool FileUploader::uploadNewFiles(fs::FS &sd) {
     
     // Phase 2: Process root and SETTINGS files (if budget remains)
     if (budgetManager->hasBudget()) {
-        Serial.println("[FileUploader] Phase 2: Processing root and SETTINGS files");
+        LOG("[FileUploader] Phase 2: Processing root and SETTINGS files");
         std::vector<String> rootSettingsFiles = scanRootAndSettingsFiles(sd);
         
         for (const String& filePath : rootSettingsFiles) {
             // Check if we still have budget
             if (!budgetManager->hasBudget()) {
-                Serial.println("[FileUploader] Time budget exhausted during root/SETTINGS processing");
+                LOG("[FileUploader] Time budget exhausted during root/SETTINGS processing");
                 break;
             }
             
@@ -216,14 +213,13 @@ bool FileUploader::uploadNewFiles(fs::FS &sd) {
             }
         }
     } else {
-        Serial.println("[FileUploader] Skipping root/SETTINGS files - no budget remaining");
+        LOG("[FileUploader] Skipping root/SETTINGS files - no budget remaining");
     }
     
     // End upload session and save state
     endUploadSession(sd);
     
-    Serial.print("[FileUploader] Upload session complete. Files uploaded: ");
-    Serial.println(anyUploaded ? "Yes" : "No");
+    LOGF("[FileUploader] Upload session complete. Files uploaded: %s", anyUploaded ? "Yes" : "No");
     
     return anyUploaded;
 }
@@ -234,12 +230,12 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd) {
     
     File root = sd.open("/DATALOG");
     if (!root) {
-        Serial.println("[FileUploader] WARNING: DATALOG folder not found - no therapy data to upload");
+        LOG("[FileUploader] WARNING: DATALOG folder not found - no therapy data to upload");
         return folders;
     }
     
     if (!root.isDirectory()) {
-        Serial.println("[FileUploader] ERROR: /DATALOG exists but is not a directory");
+        LOG("[FileUploader] ERROR: /DATALOG exists but is not a directory");
         root.close();
         return folders;
     }
@@ -259,11 +255,9 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd) {
             // Check if folder is already completed
             if (!stateManager->isFolderCompleted(folderName)) {
                 folders.push_back(folderName);
-                Serial.print("[FileUploader] Found incomplete DATALOG folder: ");
-                Serial.println(folderName);
+                LOGF("[FileUploader] Found incomplete DATALOG folder: %s", folderName.c_str());
             } else {
-                Serial.print("[FileUploader] Skipping completed folder: ");
-                Serial.println(folderName);
+                LOGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
             }
         }
         file.close();
@@ -276,9 +270,7 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd) {
         return a > b;  // Descending order (newest first)
     });
     
-    Serial.print("[FileUploader] Found ");
-    Serial.print(folders.size());
-    Serial.println(" incomplete DATALOG folders");
+    LOGF("[FileUploader] Found %d incomplete DATALOG folders", folders.size());
     
     return folders;
 }
@@ -289,15 +281,13 @@ std::vector<String> FileUploader::scanFolderFiles(fs::FS &sd, const String& fold
     
     File folder = sd.open(folderPath);
     if (!folder) {
-        Serial.print("[FileUploader] ERROR: Failed to open folder: ");
-        Serial.println(folderPath);
-        Serial.println("[FileUploader] SD card may be experiencing read errors");
+        LOGF("[FileUploader] ERROR: Failed to open folder: %s", folderPath.c_str());
+        LOG("[FileUploader] SD card may be experiencing read errors");
         return files;
     }
     
     if (!folder.isDirectory()) {
-        Serial.print("[FileUploader] ERROR: Path exists but is not a directory: ");
-        Serial.println(folderPath);
+        LOGF("[FileUploader] ERROR: Path exists but is not a directory: %s", folderPath.c_str());
         folder.close();
         return files;
     }
@@ -324,10 +314,7 @@ std::vector<String> FileUploader::scanFolderFiles(fs::FS &sd, const String& fold
     }
     folder.close();
     
-    Serial.print("[FileUploader] Found ");
-    Serial.print(files.size());
-    Serial.print(" .edf files in ");
-    Serial.println(folderPath);
+    LOGF("[FileUploader] Found %d .edf files in %s", files.size(), folderPath.c_str());
     
     return files;
 }
@@ -348,8 +335,7 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
             // Check if file has changed
             if (stateManager->hasFileChanged(sd, rootFiles[i])) {
                 files.push_back(String(rootFiles[i]));
-                Serial.print("[FileUploader] Root file changed: ");
-                Serial.println(rootFiles[i]);
+                LOGF("[FileUploader] Root file changed: %s", rootFiles[i]);
             }
         }
     }
@@ -365,22 +351,19 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
             // Check if file has changed
             if (stateManager->hasFileChanged(sd, settingsFiles[i])) {
                 files.push_back(String(settingsFiles[i]));
-                Serial.print("[FileUploader] SETTINGS file changed: ");
-                Serial.println(settingsFiles[i]);
+                LOGF("[FileUploader] SETTINGS file changed: %s", settingsFiles[i]);
             }
         }
     }
     
-    Serial.print("[FileUploader] Found ");
-    Serial.print(files.size());
-    Serial.println(" changed root/SETTINGS files");
+    LOGF("[FileUploader] Found %d changed root/SETTINGS files", files.size());
     
     return files;
 }
 
 // Start upload session with time budget
 bool FileUploader::startUploadSession(fs::FS &sd) {
-    Serial.println("[FileUploader] Starting upload session");
+    LOG("[FileUploader] Starting upload session");
     
     // Get session duration from config
     unsigned long sessionDuration = config->getSessionDurationSeconds();
@@ -394,31 +377,25 @@ bool FileUploader::startUploadSession(fs::FS &sd) {
     // If retry count exceeds max attempts, apply multiplier
     if (retryCount > maxRetries) {
         int multiplier = retryCount;
-        Serial.print("[FileUploader] Applying retry multiplier: ");
-        Serial.print(multiplier);
-        Serial.print("x (retry count: ");
-        Serial.print(retryCount);
-        Serial.println(")");
+        LOGF("[FileUploader] Applying retry multiplier: %dx (retry count: %d)", multiplier, retryCount);
         budgetManager->startSession(sessionDuration, multiplier);
     } else {
         budgetManager->startSession(sessionDuration);
     }
     
-    Serial.print("[FileUploader] Session budget: ");
-    Serial.print(budgetManager->getRemainingBudgetMs());
-    Serial.println(" ms");
+    LOGF("[FileUploader] Session budget: %lu ms", budgetManager->getRemainingBudgetMs());
     
     return true;
 }
 
 // End upload session and save state
 void FileUploader::endUploadSession(fs::FS &sd) {
-    Serial.println("[FileUploader] Ending upload session");
+    LOG("[FileUploader] Ending upload session");
     
     // Save upload state
     if (!stateManager->save(sd)) {
-        Serial.println("[FileUploader] ERROR: Failed to save upload state");
-        Serial.println("[FileUploader] Upload progress may be lost - will retry from last saved state");
+        LOG("[FileUploader] ERROR: Failed to save upload state");
+        LOG("[FileUploader] Upload progress may be lost - will retry from last saved state");
     }
     
     // Update last upload timestamp
@@ -429,21 +406,18 @@ void FileUploader::endUploadSession(fs::FS &sd) {
     
     // Calculate wait time
     unsigned long waitTimeMs = budgetManager->getWaitTimeMs();
-    Serial.print("[FileUploader] Wait time before next session: ");
-    Serial.print(waitTimeMs / 1000);
-    Serial.println(" seconds");
+    LOGF("[FileUploader] Wait time before next session: %lu seconds", waitTimeMs / 1000);
     
     // Save state again with updated timestamp
     if (!stateManager->save(sd)) {
-        Serial.println("[FileUploader] ERROR: Failed to save final state with timestamp");
-        Serial.println("[FileUploader] Next upload may occur sooner than scheduled");
+        LOG("[FileUploader] ERROR: Failed to save final state with timestamp");
+        LOG("[FileUploader] Next upload may occur sooner than scheduled");
     }
 }
 
 // Upload all files in a DATALOG folder
 bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
-    Serial.print("[FileUploader] Uploading DATALOG folder: ");
-    Serial.println(folderName);
+    LOGF("[FileUploader] Uploading DATALOG folder: %s", folderName.c_str());
     
     // Set this as the current retry folder
     stateManager->setCurrentRetryFolder(folderName);
@@ -455,7 +429,7 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
     std::vector<String> files = scanFolderFiles(sd, folderPath);
     
     if (files.empty()) {
-        Serial.println("[FileUploader] No .edf files found in folder");
+        LOG("[FileUploader] No .edf files found in folder");
         // Mark as completed even if empty
         stateManager->markFolderCompleted(folderName);
         stateManager->clearCurrentRetry();
@@ -471,10 +445,9 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         // Get file size
         File file = sd.open(localPath);
         if (!file) {
-            Serial.print("[FileUploader] ERROR: Cannot open file for reading: ");
-            Serial.println(localPath);
-            Serial.println("[FileUploader] File may be corrupted or SD card has read errors");
-            Serial.println("[FileUploader] Skipping this file and continuing with next file");
+            LOGF("[FileUploader] ERROR: Cannot open file for reading: %s", localPath.c_str());
+            LOG("[FileUploader] File may be corrupted or SD card has read errors");
+            LOG("[FileUploader] Skipping this file and continuing with next file");
             continue;  // Skip this file but continue with others
         }
         
@@ -482,8 +455,7 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         
         // Sanity check file size
         if (fileSize == 0) {
-            Serial.print("[FileUploader] WARNING: File is empty: ");
-            Serial.println(localPath);
+            LOGF("[FileUploader] WARNING: File is empty: %s", localPath.c_str());
             file.close();
             continue;  // Skip empty files
         }
@@ -492,18 +464,14 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         
         // Check if we have budget for this file
         if (!budgetManager->canUploadFile(fileSize)) {
-            Serial.println("[FileUploader] Insufficient time budget for remaining files");
-            Serial.print("[FileUploader] Successfully uploaded ");
-            Serial.print(uploadedCount);
-            Serial.print(" of ");
-            Serial.print(files.size());
-            Serial.println(" files before budget exhaustion");
-            Serial.println("[FileUploader] This is normal - upload will resume in next session");
+            LOG("[FileUploader] Insufficient time budget for remaining files");
+            LOGF("[FileUploader] Successfully uploaded %d of %d files before budget exhaustion", uploadedCount, files.size());
+            LOG("[FileUploader] This is normal - upload will resume in next session");
             
             // Increment retry count for this folder (partial upload)
             stateManager->incrementCurrentRetryCount();
             if (!stateManager->save(sd)) {
-                Serial.println("[FileUploader] WARNING: Failed to save state after partial upload");
+                LOG("[FileUploader] WARNING: Failed to save state after partial upload");
             }
             return false;  // Session interrupted due to budget
         }
@@ -520,10 +488,10 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         if (smbUploader && config->getEndpointType() == "SMB") {
             // Ensure SMB connection is established
             if (!smbUploader->isConnected()) {
-                Serial.println("[FileUploader] SMB not connected, attempting to connect...");
+                LOG("[FileUploader] SMB not connected, attempting to connect...");
                 if (!smbUploader->begin()) {
-                    Serial.println("[FileUploader] ERROR: Failed to connect to SMB share");
-                    Serial.println("[FileUploader] Check network connectivity and SMB credentials");
+                    LOG("[FileUploader] ERROR: Failed to connect to SMB share");
+                    LOG("[FileUploader] Check network connectivity and SMB credentials");
                     stateManager->incrementCurrentRetryCount();
                     stateManager->save(sd);
                     return false;
@@ -537,10 +505,10 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         if (webdavUploader && config->getEndpointType() == "WEBDAV") {
             // Ensure WebDAV connection is established
             if (!webdavUploader->isConnected()) {
-                Serial.println("[FileUploader] WebDAV not connected, attempting to connect...");
+                LOG("[FileUploader] WebDAV not connected, attempting to connect...");
                 if (!webdavUploader->begin()) {
-                    Serial.println("[FileUploader] ERROR: Failed to connect to WebDAV server");
-                    Serial.println("[FileUploader] Check network connectivity and WebDAV credentials");
+                    LOG("[FileUploader] ERROR: Failed to connect to WebDAV server");
+                    LOG("[FileUploader] Check network connectivity and WebDAV credentials");
                     stateManager->incrementCurrentRetryCount();
                     stateManager->save(sd);
                     return false;
@@ -554,10 +522,10 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         if (sleephqUploader && config->getEndpointType() == "SLEEPHQ") {
             // Ensure SleepHQ connection is established
             if (!sleephqUploader->isConnected()) {
-                Serial.println("[FileUploader] SleepHQ not connected, attempting to connect...");
+                LOG("[FileUploader] SleepHQ not connected, attempting to connect...");
                 if (!sleephqUploader->begin()) {
-                    Serial.println("[FileUploader] ERROR: Failed to connect to SleepHQ service");
-                    Serial.println("[FileUploader] Check network connectivity and API credentials");
+                    LOG("[FileUploader] ERROR: Failed to connect to SleepHQ service");
+                    LOG("[FileUploader] Check network connectivity and API credentials");
                     stateManager->incrementCurrentRetryCount();
                     stateManager->save(sd);
                     return false;
@@ -568,29 +536,26 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         } else
 #endif
         {
-            Serial.println("[FileUploader] ERROR: No uploader available for configured endpoint type");
-            Serial.println("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
+            LOG("[FileUploader] ERROR: No uploader available for configured endpoint type");
+            LOG("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
             stateManager->incrementCurrentRetryCount();
             stateManager->save(sd);
             return false;
         }
         
         if (!uploadSuccess) {
-            Serial.print("[FileUploader] ERROR: Failed to upload file: ");
-            Serial.println(localPath);
-            Serial.println("[FileUploader] This may be due to:");
-            Serial.println("[FileUploader]   - Network connectivity issues");
-            Serial.println("[FileUploader]   - SMB server unavailable or overloaded");
-            Serial.println("[FileUploader]   - Insufficient permissions on remote share");
-            Serial.println("[FileUploader]   - Disk space issues on remote server");
-            Serial.print("[FileUploader] Successfully uploaded ");
-            Serial.print(uploadedCount);
-            Serial.print(" files before failure");
+            LOGF("[FileUploader] ERROR: Failed to upload file: %s", localPath.c_str());
+            LOG("[FileUploader] This may be due to:");
+            LOG("[FileUploader]   - Network connectivity issues");
+            LOG("[FileUploader]   - SMB server unavailable or overloaded");
+            LOG("[FileUploader]   - Insufficient permissions on remote share");
+            LOG("[FileUploader]   - Disk space issues on remote server");
+            LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
             
             // Don't mark folder as completed, will retry
             stateManager->incrementCurrentRetryCount();
             if (!stateManager->save(sd)) {
-                Serial.println("[FileUploader] WARNING: Failed to save state after upload error");
+                LOG("[FileUploader] WARNING: Failed to save state after upload error");
             }
             return false;  // Stop processing this folder
         }
@@ -600,17 +565,11 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         budgetManager->recordUpload(bytesTransferred, uploadTime);
         
         uploadedCount++;
-        Serial.print("[FileUploader] Uploaded: ");
-        Serial.print(fileName);
-        Serial.print(" (");
-        Serial.print(bytesTransferred);
-        Serial.println(" bytes)");
+        LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), bytesTransferred);
     }
     
     // All files uploaded successfully
-    Serial.print("[FileUploader] Successfully uploaded all ");
-    Serial.print(uploadedCount);
-    Serial.println(" files in folder");
+    LOGF("[FileUploader] Successfully uploaded all %d files in folder", uploadedCount);
     
     // Mark folder as completed
     stateManager->markFolderCompleted(folderName);
@@ -626,23 +585,20 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
 
 // Upload a single file (for root and SETTINGS files)
 bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
-    Serial.print("[FileUploader] Uploading single file: ");
-    Serial.println(filePath);
+    LOGF("[FileUploader] Uploading single file: %s", filePath.c_str());
     
     // Check if file exists
     if (!sd.exists(filePath)) {
-        Serial.print("[FileUploader] ERROR: File does not exist: ");
-        Serial.println(filePath);
-        Serial.println("[FileUploader] File may have been deleted or SD card structure changed");
+        LOGF("[FileUploader] ERROR: File does not exist: %s", filePath.c_str());
+        LOG("[FileUploader] File may have been deleted or SD card structure changed");
         return false;
     }
     
     // Get file size
     File file = sd.open(filePath);
     if (!file) {
-        Serial.print("[FileUploader] ERROR: Cannot open file for reading: ");
-        Serial.println(filePath);
-        Serial.println("[FileUploader] File may be corrupted or SD card has read errors");
+        LOGF("[FileUploader] ERROR: Cannot open file for reading: %s", filePath.c_str());
+        LOG("[FileUploader] File may be corrupted or SD card has read errors");
         return false;
     }
     
@@ -650,8 +606,7 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     
     // Sanity check file size
     if (fileSize == 0) {
-        Serial.print("[FileUploader] WARNING: File is empty: ");
-        Serial.println(filePath);
+        LOGF("[FileUploader] WARNING: File is empty: %s", filePath.c_str());
         file.close();
         return true;  // Consider empty file as "uploaded" (skip it)
     }
@@ -660,15 +615,14 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     
     // Check if we have budget for this file
     if (!budgetManager->canUploadFile(fileSize)) {
-        Serial.print("[FileUploader] Insufficient time budget for file: ");
-        Serial.println(filePath);
-        Serial.println("[FileUploader] File will be uploaded in next session");
+        LOGF("[FileUploader] Insufficient time budget for file: %s", filePath.c_str());
+        LOG("[FileUploader] File will be uploaded in next session");
         return false;  // Not an error, just out of budget
     }
     
     // Check if file has changed (checksum comparison)
     if (!stateManager->hasFileChanged(sd, filePath)) {
-        Serial.println("[FileUploader] File unchanged, skipping upload");
+        LOG("[FileUploader] File unchanged, skipping upload");
         return true;  // Not an error, just no need to upload
     }
     
@@ -683,10 +637,10 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     if (smbUploader && config->getEndpointType() == "SMB") {
         // Ensure SMB connection is established
         if (!smbUploader->isConnected()) {
-            Serial.println("[FileUploader] SMB not connected, attempting to connect...");
+            LOG("[FileUploader] SMB not connected, attempting to connect...");
             if (!smbUploader->begin()) {
-                Serial.println("[FileUploader] ERROR: Failed to connect to SMB share");
-                Serial.println("[FileUploader] Check network connectivity and SMB credentials");
+                LOG("[FileUploader] ERROR: Failed to connect to SMB share");
+                LOG("[FileUploader] Check network connectivity and SMB credentials");
                 return false;
             }
         }
@@ -698,10 +652,10 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     if (webdavUploader && config->getEndpointType() == "WEBDAV") {
         // Ensure WebDAV connection is established
         if (!webdavUploader->isConnected()) {
-            Serial.println("[FileUploader] WebDAV not connected, attempting to connect...");
+            LOG("[FileUploader] WebDAV not connected, attempting to connect...");
             if (!webdavUploader->begin()) {
-                Serial.println("[FileUploader] ERROR: Failed to connect to WebDAV server");
-                Serial.println("[FileUploader] Check network connectivity and WebDAV credentials");
+                LOG("[FileUploader] ERROR: Failed to connect to WebDAV server");
+                LOG("[FileUploader] Check network connectivity and WebDAV credentials");
                 return false;
             }
         }
@@ -713,10 +667,10 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     if (sleephqUploader && config->getEndpointType() == "SLEEPHQ") {
         // Ensure SleepHQ connection is established
         if (!sleephqUploader->isConnected()) {
-            Serial.println("[FileUploader] SleepHQ not connected, attempting to connect...");
+            LOG("[FileUploader] SleepHQ not connected, attempting to connect...");
             if (!sleephqUploader->begin()) {
-                Serial.println("[FileUploader] ERROR: Failed to connect to SleepHQ service");
-                Serial.println("[FileUploader] Check network connectivity and API credentials");
+                LOG("[FileUploader] ERROR: Failed to connect to SleepHQ service");
+                LOG("[FileUploader] Check network connectivity and API credentials");
                 return false;
             }
         }
@@ -725,14 +679,14 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     } else
 #endif
     {
-        Serial.println("[FileUploader] ERROR: No uploader available for configured endpoint type");
-        Serial.println("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
+        LOG("[FileUploader] ERROR: No uploader available for configured endpoint type");
+        LOG("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
         return false;
     }
     
     if (!uploadSuccess) {
-        Serial.println("[FileUploader] ERROR: Failed to upload file");
-        Serial.println("[FileUploader] This may be due to network issues or SMB server problems");
+        LOG("[FileUploader] ERROR: Failed to upload file");
+        LOG("[FileUploader] This may be due to network issues or SMB server problems");
         return false;
     }
     
@@ -756,11 +710,7 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
         stateManager->save(sd);
     }
     
-    Serial.print("[FileUploader] Successfully uploaded: ");
-    Serial.print(filePath);
-    Serial.print(" (");
-    Serial.print(bytesTransferred);
-    Serial.println(" bytes)");
+    LOGF("[FileUploader] Successfully uploaded: %s (%lu bytes)", filePath.c_str(), bytesTransferred);
     
     return true;
 }

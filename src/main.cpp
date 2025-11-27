@@ -3,6 +3,7 @@
 #include "SDCardManager.h"
 #include "WiFiManager.h"
 #include "FileUploader.h"
+#include "Logger.h"
 
 #ifdef ENABLE_TEST_WEBSERVER
 #include "TestWebServer.h"
@@ -41,40 +42,38 @@ void setup() {
     // Initialize serial port
     Serial.begin(115200);
     delay(1000);
-    Serial.println("\n\n=== CPAP Data Auto-Uploader ===");
+    LOG("\n\n=== CPAP Data Auto-Uploader ===");
 
     // Initialize SD card control
     if (!sdManager.begin()) {
-        Serial.println("Failed to initialize SD card manager");
+        LOG("Failed to initialize SD card manager");
         return;
     }
 
     // Take control of SD card
-    Serial.println("Waiting to access SD card...");
+    LOG("Waiting to access SD card...");
     while (!sdManager.takeControl()) {
         delay(1000);
     }
 
     // Read config file from SD card
-    Serial.println("Loading configuration...");
+    LOG("Loading configuration...");
     if (!config.loadFromSD(sdManager.getFS())) {
-        Serial.println("Failed to load configuration");
+        LOG("Failed to load configuration");
         sdManager.releaseControl();
         return;
     }
 
-    Serial.println("Configuration loaded successfully");
-    Serial.print("WiFi SSID: ");
-    Serial.println(config.getWifiSSID());
-    Serial.print("Endpoint: ");
-    Serial.println(config.getEndpoint());
+    LOG("Configuration loaded successfully");
+    LOGF("WiFi SSID: %s", config.getWifiSSID().c_str());
+    LOGF("Endpoint: %s", config.getEndpoint().c_str());
 
     // Release SD card back to CPAP machine
     sdManager.releaseControl();
 
     // Initialize WiFi in station mode
     if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
-        Serial.println("Failed to connect to WiFi");
+        LOG("Failed to connect to WiFi");
         return;
     }
 
@@ -82,39 +81,39 @@ void setup() {
     uploader = new FileUploader(&config, &wifiManager);
     
     // Take control of SD card to initialize uploader components
-    Serial.println("Initializing uploader...");
+    LOG("Initializing uploader...");
     if (sdManager.takeControl()) {
         if (!uploader->begin(sdManager.getFS())) {
-            Serial.println("ERROR: Failed to initialize uploader");
+            LOG("ERROR: Failed to initialize uploader");
             sdManager.releaseControl();
             return;
         }
         sdManager.releaseControl();
-        Serial.println("Uploader initialized successfully");
+        LOG("Uploader initialized successfully");
     } else {
-        Serial.println("ERROR: Failed to take SD card control for uploader initialization");
+        LOG("ERROR: Failed to take SD card control for uploader initialization");
         return;
     }
     
     // Synchronize time with NTP server
-    Serial.println("Synchronizing time with NTP server...");
+    LOG("Synchronizing time with NTP server...");
     // The ScheduleManager handles NTP sync internally during begin()
     // We can check if time is synced by calling shouldUpload()
     // (it will return false if time is not synced)
     
     // Trigger initial time sync check
     if (uploader->shouldUpload()) {
-        Serial.println("Time synchronized successfully");
-        Serial.println("Currently in upload window - will begin upload shortly");
+        LOG("Time synchronized successfully");
+        LOG("Currently in upload window - will begin upload shortly");
     } else {
-        Serial.println("Time sync status unknown or not in upload window");
-        Serial.println("Will retry NTP sync every 5 minutes if needed");
+        LOG("Time sync status unknown or not in upload window");
+        LOG("Will retry NTP sync every 5 minutes if needed");
         lastNtpSyncAttempt = millis();
     }
 
 #ifdef ENABLE_TEST_WEBSERVER
     // Initialize test web server for on-demand testing
-    Serial.println("Initializing test web server...");
+    LOG("Initializing test web server...");
     
     // We need to get references to the internal components from FileUploader
     // For now, we'll create a new TestWebServer without these references
@@ -122,15 +121,14 @@ void setup() {
     testWebServer = new TestWebServer(&config, nullptr, nullptr, nullptr);
     
     if (testWebServer->begin()) {
-        Serial.println("Test web server started successfully");
-        Serial.print("Access web interface at: http://");
-        Serial.println(wifiManager.getIPAddress());
+        LOG("Test web server started successfully");
+        LOGF("Access web interface at: http://%s", wifiManager.getIPAddress().c_str());
     } else {
-        Serial.println("ERROR: Failed to start test web server");
+        LOG("ERROR: Failed to start test web server");
     }
 #endif
 
-    Serial.println("Setup complete!");
+    LOG("Setup complete!");
 }
 
 // ============================================================================
@@ -145,18 +143,18 @@ void loop() {
     
     // Check for state reset trigger
     if (g_resetStateFlag) {
-        Serial.println("=== State Reset Triggered via Web Interface ===");
+        LOG("=== State Reset Triggered via Web Interface ===");
         g_resetStateFlag = false;
         
         // Take SD card control to reset state
         if (sdManager.takeControl()) {
-            Serial.println("Resetting upload state...");
+            LOG("Resetting upload state...");
             
             // Delete the state file
             if (sdManager.getFS().remove("/.upload_state.json")) {
-                Serial.println("Upload state file deleted successfully");
+                LOG("Upload state file deleted successfully");
             } else {
-                Serial.println("WARNING: Failed to delete state file (may not exist)");
+                LOG("WARNING: Failed to delete state file (may not exist)");
             }
             
             // Reinitialize uploader to load fresh state
@@ -164,62 +162,62 @@ void loop() {
                 delete uploader;
                 uploader = new FileUploader(&config, &wifiManager);
                 if (uploader->begin(sdManager.getFS())) {
-                    Serial.println("Uploader reinitialized with fresh state");
+                    LOG("Uploader reinitialized with fresh state");
                 } else {
-                    Serial.println("ERROR: Failed to reinitialize uploader");
+                    LOG("ERROR: Failed to reinitialize uploader");
                 }
             }
             
             sdManager.releaseControl();
-            Serial.println("State reset complete");
+            LOG("State reset complete");
         } else {
-            Serial.println("ERROR: Cannot reset state - SD card in use");
-            Serial.println("Will retry on next loop iteration");
+            LOG("ERROR: Cannot reset state - SD card in use");
+            LOG("Will retry on next loop iteration");
         }
     }
     
     // Check for upload trigger
     if (g_triggerUploadFlag) {
-        Serial.println("=== Upload Triggered via Web Interface ===");
+        LOG("=== Upload Triggered via Web Interface ===");
         g_triggerUploadFlag = false;
         
         // Force upload regardless of schedule
         // We'll bypass the shouldUpload() check and go straight to upload
-        Serial.println("Forcing immediate upload session...");
+        LOG("Forcing immediate upload session...");
         
         // Try to take control of SD card
         if (sdManager.takeControl()) {
-            Serial.println("SD card control acquired, starting forced upload...");
+            LOG("SD card control acquired, starting forced upload...");
             
-            // Perform upload
-            bool uploadSuccess = uploader->uploadNewFiles(sdManager.getFS());
+            // Perform upload with force flag to bypass schedule check
+            bool uploadSuccess = uploader->uploadNewFiles(sdManager.getFS(), true);
             
             // Release SD card
             sdManager.releaseControl();
-            Serial.println("SD card control released");
+            LOG("SD card control released");
             
             if (uploadSuccess) {
-                Serial.println("Forced upload completed successfully");
+                LOG("Forced upload completed successfully");
             } else {
-                Serial.println("Forced upload incomplete (budget exhausted or errors)");
+                LOG("Forced upload incomplete (budget exhausted or errors)");
             }
         } else {
-            Serial.println("ERROR: Cannot start upload - SD card in use by CPAP");
-            Serial.println("Will retry on next loop iteration");
+            LOG("ERROR: Cannot start upload - SD card in use by CPAP");
+            LOG("Will retry on next loop iteration");
         }
     }
 #endif
     
     // Check WiFi connection
     if (!wifiManager.isConnected()) {
-        Serial.println("WARNING: WiFi disconnected, attempting to reconnect...");
+        LOG("WARNING: WiFi disconnected, attempting to reconnect...");
         if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
-            Serial.println("ERROR: Failed to reconnect to WiFi");
-            Serial.println("Will retry in 30 seconds...");
+            LOG("ERROR: Failed to reconnect to WiFi");
+            LOG("Will retry in 30 seconds...");
             delay(30000);
             return;
         }
-        Serial.println("WiFi reconnected successfully");
+        LOG("WiFi reconnected successfully");
         
         // Reset NTP sync attempt timer to trigger immediate sync after reconnection
         lastNtpSyncAttempt = 0;
@@ -230,7 +228,7 @@ void loop() {
     if (uploader) {
         unsigned long currentTime = millis();
         if (currentTime - lastNtpSyncAttempt >= NTP_RETRY_INTERVAL_MS) {
-            Serial.println("Periodic NTP synchronization check...");
+            LOG("Periodic NTP synchronization check...");
             // Note: shouldUpload() checks time sync internally
             // We just want to trigger the check periodically
             lastNtpSyncAttempt = currentTime;
@@ -246,7 +244,7 @@ void loop() {
         }
         // Wait period over, clear the flag and continue
         budgetExhaustedRetry = false;
-        Serial.println("Budget exhaustion wait period complete, resuming upload...");
+        LOG("Budget exhaustion wait period complete, resuming upload...");
     }
 
     // Check if it's time to upload (scheduled window - once per day)
@@ -256,17 +254,17 @@ void loop() {
         return;
     }
 
-    Serial.println("=== Upload Window Active ===");
-    Serial.println("Attempting to start upload session...");
+    LOG("=== Upload Window Active ===");
+    LOG("Attempting to start upload session...");
 
     // Try to take control of SD card for upload session
     if (!sdManager.takeControl()) {
-        Serial.println("CPAP machine is using SD card, will retry in 5 seconds...");
+        LOG("CPAP machine is using SD card, will retry in 5 seconds...");
         delay(5000);  // Wait 5 seconds before retrying
         return;
     }
 
-    Serial.println("SD card control acquired, starting upload session...");
+    LOG("SD card control acquired, starting upload session...");
 
     // Perform upload session
     // Note: uploadNewFiles() handles:
@@ -278,7 +276,7 @@ void loop() {
 
     // Release SD card back to CPAP machine
     sdManager.releaseControl();
-    Serial.println("SD card control released");
+    LOG("SD card control released");
 
     // Determine if we need to wait before retrying
     // The upload can fail for two reasons:
@@ -286,23 +284,21 @@ void loop() {
     // 2. All files uploaded or scheduled upload complete - wait until next day
     
     if (uploadSuccess) {
-        Serial.println("=== Upload Session Completed Successfully ===");
-        Serial.println("All pending files have been uploaded");
-        Serial.println("Next upload will occur at scheduled time tomorrow");
+        LOG("=== Upload Session Completed Successfully ===");
+        LOG("All pending files have been uploaded");
+        LOG("Next upload will occur at scheduled time tomorrow");
         // The ScheduleManager has already marked upload as completed
         // No need to set retry timer - will wait for next scheduled time
     } else {
-        Serial.println("=== Upload Session Incomplete ===");
-        Serial.println("Session ended due to time budget exhaustion or errors");
+        LOG("=== Upload Session Incomplete ===");
+        LOG("Session ended due to time budget exhaustion or errors");
         
         // Calculate wait time (2x session duration) before retry
         unsigned long sessionDuration = config.getSessionDurationSeconds() * 1000;
         unsigned long waitTime = sessionDuration * 2;
         
-        Serial.print("Waiting ");
-        Serial.print(waitTime / 1000);
-        Serial.println(" seconds before retry...");
-        Serial.println("This allows CPAP machine priority access to SD card");
+        LOGF("Waiting %lu seconds before retry...", waitTime / 1000);
+        LOG("This allows CPAP machine priority access to SD card");
         
         nextUploadRetryTime = millis() + waitTime;
         budgetExhaustedRetry = true;

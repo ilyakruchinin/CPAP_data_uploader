@@ -26,12 +26,14 @@ private:
     void handleStatus();
     void handleResetState();
     void handleConfig();
+    void handleLogs();
     void handleNotFound();
     
     // Helper methods
     String getUptimeString();
     String getCurrentTimeString();
     int getPendingFilesCount();
+    String escapeJson(const String& str);
 
 public:
     TestWebServer(Config* cfg, UploadStateManager* state, 

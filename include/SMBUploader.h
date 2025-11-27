@@ -35,6 +35,7 @@ class SMBUploader {
 private:
     String smbServer;      // Server hostname or IP
     String smbShare;       // Share name
+    String smbBasePath;    // Base path within share (e.g., "test_upload_esp32")
     String smbUser;        // Username for authentication
     String smbPassword;    // Password for authentication
     
