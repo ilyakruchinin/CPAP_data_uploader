@@ -47,6 +47,8 @@ This project uses a clean, class-based architecture with explicit dependency inj
 │   ├── TimeBudgetManager.cpp  # Time budget enforcement
 │   ├── ScheduleManager.cpp    # Upload scheduling
 │   ├── SMBUploader.cpp        # SMB upload implementation
+│   ├── TestWebServer.cpp      # Test web server (optional)
+│   ├── Logger.cpp             # Circular buffer logging system
 │   ├── WebDAVUploader.cpp     # WebDAV upload (placeholder)
 │   └── SleepHQUploader.cpp    # SleepHQ upload (placeholder)
 ├── include/                  # Header files
@@ -59,21 +61,46 @@ This project uses a clean, class-based architecture with explicit dependency inj
 │   ├── TimeBudgetManager.h
 │   ├── ScheduleManager.h
 │   ├── SMBUploader.h
+│   ├── TestWebServer.h
+│   ├── Logger.h
 │   ├── WebDAVUploader.h
 │   └── SleepHQUploader.h
-├── test/                     # Unit tests
-│   ├── test_native/         # Native environment tests
-│   └── mocks/               # Mock implementations for testing
+├── test/                     # Unit tests (72 tests, all passing)
+│   ├── test_time_budget_manager/  # Time budget tests
+│   ├── test_config/               # Configuration tests
+│   ├── test_webserver/            # Web server tests
+│   ├── test_native/               # Mock infrastructure tests
+│   ├── test_schedule_manager/     # Schedule manager tests
+│   └── mocks/                     # Mock implementations
+│       ├── Arduino.h/cpp          # Arduino API mocks
+│       ├── MockTime.h/cpp         # Time mocking
+│       ├── MockFS.h/cpp           # Filesystem mocking
+│       ├── MockLogger.h           # Logger mock for tests
+│       ├── MockWebServer.h        # Web server mock
+│       └── ESP32Ping.h/cpp        # Ping mock
 ├── components/               # ESP-IDF components
 │   └── libsmb2/             # SMB2/3 client library (git submodule)
+├── scripts/                  # Build and release scripts
+│   └── prepare_release.sh   # Create release packages
+├── release/                  # Release package files
+│   ├── upload.sh            # macOS/Linux upload script
+│   ├── upload.bat           # Windows upload script
+│   └── README.md            # Release package documentation
 ├── .kiro/                    # Kiro IDE configuration
 │   └── specs/               # Feature specifications
-│       └── file-tracking-and-upload-scheduling/
-│           ├── requirements.md
+│       ├── file-tracking-and-upload-scheduling/
+│       │   ├── requirements.md
+│       │   ├── design.md
+│       │   └── tasks.md
+│       └── circular-buffer-logging/
 │           ├── design.md
 │           └── tasks.md
-├── venv/                     # Python virtual environment
 ├── docs/                     # Documentation
+│   ├── LIBSMB2_INTEGRATION.md
+│   └── SMB_IMPLEMENTATION_SUMMARY.md
+├── venv/                     # Python virtual environment
+├── build_upload.sh          # Quick build and upload script
+├── monitor.sh               # Quick serial monitor script
 ├── platformio.ini           # PlatformIO configuration
 └── README.md               # This file
 ```
@@ -136,15 +163,27 @@ See [docs/LIBSMB2_INTEGRATION.md](docs/LIBSMB2_INTEGRATION.md) for detailed inte
 3. Build: `pio run`
 4. Upload: `pio run -t upload`
 
-## Quick Build
+## Quick Build & Upload
+```bash
+./build_upload.sh
+```
+
+Or manually:
 ```bash
 source venv/bin/activate
-pio pkg install
-pio run -t upload
+pio run -e pico32 -t upload
 ```
 
 ## Monitor
-`pio device monitor`
+```bash
+./monitor.sh
+```
+
+Or manually:
+```bash
+source venv/bin/activate
+sudo pio device monitor -e pico32
+```
 
 ## Pin Configuration
 See `include/pins_config.h` for pin definitions specific to SD WIFI PRO hardware.
@@ -168,8 +207,7 @@ Create a `config.json` file in the root of your SD card with the following forma
   "UPLOAD_HOUR": 12,
   "SESSION_DURATION_SECONDS": 5,
   "MAX_RETRY_ATTEMPTS": 3,
-  "GMT_OFFSET_SECONDS": 0,
-  "DAYLIGHT_OFFSET_SECONDS": 0
+  "GMT_OFFSET_HOURS": 0
 }
 ```
 
@@ -202,10 +240,9 @@ Create a `config.json` file in the root of your SD card with the following forma
   - Helps handle large files that don't fit in normal time budget
 
 #### Timezone Settings
-- **GMT_OFFSET_SECONDS**: Timezone offset from GMT in seconds (default: 0)
-  - Example: -28800 for PST (UTC-8), 3600 for CET (UTC+1)
-- **DAYLIGHT_OFFSET_SECONDS**: Daylight saving time offset in seconds (default: 0)
-  - Example: 3600 for DST (adds 1 hour)
+- **GMT_OFFSET_HOURS**: Timezone offset from GMT in hours (default: 0)
+  - Example: -8 for PST (UTC-8), +1 for CET (UTC+1), -5 for EST (UTC-5)
+  - For daylight saving time, adjust the offset accordingly (e.g., -4 for EDT instead of -5 for EST)
 
 ## How It Works
 
@@ -299,7 +336,7 @@ SMB Share: //server/share/
 
 ## Development Status
 
-### ✅ Implemented (v0.2.0)
+### ✅ Implemented (v0.3.0)
 - ✅ SD card sharing with CPAP machine
 - ✅ Configuration file loading from SD card
 - ✅ WiFi station mode connection
@@ -311,9 +348,12 @@ SMB Share: //server/share/
 - ✅ Upload state persistence across reboots
 - ✅ Retry logic with adaptive time budgets
 - ✅ Feature flags for compile-time backend selection
-- ✅ Unit tests for core components (Config, UploadStateManager, TimeBudgetManager, ScheduleManager, TestWebServer)
+- ✅ Unit tests for core components - 72/72 passing (Config, UploadStateManager, TimeBudgetManager, ScheduleManager, TestWebServer)
 - ✅ Comprehensive error handling and logging
+- ✅ Circular buffer logging system with web API access
 - ✅ Test web server for on-demand upload testing (optional, disabled by default)
+- ✅ Cross-platform release packaging (Windows, macOS, Linux)
+- ✅ Simplified timezone configuration (hours instead of seconds)
 
 ### ⏳ In Progress
 - 🔄 Hardware testing and validation
@@ -407,6 +447,42 @@ http://192.168.1.100/
 #### Security Note
 
 The test web server has no authentication. Only enable it on trusted networks during development/testing. Always disable it for production deployments by commenting out `-DENABLE_TEST_WEBSERVER` in `platformio.ini`.
+
+## Release Packages
+
+For end users who want to upload precompiled firmware without setting up the development environment:
+
+### Creating a Release Package
+
+```bash
+./scripts/prepare_release.sh
+```
+
+This creates a timestamped zip file in `release/` containing:
+- `firmware.bin` - Precompiled firmware
+- `upload.sh` - macOS/Linux upload script (auto-creates Python venv)
+- `upload.bat` - Windows upload script (requires esptool.exe)
+- `README.md` - User instructions
+
+### Windows Release
+
+For Windows releases, download `esptool.exe` from [espressif/esptool releases](https://github.com/espressif/esptool/releases) and place it in the `release/` directory before running `prepare_release.sh`.
+
+### Using a Release Package
+
+**Windows:**
+```cmd
+upload.bat COM3
+```
+
+**macOS/Linux:**
+```bash
+./upload.sh /dev/ttyUSB0
+```
+
+The scripts handle all dependencies automatically:
+- Windows: Uses standalone esptool.exe (no Python needed)
+- macOS/Linux: Creates Python venv and installs esptool on first run
 
 ### Unit Tests
 
