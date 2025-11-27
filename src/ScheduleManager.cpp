@@ -32,16 +32,26 @@ bool ScheduleManager::syncTime() {
     LOGF("[NTP] Starting time sync with server: %s", ntpServer);
     LOGF("[NTP] GMT offset: %ld seconds, Daylight offset: %d seconds", gmtOffsetSeconds, daylightOffsetSeconds);
     
+    // Allow network to stabilize after WiFi connection
+    LOG("[NTP] Waiting 5 seconds for network to stabilize...");
+    delay(5000);
+    
     // First, check if we can reach the NTP server via ping
     LOG("[NTP] Testing connectivity to NTP server...");
     bool pingSuccess = Ping.ping(ntpServer, 3);  // 3 ping attempts
     
     if (pingSuccess) {
-        LOGF("[NTP] Ping successful! Average time: %d ms", Ping.averageTime());
+        float avgTime = Ping.averageTime();
+        // Only log if we got a valid average time
+        if (avgTime > 0 && avgTime < 10000) {  // Sanity check: 0-10 seconds
+            LOGF("[NTP] Ping successful! Average time: %.1f ms", avgTime);
+        } else {
+            LOG("[NTP] Ping reported success but with invalid timing");
+        }
     } else {
-        LOG("[NTP] WARNING: Cannot ping NTP server");
-        LOG("[NTP] This may indicate network connectivity issues");
-        LOG("[NTP] Will attempt NTP sync anyway...");
+        LOG("[NTP] WARNING: Cannot ping NTP server (ICMP may be blocked)");
+        LOG("[NTP] This is normal for many networks - NTP uses UDP, not ICMP");
+        LOG("[NTP] Proceeding with NTP sync...");
     }
     
     // Configure time with NTP server and timezone offsets

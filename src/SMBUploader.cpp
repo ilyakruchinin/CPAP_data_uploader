@@ -409,11 +409,18 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
     unsigned long uploadTime = millis() - startTime;
     
     if (success) {
+        float transferRate = uploadTime > 0 ? (bytesTransferred / 1024.0) / (uploadTime / 1000.0) : 0.0;
         LOGF("[SMB] Upload complete: %lu bytes transferred in %lu ms (%.2f KB/s)", 
-             bytesTransferred, uploadTime, 
-             uploadTime > 0 ? (bytesTransferred / 1024.0) / (uploadTime / 1000.0) : 0.0);
+             bytesTransferred, uploadTime, transferRate);
+        LOGF("[SMB] File size verification: SD=%u bytes, Transferred=%lu bytes, Match=%s",
+             fileSize, bytesTransferred, (bytesTransferred == fileSize) ? "YES" : "NO");
+        
+        if (bytesTransferred != fileSize) {
+            LOG("[SMB] ERROR: Size mismatch detected! File may be corrupted on remote server");
+        }
     } else {
-        LOG("[SMB] Upload failed - file not uploaded or incomplete");
+        LOGF("[SMB] Upload failed - Expected %u bytes, transferred %lu bytes", 
+             fileSize, bytesTransferred);
     }
     
     return success;

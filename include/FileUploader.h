@@ -63,6 +63,11 @@ public:
     bool shouldUpload();
     bool uploadFile(const String& filePath, fs::FS &sd);
     bool uploadNewFiles(fs::FS &sd, bool forceUpload = false);
+    
+    // Getters for internal components (for web interface access)
+    UploadStateManager* getStateManager() { return stateManager; }
+    TimeBudgetManager* getBudgetManager() { return budgetManager; }
+    ScheduleManager* getScheduleManager() { return scheduleManager; }
 };
 
 #endif // FILE_UPLOADER_H

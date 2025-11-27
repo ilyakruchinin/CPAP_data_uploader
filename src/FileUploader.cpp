@@ -369,14 +369,11 @@ bool FileUploader::startUploadSession(fs::FS &sd) {
     unsigned long sessionDuration = config->getSessionDurationSeconds();
     
     // Check if we need to apply retry multiplier
-    String currentRetryFolder = stateManager->getCurrentRetryCount() > 0 ? 
-        "" : "";  // Will be set when processing folders
     int retryCount = stateManager->getCurrentRetryCount();
-    int maxRetries = config->getMaxRetryAttempts();
     
-    // If retry count exceeds max attempts, apply multiplier
-    if (retryCount > maxRetries) {
-        int multiplier = retryCount;
+    // Apply multiplier for any retry attempt to increase budget
+    if (retryCount > 0) {
+        int multiplier = retryCount + 1;  // +1 so first retry gets 2x budget
         LOGF("[FileUploader] Applying retry multiplier: %dx (retry count: %d)", multiplier, retryCount);
         budgetManager->startSession(sessionDuration, multiplier);
     } else {
@@ -560,12 +557,15 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
             return false;  // Stop processing this folder
         }
         
-        // Record upload for transmission rate calculation
+        // Record upload for transmission rate calculation (skip small files < 5KB)
         unsigned long uploadTime = millis() - uploadStartTime;
-        budgetManager->recordUpload(bytesTransferred, uploadTime);
+        if (bytesTransferred >= 5120) {  // 5KB minimum for rate calculation
+            budgetManager->recordUpload(bytesTransferred, uploadTime);
+        }
         
         uploadedCount++;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), bytesTransferred);
+        LOGF("[FileUploader] Budget remaining: %lu ms", budgetManager->getRemainingBudgetMs());
     }
     
     // All files uploaded successfully
@@ -690,9 +690,11 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
         return false;
     }
     
-    // Record upload for transmission rate calculation
+    // Record upload for transmission rate calculation (skip small files < 5KB)
     unsigned long uploadTime = millis() - uploadStartTime;
-    budgetManager->recordUpload(bytesTransferred, uploadTime);
+    if (bytesTransferred >= 5120) {  // 5KB minimum for rate calculation
+        budgetManager->recordUpload(bytesTransferred, uploadTime);
+    }
     
     // Calculate and store new checksum
     // The hasFileChanged method already calculated it, but we need to mark it as uploaded

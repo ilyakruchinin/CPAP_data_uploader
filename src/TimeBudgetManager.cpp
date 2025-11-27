@@ -80,6 +80,10 @@ bool TimeBudgetManager::canUploadFile(unsigned long fileSize) {
     unsigned long estimatedTime = estimateUploadTimeMs(fileSize);
     unsigned long remainingBudget = getRemainingBudgetMs();
     
+    // Log estimation details for debugging
+    Serial.printf("[Budget] File size: %lu bytes, Estimated time: %lu ms, Remaining: %lu ms, Rate: %lu B/s\n",
+                  fileSize, estimatedTime, remainingBudget, transmissionRateBytesPerSec);
+    
     return estimatedTime <= remainingBudget;
 }
 
@@ -135,9 +139,18 @@ unsigned long TimeBudgetManager::calculateAverageRate() {
 }
 
 /**
- * Get wait time before next session (2x session duration)
+ * Get current transmission rate
+ * @return Current transmission rate in bytes per second
+ */
+unsigned long TimeBudgetManager::getTransmissionRate() {
+    return transmissionRateBytesPerSec;
+}
+
+/**
+ * Get wait time before next session (5 minutes for retry attempts)
  * @return Wait time in milliseconds
  */
 unsigned long TimeBudgetManager::getWaitTimeMs() {
-    return sessionDurationMs * 2;
+    // Wait 5 minutes between retry attempts to give CPAP machine priority
+    return 5 * 60 * 1000;  // 5 minutes in milliseconds
 }

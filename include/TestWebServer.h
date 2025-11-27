@@ -42,6 +42,9 @@ public:
     
     bool begin();
     void handleClient();
+    
+    // Update manager references (needed after uploader recreation)
+    void updateManagers(UploadStateManager* state, TimeBudgetManager* budget, ScheduleManager* schedule);
 };
 
 #endif // TEST_WEB_SERVER_H

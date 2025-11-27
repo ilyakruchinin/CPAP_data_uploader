@@ -95,16 +95,36 @@ void TestWebServer::handleRoot() {
     if (scheduleManager) {
         unsigned long secondsUntilNext = scheduleManager->getSecondsUntilNextUpload();
         html += "<div class='info'><span class='label'>Next Upload In:</span><span class='value'>";
-        html += String(secondsUntilNext / 3600) + " hours, ";
-        html += String((secondsUntilNext % 3600) / 60) + " minutes</span></div>";
+        if (secondsUntilNext == 0) {
+            html += "Upload window active";
+        } else {
+            html += String(secondsUntilNext / 3600) + " hours, ";
+            html += String((secondsUntilNext % 3600) / 60) + " minutes";
+        }
+        html += "</span></div>";
         html += "<div class='info'><span class='label'>Upload Time Synced:</span><span class='value'>";
         html += scheduleManager->isTimeSynced() ? "Yes" : "No";
         html += "</span></div>";
+    } else {
+        html += "<div class='info'><span class='label'>Status:</span><span class='value'>Initializing...</span></div>";
     }
     
     if (budgetManager) {
+        unsigned long remainingBudget = budgetManager->getRemainingBudgetMs();
         html += "<div class='info'><span class='label'>Time Budget Remaining:</span><span class='value'>";
-        html += String(budgetManager->getRemainingBudgetMs()) + " ms</span></div>";
+        if (remainingBudget == 0) {
+            html += "No active session";
+        } else {
+            html += String(remainingBudget) + " ms";
+        }
+        html += "</span></div>";
+        
+        unsigned long rate = budgetManager->getTransmissionRate();
+        float rateKB = rate / 1024.0;
+        html += "<div class='info'><span class='label'>Transfer Rate:</span><span class='value'>";
+        html += String(rateKB, 1) + " KB/s (" + String(rate) + " B/s)</span></div>";
+    } else {
+        html += "<div class='info'><span class='label'>Budget:</span><span class='value'>Not initialized</span></div>";
     }
     
     html += "<div class='info'><span class='label'>Pending Files:</span><span class='value'>";
@@ -167,6 +187,7 @@ void TestWebServer::handleStatus() {
     
     if (budgetManager) {
         json += "\"budget_remaining_ms\":" + String(budgetManager->getRemainingBudgetMs()) + ",";
+        json += "\"transfer_rate_bytes_per_sec\":" + String(budgetManager->getTransmissionRate()) + ",";
     }
     
     json += "\"pending_files\":" + String(getPendingFilesCount());
@@ -294,6 +315,13 @@ void TestWebServer::handleLogs() {
     json += "}";
     
     server->send(200, "application/json", json);
+}
+
+// Update manager references (needed after uploader recreation)
+void TestWebServer::updateManagers(UploadStateManager* state, TimeBudgetManager* budget, ScheduleManager* schedule) {
+    stateManager = state;
+    budgetManager = budget;
+    scheduleManager = schedule;
 }
 
 // Helper: Escape special characters for JSON string

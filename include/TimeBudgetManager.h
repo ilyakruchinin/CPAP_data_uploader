@@ -15,8 +15,8 @@ private:
     unsigned long sessionDurationMs;
     unsigned long transmissionRateBytesPerSec;
     
-    // Default transmission rate: 500 KB/s
-    static const unsigned long DEFAULT_RATE = 500 * 1024;
+    // Default transmission rate: 40 KB/s (conservative estimate for SMB over WiFi)
+    static const unsigned long DEFAULT_RATE = 40 * 1024;
     
     // Running average for transmission rate
     static const int RATE_HISTORY_SIZE = 5;
@@ -44,6 +44,7 @@ public:
     
     // Transmission rate tracking
     void recordUpload(unsigned long fileSize, unsigned long elapsedMs);
+    unsigned long getTransmissionRate();  // Get current rate in bytes/sec
     
     // Wait time calculation
     unsigned long getWaitTimeMs();

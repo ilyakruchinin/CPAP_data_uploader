@@ -28,6 +28,9 @@ unsigned long lastNtpSyncAttempt = 0;
 const unsigned long NTP_RETRY_INTERVAL_MS = 5 * 60 * 1000;  // 5 minutes
 unsigned long nextUploadRetryTime = 0;
 bool budgetExhaustedRetry = false;  // True if waiting due to budget exhaustion
+unsigned long lastWifiReconnectAttempt = 0;
+unsigned long lastUploadCheck = 0;
+unsigned long lastSdCardRetry = 0;
 
 #ifdef ENABLE_TEST_WEBSERVER
 // External trigger flags (defined in TestWebServer.cpp)
@@ -115,10 +118,11 @@ void setup() {
     // Initialize test web server for on-demand testing
     LOG("Initializing test web server...");
     
-    // We need to get references to the internal components from FileUploader
-    // For now, we'll create a new TestWebServer without these references
-    // In a production implementation, FileUploader would expose these via getters
-    testWebServer = new TestWebServer(&config, nullptr, nullptr, nullptr);
+    // Create test web server with references to uploader's internal components
+    testWebServer = new TestWebServer(&config, 
+                                      uploader->getStateManager(),
+                                      uploader->getBudgetManager(),
+                                      uploader->getScheduleManager());
     
     if (testWebServer->begin()) {
         LOG("Test web server started successfully");
@@ -163,6 +167,14 @@ void loop() {
                 uploader = new FileUploader(&config, &wifiManager);
                 if (uploader->begin(sdManager.getFS())) {
                     LOG("Uploader reinitialized with fresh state");
+                    
+                    // Update TestWebServer with new manager references
+                    if (testWebServer) {
+                        testWebServer->updateManagers(uploader->getStateManager(),
+                                                     uploader->getBudgetManager(),
+                                                     uploader->getScheduleManager());
+                        LOG("TestWebServer manager references updated");
+                    }
                 } else {
                     LOG("ERROR: Failed to reinitialize uploader");
                 }
@@ -208,19 +220,24 @@ void loop() {
     }
 #endif
     
-    // Check WiFi connection
+    // Check WiFi connection (non-blocking with 30 second retry interval)
     if (!wifiManager.isConnected()) {
-        LOG("WARNING: WiFi disconnected, attempting to reconnect...");
-        if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
-            LOG("ERROR: Failed to reconnect to WiFi");
-            LOG("Will retry in 30 seconds...");
-            delay(30000);
-            return;
+        unsigned long currentTime = millis();
+        if (currentTime - lastWifiReconnectAttempt >= 30000) {
+            LOG("WARNING: WiFi disconnected, attempting to reconnect...");
+            if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
+                LOG("ERROR: Failed to reconnect to WiFi");
+                LOG("Will retry in 30 seconds...");
+                lastWifiReconnectAttempt = currentTime;
+                return;
+            }
+            LOG("WiFi reconnected successfully");
+            
+            // Reset NTP sync attempt timer to trigger immediate sync after reconnection
+            lastNtpSyncAttempt = 0;
+            lastWifiReconnectAttempt = 0;
         }
-        LOG("WiFi reconnected successfully");
-        
-        // Reset NTP sync attempt timer to trigger immediate sync after reconnection
-        lastNtpSyncAttempt = 0;
+        return;  // Skip rest of loop while WiFi is down
     }
 
     // Handle NTP sync retry if time is not synchronized
@@ -235,12 +252,11 @@ void loop() {
         }
     }
 
-    // Check if we're waiting due to budget exhaustion
+    // Check if we're waiting due to budget exhaustion (non-blocking)
     if (budgetExhaustedRetry) {
         // Wait for the appropriate time before retrying
         if (millis() < nextUploadRetryTime) {
-            delay(1000);  // Check every second during wait period
-            return;
+            return;  // Non-blocking wait
         }
         // Wait period over, clear the flag and continue
         budgetExhaustedRetry = false;
@@ -248,21 +264,31 @@ void loop() {
     }
 
     // Check if it's time to upload (scheduled window - once per day)
+    // Use non-blocking check every 60 seconds
+    unsigned long currentTime = millis();
+    if (currentTime - lastUploadCheck < 60000) {
+        return;  // Don't check too frequently
+    }
+    lastUploadCheck = currentTime;
+    
     if (!uploader || !uploader->shouldUpload()) {
-        // Not upload time yet, wait before checking again
-        delay(60000);  // Check every minute when not in upload window
+        // Not upload time yet
         return;
     }
 
     LOG("=== Upload Window Active ===");
     LOG("Attempting to start upload session...");
 
-    // Try to take control of SD card for upload session
+    // Try to take control of SD card for upload session (non-blocking retry)
     if (!sdManager.takeControl()) {
-        LOG("CPAP machine is using SD card, will retry in 5 seconds...");
-        delay(5000);  // Wait 5 seconds before retrying
+        unsigned long now = millis();
+        if (now - lastSdCardRetry >= 5000) {
+            LOG("CPAP machine is using SD card, will retry in 5 seconds...");
+            lastSdCardRetry = now;
+        }
         return;
     }
+    lastSdCardRetry = 0;  // Reset retry timer on success
 
     LOG("SD card control acquired, starting upload session...");
 
