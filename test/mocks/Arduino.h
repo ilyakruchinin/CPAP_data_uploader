@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstring>
 #include <cstdio>
+#include <cstdarg>
 #include <cmath>
 #include "MockTime.h"
 #include "MockFS.h"
@@ -118,6 +119,15 @@ public:
     size_t println() {
         printf("\n");
         return 1;
+    }
+    
+    // Variable argument printf for formatted output
+    size_t printf(const char* format, ...) {
+        va_list args;
+        va_start(args, format);
+        int result = vprintf(format, args);
+        va_end(args);
+        return result > 0 ? result : 0;
     }
     
     void flush() {

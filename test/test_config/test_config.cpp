@@ -6,6 +6,10 @@
 // Include mock implementations
 #include "../mocks/Arduino.cpp"
 
+// Mock Logger before including Config
+#include "../mocks/MockLogger.h"
+#define LOGGER_H  // Prevent real Logger.h from being included
+
 // Include the Config implementation
 #include "Config.h"
 #include "../../src/Config.cpp"

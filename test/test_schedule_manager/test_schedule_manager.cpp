@@ -73,6 +73,14 @@ time_t mktime(struct tm* timeptr) {
     return utcTime - mockGmtOffset - mockDaylightOffset;
 }
 
+// Mock Logger before including ScheduleManager
+#include "../mocks/MockLogger.h"
+#define LOGGER_H  // Prevent real Logger.h from being included
+
+// Mock ESP32Ping before including ScheduleManager
+#include "../mocks/ESP32Ping.h"
+#include "../mocks/ESP32Ping.cpp"
+
 // Include the ScheduleManager implementation
 #include "ScheduleManager.h"
 #include "../../src/ScheduleManager.cpp"

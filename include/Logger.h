@@ -2,8 +2,14 @@
 #define LOGGER_H
 
 #include <Arduino.h>
+
+#ifndef UNIT_TEST
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#else
+// Mock FreeRTOS types for native testing
+typedef void* SemaphoreHandle_t;
+#endif
 
 // Compile-time configuration for circular buffer size
 #ifndef LOG_BUFFER_SIZE

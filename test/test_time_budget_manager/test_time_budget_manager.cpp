@@ -97,21 +97,21 @@ void test_has_budget() {
 void test_upload_time_estimation_default_rate() {
     TimeBudgetManager manager;
     
-    // Default rate is 500 KB/s = 512000 bytes/s
-    unsigned long defaultRate = 500 * 1024;
+    // Default rate is 40 KB/s = 40960 bytes/s
+    unsigned long defaultRate = 40 * 1024;
     
-    // Test 500 KB file (should take exactly 1 second at 500 KB/s)
-    unsigned long fileSize1 = 500 * 1024;
+    // Test 40 KB file (should take exactly 1 second at 40 KB/s)
+    unsigned long fileSize1 = 40 * 1024;
     unsigned long estimatedTime1 = manager.estimateUploadTimeMs(fileSize1);
     TEST_ASSERT_EQUAL(1000, estimatedTime1);
     
-    // Test 250 KB file (should take exactly 0.5 seconds)
-    unsigned long fileSize2 = 250 * 1024;
+    // Test 20 KB file (should take exactly 0.5 seconds)
+    unsigned long fileSize2 = 20 * 1024;
     unsigned long estimatedTime2 = manager.estimateUploadTimeMs(fileSize2);
     TEST_ASSERT_EQUAL(500, estimatedTime2);
     
-    // Test 1000 KB file (should take exactly 2 seconds)
-    unsigned long fileSize3 = 1000 * 1024;
+    // Test 80 KB file (should take exactly 2 seconds)
+    unsigned long fileSize3 = 80 * 1024;
     unsigned long estimatedTime3 = manager.estimateUploadTimeMs(fileSize3);
     TEST_ASSERT_EQUAL(2000, estimatedTime3);
 }
@@ -119,20 +119,20 @@ void test_upload_time_estimation_default_rate() {
 void test_upload_time_estimation_various_sizes() {
     TimeBudgetManager manager;
     
-    // Test small file (10 KB)
-    unsigned long smallFile = 10 * 1024;
+    // Test small file (1 KB) - at 40 KB/s should be ~25ms
+    unsigned long smallFile = 1 * 1024;
     unsigned long estimatedSmall = manager.estimateUploadTimeMs(smallFile);
     TEST_ASSERT_GREATER_THAN(0, estimatedSmall);
     TEST_ASSERT_LESS_THAN(100, estimatedSmall);  // Should be < 100ms
     
-    // Test medium file (500 KB)
-    unsigned long mediumFile = 500 * 1024;
+    // Test medium file (40 KB) - at 40 KB/s should be ~1000ms
+    unsigned long mediumFile = 40 * 1024;
     unsigned long estimatedMedium = manager.estimateUploadTimeMs(mediumFile);
     TEST_ASSERT_GREATER_THAN(900, estimatedMedium);
     TEST_ASSERT_LESS_THAN(1100, estimatedMedium);  // Should be ~1000ms
     
-    // Test large file (5 MB)
-    unsigned long largeFile = 5 * 1024 * 1024;
+    // Test large file (400 KB) - at 40 KB/s should be ~10000ms
+    unsigned long largeFile = 400 * 1024;
     unsigned long estimatedLarge = manager.estimateUploadTimeMs(largeFile);
     TEST_ASSERT_GREATER_THAN(9000, estimatedLarge);
     TEST_ASSERT_LESS_THAN(11000, estimatedLarge);  // Should be ~10000ms
@@ -144,23 +144,23 @@ void test_can_upload_file() {
     MockTimeState::setMillis(0);
     manager.startSession(5);  // 5 seconds = 5000ms
     
-    // Small file that fits in budget (256 KB, ~500ms)
-    TEST_ASSERT_TRUE(manager.canUploadFile(256 * 1024));
+    // Small file that fits in budget (10 KB, ~250ms at 40 KB/s)
+    TEST_ASSERT_TRUE(manager.canUploadFile(10 * 1024));
     
-    // Medium file that fits in budget (2 MB, ~4000ms)
-    TEST_ASSERT_TRUE(manager.canUploadFile(2 * 1024 * 1024));
+    // Medium file that fits in budget (160 KB, ~4000ms at 40 KB/s)
+    TEST_ASSERT_TRUE(manager.canUploadFile(160 * 1024));
     
-    // Large file that doesn't fit (10 MB, ~20000ms)
-    TEST_ASSERT_FALSE(manager.canUploadFile(10 * 1024 * 1024));
+    // Large file that doesn't fit (800 KB, ~20000ms at 40 KB/s)
+    TEST_ASSERT_FALSE(manager.canUploadFile(800 * 1024));
     
     // Advance time and check again
     MockTimeState::advanceMillis(3000);  // 2 seconds remaining
     
     // Small file still fits
-    TEST_ASSERT_TRUE(manager.canUploadFile(256 * 1024));
+    TEST_ASSERT_TRUE(manager.canUploadFile(10 * 1024));
     
     // Medium file no longer fits
-    TEST_ASSERT_FALSE(manager.canUploadFile(2 * 1024 * 1024));
+    TEST_ASSERT_FALSE(manager.canUploadFile(160 * 1024));
 }
 
 // Test transmission rate averaging over multiple uploads
@@ -264,11 +264,11 @@ void test_record_upload_zero_time() {
     // Record upload with zero elapsed time (should be ignored)
     manager.recordUpload(512 * 1024, 0);
     
-    // Should still use default rate (500 KB/s = 512000 bytes/s)
-    // 500 KB file should take 1000ms at default rate
-    unsigned long fileSize = 500 * 1024;
+    // Should still use default rate (40 KB/s = 40960 bytes/s)
+    // 40 KB file should take 1000ms at default rate
+    unsigned long fileSize = 40 * 1024;
     unsigned long estimatedTime = manager.estimateUploadTimeMs(fileSize);
-    TEST_ASSERT_EQUAL(1000, estimatedTime);  // Default 500 KB/s
+    TEST_ASSERT_EQUAL(1000, estimatedTime);  // Default 40 KB/s
 }
 
 // Test retry multiplier application
@@ -327,45 +327,43 @@ void test_retry_multiplier_with_time_progression() {
     TEST_ASSERT_FALSE(manager.hasBudget());
 }
 
-// Test wait time calculation (2x session duration)
+// Test wait time calculation (fixed 5 minutes)
 void test_wait_time_calculation() {
     TimeBudgetManager manager;
     
     MockTimeState::setMillis(0);
     manager.startSession(5);  // 5 seconds
     
-    // Wait time should be 2x session duration = 10 seconds = 10000ms
-    TEST_ASSERT_EQUAL(10000, manager.getWaitTimeMs());
+    // Wait time is fixed at 5 minutes = 300000ms
+    TEST_ASSERT_EQUAL(300000, manager.getWaitTimeMs());
 }
 
 void test_wait_time_various_durations() {
     TimeBudgetManager manager;
     
-    // Test 10 second session -> 20 second wait
+    // Wait time is always 5 minutes regardless of session duration
     MockTimeState::setMillis(0);
     manager.startSession(10);
-    TEST_ASSERT_EQUAL(20000, manager.getWaitTimeMs());
+    TEST_ASSERT_EQUAL(300000, manager.getWaitTimeMs());
     
-    // Test 30 second session -> 60 second wait
     MockTimeState::setMillis(1000);
     manager.startSession(30);
-    TEST_ASSERT_EQUAL(60000, manager.getWaitTimeMs());
+    TEST_ASSERT_EQUAL(300000, manager.getWaitTimeMs());
     
-    // Test 1 second session -> 2 second wait
     MockTimeState::setMillis(2000);
     manager.startSession(1);
-    TEST_ASSERT_EQUAL(2000, manager.getWaitTimeMs());
+    TEST_ASSERT_EQUAL(300000, manager.getWaitTimeMs());
 }
 
 void test_wait_time_with_retry_multiplier() {
     TimeBudgetManager manager;
     
-    // Session with retry multiplier
+    // Wait time is fixed at 5 minutes even with retry multiplier
     MockTimeState::setMillis(0);
     manager.startSession(5, 3);  // 5 seconds * 3 = 15 seconds
     
-    // Wait time should be 2x the multiplied duration = 30 seconds
-    TEST_ASSERT_EQUAL(30000, manager.getWaitTimeMs());
+    // Wait time is still 5 minutes = 300000ms
+    TEST_ASSERT_EQUAL(300000, manager.getWaitTimeMs());
 }
 
 int main(int argc, char **argv) {
