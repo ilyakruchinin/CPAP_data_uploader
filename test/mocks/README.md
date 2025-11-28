@@ -6,17 +6,26 @@ This directory contains mock implementations of hardware-dependent components fo
 
 ### ArduinoJson.h
 Mock implementation of the ArduinoJson library for JSON parsing:
-- `StaticJsonDocument<SIZE>` class: Mock JSON document container
-- `DeserializationError` class: Mock error handling
+- `StaticJsonDocument<SIZE>` class: Mock JSON document container with fixed capacity
+- `DynamicJsonDocument` class: Mock JSON document with dynamic capacity
+- `DeserializationError` class: Mock error handling with error codes
+- `JsonObject` class: Mock JSON object with iterator support
+- `JsonArray` class: Mock JSON array with iterator support
+- `JsonPair` class: Mock key-value pair for object iteration
+- `JsonVariant` class: Mock variant type supporting multiple value types
 - `deserializeJson()` function: Parses JSON from files
-- Supports string, int, and long value types
+- `serializeJson()` function: Writes JSON to files
+- Supports string, int, long, and unsigned long value types
 - Implements pipe operator (`|`) for default values
 
 Key features:
 - Parse JSON from MockFile objects
-- Access values with `doc["key"]` syntax
+- Access values with `doc["key"]` syntax or `doc.getObject("key")` / `doc.getArray("key")`
 - Provide default values with `doc["key"] | defaultValue`
-- Handles nested objects (basic support)
+- Handles nested objects and arrays
+- Supports iteration over objects with `for (auto it = obj.begin(); it != obj.end(); ++it)`
+- Supports iteration over arrays with range-based for loops
+- Compatible with both test code and conditional compilation patterns
 
 ### Arduino.h
 Mock implementation of Arduino core functions and types:
@@ -48,6 +57,28 @@ Mock time functions for deterministic testing:
 - `setTime(t)`: Set current time in seconds since epoch
 - `advanceTime(seconds)`: Advance time by seconds
 - `reset()`: Reset all time values to zero
+
+### MockLogger.h
+Mock logging system for native testing:
+- `Logger` class: Singleton logger that outputs to stdout
+- `log(message)`: Log a message
+- `logf(format, ...)`: Log a formatted message (printf-style)
+- `retrieveLogs()`: Returns empty LogData (no buffering in mock)
+- Convenience macros: `LOG()`, `LOGF()`, `LOG_INFO()`, etc.
+
+Key features:
+- Outputs directly to stdout for test visibility
+- Compatible with real Logger API
+- No circular buffer (not needed for tests)
+- Thread-safe (single-threaded test environment)
+
+**Important:** When including source files that use Logger in tests, prevent duplicate Logger definitions:
+
+```cpp
+#include "MockLogger.h"
+#define LOGGER_H  // Prevent real Logger.h from being included
+#include "../../src/YourComponent.cpp"
+```
 
 ### FS.h
 Wrapper that includes MockFS.h when UNIT_TEST is defined.
@@ -153,6 +184,50 @@ void test_json_parsing() {
     TEST_ASSERT_EQUAL(14, hour);
     TEST_ASSERT_EQUAL(-28800, offset);
 }
+
+void test_json_nested_objects() {
+    fs::FS mockSD;
+    
+    // Create JSON with nested objects and arrays
+    std::string jsonContent = R"({
+        "version": 1,
+        "file_checksums": {
+            "/file1.txt": "abc123",
+            "/file2.txt": "def456"
+        },
+        "completed_folders": ["20241101", "20241102"]
+    })";
+    mockSD.addFile("/state.json", jsonContent);
+    
+    // Parse and access nested data
+    fs::File file = mockSD.open("/state.json", "r");
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    TEST_ASSERT_FALSE(error);
+    
+    // Access nested object using getObject()
+    JsonObject checksums = doc.getObject("file_checksums");
+    TEST_ASSERT_FALSE(checksums.isNull());
+    
+    // Iterate over object
+    for (auto it = checksums.begin(); it != checksums.end(); ++it) {
+        String key = String(it->first.c_str());
+        String value = String(it->second.as<const char*>());
+        // Process key-value pairs
+    }
+    
+    // Access array using getArray()
+    JsonArray folders = doc.getArray("completed_folders");
+    TEST_ASSERT_FALSE(folders.isNull());
+    
+    // Iterate over array
+    for (JsonVariant v : folders) {
+        String folder = String(v.as<const char*>());
+        // Process array items
+    }
+}
 ```
 
 ## Conditional Compilation
@@ -163,11 +238,42 @@ In production code:
 - Real Arduino.h is used
 - Real FS.h from ESP32 SDK is used
 - Real time functions from ESP32 SDK are used
+- Real ArduinoJson library is used
 
 In test code:
 - Mock implementations are used
 - Tests run on native platform (not ESP32)
 - Deterministic behavior for reliable testing
+
+### Handling API Differences
+
+Some components have API differences between the real implementation and the mock. Use conditional compilation to handle these:
+
+```cpp
+#ifdef UNIT_TEST
+    // Mock ArduinoJson uses getObject() and getArray()
+    JsonObject obj = doc.getObject("key");
+    JsonArray arr = doc.getArray("key");
+    
+    // Mock uses std::map::iterator
+    for (auto it = obj.begin(); it != obj.end(); ++it) {
+        String key = String(it->first.c_str());
+        String value = String(it->second.as<const char*>());
+    }
+#else
+    // Real ArduinoJson v6 uses operator[] with implicit conversion
+    JsonObject obj = doc["key"];
+    JsonArray arr = doc["key"];
+    
+    // Real uses JsonPair
+    for (JsonPair kv : obj) {
+        String key = String(kv.key().c_str());
+        String value = String(kv.value().as<const char*>());
+    }
+#endif
+```
+
+This pattern allows the same source file to work in both test and production environments.
 
 ## Adding New Mocks
 

@@ -1,0 +1,433 @@
+# Development Guide
+
+This document is for developers who want to build, modify, or contribute to the ESP32 CPAP Data Uploader project.
+
+## Table of Contents
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Development Setup](#development-setup)
+- [Building](#building)
+- [Testing](#testing)
+- [Release Process](#release-process)
+- [Contributing](#contributing)
+
+---
+
+## Architecture
+
+### Core Components
+
+- **Config** - Manages configuration from SD card (`config.json`)
+- **SDCardManager** - Handles SD card sharing with CPAP machine
+- **WiFiManager** - Manages WiFi station mode connection
+- **FileUploader** - Orchestrates file upload to remote endpoints
+
+### Upload Management
+
+- **UploadStateManager** - Tracks which files/folders have been uploaded using checksums
+- **TimeBudgetManager** - Enforces time limits on SD card access (respects CPAP priority)
+- **ScheduleManager** - Manages daily upload scheduling with NTP time synchronization
+
+### Upload Backends
+
+- **SMBUploader** - Uploads files to SMB/CIFS shares (Windows, NAS, Samba)
+- **WebDAVUploader** - Uploads to WebDAV servers (TODO: placeholder)
+- **SleepHQUploader** - Direct upload to SleepHQ service (TODO: placeholder)
+
+### Supporting Components
+
+- **Logger** - Circular buffer logging system with web API access
+- **TestWebServer** - Optional web server for development/testing
+
+### Design Principles
+
+1. **Dependency Injection** - Components receive dependencies via constructor
+2. **Single Responsibility** - Each class has one clear purpose
+3. **Testability** - Core logic is unit tested
+4. **Feature Flags** - Backends are conditionally compiled
+5. **Resource Management** - Careful memory and flash usage
+
+---
+
+## Project Structure
+
+```
+├── src/                      # Main application code
+│   ├── main.cpp             # Application entry point
+│   ├── Config.cpp           # Configuration management
+│   ├── SDCardManager.cpp    # SD card control
+│   ├── WiFiManager.cpp      # WiFi connection handling
+│   ├── FileUploader.cpp     # File upload orchestration
+│   ├── UploadStateManager.cpp # Upload state tracking
+│   ├── TimeBudgetManager.cpp  # Time budget enforcement
+│   ├── ScheduleManager.cpp    # Upload scheduling
+│   ├── SMBUploader.cpp        # SMB upload implementation
+│   ├── TestWebServer.cpp      # Test web server (optional)
+│   ├── Logger.cpp             # Circular buffer logging
+│   ├── WebDAVUploader.cpp     # WebDAV upload (placeholder)
+│   └── SleepHQUploader.cpp    # SleepHQ upload (placeholder)
+├── include/                  # Header files
+│   ├── pins_config.h        # Pin definitions for SD WIFI PRO
+│   └── *.h                  # Component headers
+├── test/                     # Unit tests (72 tests, all passing)
+│   ├── test_time_budget_manager/
+│   ├── test_config/
+│   ├── test_webserver/
+│   ├── test_native/
+│   ├── test_schedule_manager/
+│   └── mocks/               # Mock implementations
+├── components/               # ESP-IDF components
+│   └── libsmb2/             # SMB2/3 client library (cloned)
+├── scripts/                  # Build and release scripts
+│   ├── setup_libsmb2.sh     # Setup SMB library
+│   └── prepare_release.sh   # Create release packages
+├── release/                  # Release package files
+│   ├── upload.sh            # macOS/Linux upload script
+│   ├── upload.bat           # Windows upload script
+│   └── README.md            # End-user documentation
+├── docs/                     # Developer documentation
+├── setup.sh                 # Quick project setup
+├── build_upload.sh          # Quick build and upload
+├── monitor.sh               # Quick serial monitor
+└── platformio.ini           # PlatformIO configuration
+```
+
+---
+
+## Development Setup
+
+### Prerequisites
+
+- Python 3.7 or later
+- Git
+- USB drivers for ESP32 (CH340 or CP210x)
+
+### Quick Setup
+
+Run the automated setup script (caution this has only been tested on linux):
+
+```bash
+./setup.sh
+```
+
+This will:
+1. Create Python virtual environment
+2. Install PlatformIO
+3. Clone and configure libsmb2 component
+4. Install all dependencies
+
+### Manual Setup
+
+If you prefer manual setup:
+
+```bash
+# 1. Create Python venv
+python3 -m venv venv
+
+# 2. Install PlatformIO
+source venv/bin/activate
+pip install platformio
+
+# 3. Setup libsmb2 (if using SMB upload)
+./scripts/setup_libsmb2.sh
+
+# 4. Install dependencies
+pio pkg install
+```
+
+### IDE Setup
+
+The project works with:
+- **PlatformIO IDE** (VS Code extension) - Recommended
+- **Command line** - All features available via CLI
+
+---
+
+## Building
+
+### Quick Build & Upload
+
+```bash
+./build_upload.sh
+```
+
+### Manual Build
+
+```bash
+source venv/bin/activate
+pio run -e pico32              # Build only
+pio run -e pico32 -t upload    # Build and upload
+```
+
+### Build Targets
+
+```bash
+pio run -e pico32              # Build firmware
+pio run -e pico32 -t upload    # Upload to device
+pio run -e pico32 -t clean     # Clean build
+pio run -e pico32 -t size      # Show memory usage
+pio run -e pico32 -t erase     # Erase flash
+```
+
+### Build Configuration
+
+Edit `platformio.ini` to configure:
+
+**Feature Flags:**
+```ini
+build_flags = 
+    -DENABLE_SMB_UPLOAD          ; Enable SMB/CIFS upload
+    ; -DENABLE_WEBDAV_UPLOAD     ; Enable WebDAV (TODO)
+    ; -DENABLE_SLEEPHQ_UPLOAD    ; Enable SleepHQ (TODO)
+    -DENABLE_TEST_WEBSERVER      ; Enable test web server
+```
+
+**Logging:**
+```ini
+build_flags =
+    -DLOG_BUFFER_SIZE=32768      ; 32KB log buffer
+    -DCORE_DEBUG_LEVEL=3         ; Debug level (0-5)
+```
+
+### Memory Usage
+
+Current build (with SMB enabled):
+- **Flash:** 25.9% (1,058,372 / 4,096,000 bytes) - ESP32 has 4MB flash, app partition is 3MB
+- **RAM:** 10.5% (47,165 / 450,000 bytes estimated) - Static: 34KB, Dynamic buffers grow with usage
+
+**Dynamic Memory Analysis:** The `.upload_state.json` file grows with DATALOG folder count (~30 bytes per folder, ~100 bytes per file checksum), and the system now dynamically allocates DynamicJsonDocument buffers sized at 2x the file size for loading and 1.5x estimated size for saving, allowing it to handle thousands of folders limited only by available RAM (~340KB free, supporting ~10+ years of daily CPAP usage before memory exhaustion).
+
+---
+
+## Testing
+
+### Unit Tests
+
+Run all tests:
+```bash
+source venv/bin/activate
+pio test -e native
+```
+
+Run specific test suite:
+```bash
+pio test -e native -f test_config
+pio test -e native -f test_time_budget_manager
+pio test -e native -f test_schedule_manager
+```
+
+### Test Coverage
+
+- `test_time_budget_manager`: 18 tests - Time budget and rate calculation
+- `test_config`: 14 tests - Configuration parsing and validation
+- `test_webserver`: 9 tests - Web server endpoints
+- `test_native`: 9 tests - Mock infrastructure
+- `test_schedule_manager`: 22 tests - Scheduling and NTP
+
+### Hardware Testing
+
+See [Hardware Testing Checklist](#hardware-testing-checklist) below.
+
+---
+
+## Release Process
+
+### Creating a Release Package
+
+```bash
+./scripts/prepare_release.sh
+```
+
+This creates a timestamped zip file in `release/` containing:
+- `firmware.bin` - Precompiled firmware
+- `upload.sh` - macOS/Linux upload script
+- `upload.bat` - Windows upload script
+- `README.md` - End-user documentation
+
+### Windows Release
+
+For Windows releases, download `esptool.exe` from [espressif/esptool releases](https://github.com/espressif/esptool/releases) and place it in `release/` before running `prepare_release.sh`.
+
+### Version Tagging
+
+Use semantic versioning (MAJOR.MINOR.PATCH):
+
+```bash
+git tag -a v0.3.0 -m "Release v0.3.0: Description"
+git push origin v0.3.0
+```
+
+---
+
+## Hardware Testing Checklist
+
+### Prerequisites
+
+- [ ] SD WIFI PRO dev board connected with SD WIFI PRO inserted
+- [ ] `config.json` created on SD card
+- [ ] WiFi network available
+- [ ] SMB share accessible and writable
+- [ ] internet access (required for NTP server)
+
+### Test Procedure
+
+1. **Flash Firmware**
+   ```bash
+   ./build_upload.sh
+   ```
+
+2. **Monitor Serial Output**
+   ```bash
+   ./monitor.sh
+   ```
+
+3. **Verify Startup**
+   - [ ] Config loaded successfully
+   - [ ] WiFi connected
+   - [ ] NTP time synchronized
+   - [ ] SMB connection established
+
+4. **Test Upload**
+   - [ ] Files uploaded to SMB share
+   - [ ] `.upload_state.json` created on SD card
+   - [ ] No errors in serial output
+
+5. **Test Web Interface** (if enabled)
+   - [ ] Access `http://<device-ip>/`, you can get the device IP from the serial port after a reset.
+   - [ ] Trigger manual upload
+   - [ ] View logs
+   - [ ] Check status
+
+### Common Issues
+
+See [BUILD_TROUBLESHOOTING.md](BUILD_TROUBLESHOOTING.md) for detailed troubleshooting.
+
+---
+
+## Contributing
+
+### Code Style
+
+- Follow existing code style
+- Use meaningful variable names
+- Add comments for complex logic (comments are code too)
+
+### Adding Features
+
+1. Write tests first (TDD approach)
+2. Implement feature
+3. Update documentation
+4. Test on hardware
+
+### Adding Upload Backends
+
+To add a new backend (e.g., FTP):
+
+1. Create `include/FTPUploader.h` and `src/FTPUploader.cpp`
+2. Wrap with feature flag: `#ifdef ENABLE_FTP_UPLOAD`
+3. Add flag to `platformio.ini`
+4. Update `FileUploader` to instantiate new backend
+5. Add tests
+6. Document in `FEATURE_FLAGS.md`
+
+### Pull Request Process
+
+1. Fork the repository
+2. Create feature branch
+3. Make changes with tests
+4. Ensure all tests pass
+5. Update documentation
+6. Submit pull request
+
+---
+
+## Useful Commands
+
+```bash
+# Development
+./setup.sh                     # Initial setup
+./build_upload.sh              # Build and upload
+./monitor.sh                   # Serial monitor
+
+# PlatformIO
+pio run                        # Build
+pio run -t upload              # Upload
+pio run -t clean               # Clean
+pio test -e native             # Run tests
+pio device list                # List serial ports
+pio device monitor             # Serial monitor
+
+# Release
+./scripts/prepare_release.sh   # Create release package
+
+# Cleanup
+rm -rf venv/ components/libsmb2/ .pio/  # Clean for portability
+```
+
+---
+
+## Architecture Decisions
+
+### Why libsmb2?
+
+- Full SMB2/3 protocol support
+- Mature, well-tested library
+- Acceptable binary footprint (~220-270KB)
+- Active maintenance
+
+### Why Time Budgeting?
+
+CPAP machines need regular SD card access. Time budgeting ensures:
+- Short upload sessions, default 5 seconds, configurable.
+- CPAP machine gets priority
+- Uploads resume automatically
+
+### Why Circular Buffer Logging?
+
+- Fixed memory usage (configurable)
+- No SD card writes (reduces wear)
+- Thread-safe for dual-core ESP32
+
+### Why Feature Flags?
+
+- Minimize binary size
+- Enable only needed backends
+- Faster compilation
+- Cleaner code separation
+
+---
+
+## Performance Considerations
+
+### Flash Usage
+
+- Base firmware: ~800KB
+- SMB backend: +220-270KB
+- WebDAV backend: +50-80KB (estimated)
+- Total available: 3MB (huge_app partition)
+
+### RAM Usage
+
+- Static allocation: ~47KB
+- Log buffer: 32KB (configurable)
+- SMB buffers: ~32KB during upload
+- Total available: 320KB
+
+### Upload Performance
+
+- Default rate: 40 KB/s (conservative estimate)
+- Actual rate: Varies by network and share, during tests the transfer achieved 130KB/s
+- Rate tracking: Running average of last 5 uploads
+- Adaptive budgeting: Increases on repeated failures
+
+---
+
+## References
+
+- [BUILD_TROUBLESHOOTING.md](BUILD_TROUBLESHOOTING.md) - Build issues
+- [FEATURE_FLAGS.md](FEATURE_FLAGS.md) - Backend selection
+- [LIBSMB2_INTEGRATION.md](LIBSMB2_INTEGRATION.md) - SMB integration details
+- [PlatformIO Docs](https://docs.platformio.org/)
+- [ESP32 Arduino Core](https://github.com/espressif/arduino-esp32)
+- [libsmb2 GitHub](https://github.com/sahlberg/libsmb2)
+
