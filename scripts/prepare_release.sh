@@ -13,8 +13,31 @@ NC='\033[0m'
 RELEASE_DIR="release"
 BUILD_DIR=".pio/build/pico32"
 FIRMWARE_BIN="$BUILD_DIR/firmware.bin"
-VERSION=$(date +%Y%m%d-%H%M%S)
-RELEASE_NAME="esp32-firmware-$VERSION"
+
+# Get version from git tag (latest tag on current commit)
+GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
+if [ -z "$GIT_TAG" ]; then
+    # If no tag on current commit, use latest tag with commit count
+    GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+    if [ -z "$GIT_TAG" ]; then
+        # No tags at all, use date
+        VERSION=$(date +%Y%m%d-%H%M%S)
+        echo -e "${YELLOW}Warning: No git tags found. Using date-based version: $VERSION${NC}"
+    else
+        COMMIT_COUNT=$(git rev-list ${GIT_TAG}..HEAD --count)
+        if [ "$COMMIT_COUNT" -gt 0 ]; then
+            VERSION="${GIT_TAG}-dev+${COMMIT_COUNT}"
+            echo -e "${YELLOW}Warning: Current commit is not tagged. Using: $VERSION${NC}"
+        else
+            VERSION="$GIT_TAG"
+        fi
+    fi
+else
+    VERSION="$GIT_TAG"
+    echo -e "${GREEN}Using git tag version: $VERSION${NC}"
+fi
+
+RELEASE_NAME="cpap_uploader_${VERSION}"
 RELEASE_PACKAGE="$RELEASE_NAME.zip"
 ESPTOOL_WIN="$RELEASE_DIR/esptool.exe"
 
