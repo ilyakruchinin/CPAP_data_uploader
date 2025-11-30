@@ -2,6 +2,10 @@
 #include "Logger.h"
 #include <SD_MMC.h>
 
+#ifdef ENABLE_TEST_WEBSERVER
+#include "TestWebServer.h"
+#endif
+
 // Constructor
 FileUploader::FileUploader(Config* cfg, WiFiManager* wifi) 
     : config(cfg),
@@ -9,6 +13,9 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
       budgetManager(nullptr),
       scheduleManager(nullptr),
       wifiManager(wifi),
+#ifdef ENABLE_TEST_WEBSERVER
+      webServer(nullptr),
+#endif
       lastSdReleaseTime(0)
 #ifdef ENABLE_SMB_UPLOAD
       , smbUploader(nullptr)
@@ -158,10 +165,24 @@ bool FileUploader::checkAndReleaseSD(SDCardManager* sdManager) {
     // Release SD card
     sdManager->releaseControl();
     
-    // Wait configured time
+    // Wait configured time, handling web requests during the wait
     unsigned long waitMs = config->getSdReleaseWaitMs();
     LOG_DEBUGF("[FileUploader] Waiting %lu ms before retaking control...", waitMs);
+    
+#ifdef ENABLE_TEST_WEBSERVER
+    // Handle web requests during wait to keep interface responsive
+    if (webServer) {
+        unsigned long waitStart = millis();
+        while (millis() - waitStart < waitMs) {
+            webServer->handleClient();
+            delay(10);  // Small delay to prevent tight loop
+        }
+    } else {
+        delay(waitMs);
+    }
+#else
     delay(waitMs);
+#endif
     
     // Retake control
     LOG_DEBUG("[FileUploader] Attempting to retake SD card control...");
@@ -242,6 +263,13 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
             // Budget exhausted or error - stop processing
             break;
         }
+        
+#ifdef ENABLE_TEST_WEBSERVER
+        // Handle web requests between folder uploads
+        if (webServer) {
+            webServer->handleClient();
+        }
+#endif
     }
     
     // Phase 2: Process root and SETTINGS files (if budget remains)
@@ -266,6 +294,13 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
             if (uploadSingleFile(sdManager, filePath)) {
                 anyUploaded = true;
             }
+            
+#ifdef ENABLE_TEST_WEBSERVER
+            // Handle web requests between file uploads
+            if (webServer) {
+                webServer->handleClient();
+            }
+#endif
         }
     } else {
         LOG("[FileUploader] Skipping root/SETTINGS files - no budget remaining");

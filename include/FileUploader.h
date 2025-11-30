@@ -11,6 +11,11 @@
 #include "WiFiManager.h"
 #include "SDCardManager.h"
 
+// Forward declaration to avoid circular dependency
+#ifdef ENABLE_TEST_WEBSERVER
+class TestWebServer;
+#endif
+
 // Include uploader implementations based on feature flags
 #ifdef ENABLE_SMB_UPLOAD
 #include "SMBUploader.h"
@@ -31,6 +36,10 @@ private:
     TimeBudgetManager* budgetManager;
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
+    
+#ifdef ENABLE_TEST_WEBSERVER
+    TestWebServer* webServer;  // Optional web server for handling requests during uploads
+#endif
     
     // Periodic SD card release tracking
     unsigned long lastSdReleaseTime;
@@ -75,6 +84,11 @@ public:
     UploadStateManager* getStateManager() { return stateManager; }
     TimeBudgetManager* getBudgetManager() { return budgetManager; }
     ScheduleManager* getScheduleManager() { return scheduleManager; }
+    
+#ifdef ENABLE_TEST_WEBSERVER
+    // Set web server for handling requests during uploads
+    void setWebServer(TestWebServer* server) { webServer = server; }
+#endif
 };
 
 #endif // FILE_UPLOADER_H

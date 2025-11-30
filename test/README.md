@@ -5,6 +5,13 @@ This directory contains unit tests for the SD WIFI PRO auto uploader project.
 ## Structure
 
 - `test_native/` - Native unit tests that run on the host machine (not on ESP32)
+- `test_config/` - Configuration loading and credential management tests
+- `test_credential_migration/` - Secure credential migration tests
+- `test_schedule_manager/` - Upload scheduling and NTP sync tests
+- `test_time_budget_manager/` - Time budget and upload session management tests
+- `test_upload_state_manager/` - Upload state tracking and persistence tests
+- `test_webserver/` - Web server endpoint and request handling tests
+- `test_fileuploader_webserver/` - FileUploader web server integration tests
 - `mocks/` - Mock implementations of hardware-dependent components for testing
 
 ## Running Tests

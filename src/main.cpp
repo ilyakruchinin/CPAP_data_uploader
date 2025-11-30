@@ -137,6 +137,12 @@ void setup() {
     if (testWebServer->begin()) {
         LOG("Test web server started successfully");
         LOGF("Access web interface at: http://%s", wifiManager.getIPAddress().c_str());
+        
+        // Set web server reference in uploader for responsive handling during uploads
+        if (uploader) {
+            uploader->setWebServer(testWebServer);
+            LOG_DEBUG("Web server linked to uploader for responsive handling");
+        }
     } else {
         LOG("ERROR: Failed to start test web server");
     }
@@ -183,6 +189,7 @@ void loop() {
                         testWebServer->updateManagers(uploader->getStateManager(),
                                                      uploader->getBudgetManager(),
                                                      uploader->getScheduleManager());
+                        uploader->setWebServer(testWebServer);
                         LOG_DEBUG("TestWebServer manager references updated");
                     }
                 } else {

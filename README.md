@@ -138,6 +138,12 @@ The device respects your CPAP machine's need for SD card access by keeping uploa
 - ⏳ WebDAV (planned)
 - ⏳ SleepHQ direct upload (planned)
 
+## Future Improvements
+
+- Implement FreeRTOS tasks for true concurrent web server operation during uploads
+- Add WebDAV upload support
+- Add SleepHQ direct upload support
+
 ## Support & Documentation
 
 - **User Guide:** [release/README.md](release/README.md) - Setup and usage instructions
