@@ -1,5 +1,6 @@
 #include "Logger.h"
 #include <stdarg.h>
+#include <time.h>
 
 // Singleton instance getter
 Logger& Logger::getInstance() {
@@ -58,20 +59,43 @@ Logger::~Logger() {
     }
 }
 
+// Get current timestamp as string (HH:MM:SS format)
+String Logger::getTimestamp() {
+    time_t now = time(nullptr);
+    
+    // Check if time is synchronized (timestamp > Jan 1, 2000)
+    if (now < 946684800) {
+        return "[--:--:--] ";
+    }
+    
+    struct tm timeinfo;
+    if (!localtime_r(&now, &timeinfo)) {
+        return "[--:--:--] ";
+    }
+    
+    char buffer[16];
+    snprintf(buffer, sizeof(buffer), "[%02d:%02d:%02d] ", 
+             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    return String(buffer);
+}
+
 // Log a C-string message
 void Logger::log(const char* message) {
     if (message == nullptr) {
         return;
     }
 
-    size_t len = strlen(message);
+    // Prepend timestamp
+    String timestampedMsg = getTimestamp() + String(message);
+    const char* finalMsg = timestampedMsg.c_str();
+    size_t len = timestampedMsg.length();
     
     // Write to serial (outside critical section - Serial is thread-safe on ESP32)
-    writeToSerial(message, len);
+    writeToSerial(finalMsg, len);
     
     // Write to buffer if initialized
     if (initialized && buffer != nullptr) {
-        writeToBuffer(message, len);
+        writeToBuffer(finalMsg, len);
     }
 }
 

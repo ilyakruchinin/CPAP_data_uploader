@@ -28,6 +28,8 @@ public:
     bool isTimeSynced() const;
     unsigned long getLastUploadTimestamp() const;
     void setLastUploadTimestamp(unsigned long timestamp);
+    
+    String getCurrentLocalTime() const;
 };
 
 #endif // SCHEDULE_MANAGER_H

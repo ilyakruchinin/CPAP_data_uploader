@@ -4,6 +4,7 @@
 #include "WiFiManager.h"
 #include "FileUploader.h"
 #include "Logger.h"
+#include "pins_config.h"
 
 #ifdef ENABLE_TEST_WEBSERVER
 #include "TestWebServer.h"
@@ -48,6 +49,14 @@ extern volatile bool g_scanNowFlag;
 void setup() {
     // Initialize serial port
     Serial.begin(115200);
+    
+    // CRITICAL: Immediately release SD card control to CPAP machine
+    // This must happen before any delays to prevent CPAP machine errors
+    // Initialize control pins
+    pinMode(CS_SENSE, INPUT_PULLUP);
+    pinMode(SD_SWITCH_PIN, OUTPUT);
+    digitalWrite(SD_SWITCH_PIN, SD_SWITCH_CPAP_VALUE);
+    
     delay(1000);
     LOG("\n\n=== CPAP Data Auto-Uploader ===");
 
@@ -120,9 +129,13 @@ void setup() {
     // Trigger initial time sync check
     if (uploader->shouldUpload()) {
         LOG("Time synchronized successfully");
+        LOGF("System time: %s", uploader->getScheduleManager()->getCurrentLocalTime().c_str());
         LOG_DEBUG("Currently in upload window - will begin upload shortly");
     } else {
         LOG_DEBUG("Time sync status unknown or not in upload window");
+        if (uploader->getScheduleManager()->isTimeSynced()) {
+            LOGF("System time: %s", uploader->getScheduleManager()->getCurrentLocalTime().c_str());
+        }
         LOG_DEBUG("Will retry NTP sync every 5 minutes if needed");
         lastNtpSyncAttempt = millis();
     }

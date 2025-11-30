@@ -187,3 +187,22 @@ unsigned long ScheduleManager::getLastUploadTimestamp() const {
 void ScheduleManager::setLastUploadTimestamp(unsigned long timestamp) {
     lastUploadTimestamp = timestamp;
 }
+
+String ScheduleManager::getCurrentLocalTime() const {
+    if (!ntpSynced) {
+        return "Time not synchronized";
+    }
+    
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    if (!localtime_r(&now, &timeinfo)) {
+        return "Failed to get local time";
+    }
+    
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d (GMT%+d)",
+             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+             gmtOffsetHours);
+    
+    return String(buffer);
+}

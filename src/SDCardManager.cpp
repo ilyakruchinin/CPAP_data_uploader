@@ -15,12 +15,15 @@ bool SDCardManager::begin() {
     pinMode(SD_SWITCH_PIN, OUTPUT);
     pinMode(CS_SENSE, INPUT_PULLUP);
     
+    // Explicitly release control to CPAP machine on boot
+    // This ensures the CPAP machine has access to the SD card immediately
+    digitalWrite(SD_SWITCH_PIN, SD_SWITCH_CPAP_VALUE);
+    espHasControl = false;
+    
     #ifdef SD_POWER_PIN
     pinMode(SD_POWER_PIN, OUTPUT);
     digitalWrite(SD_POWER_PIN, HIGH);  // Power on SD card
     #endif
-
-    LOG("Initializing SD card...");
     return true;
 }
 

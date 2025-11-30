@@ -102,6 +102,12 @@ private:
     Logger& operator=(const Logger&) = delete;
 
     /**
+     * Get current timestamp as formatted string
+     * Returns [HH:MM:SS] format or [--:--:--] if time not synced
+     */
+    String getTimestamp();
+
+    /**
      * Write data to serial interface
      * Called outside critical section for optimal performance
      */
