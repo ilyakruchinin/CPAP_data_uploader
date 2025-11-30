@@ -7,6 +7,7 @@
 #include "UploadStateManager.h"
 #include "TimeBudgetManager.h"
 #include "ScheduleManager.h"
+#include "WiFiManager.h"
 
 // Global trigger flags for upload and state reset
 extern volatile bool g_triggerUploadFlag;
@@ -20,6 +21,7 @@ private:
     UploadStateManager* stateManager;
     TimeBudgetManager* budgetManager;
     ScheduleManager* scheduleManager;
+    WiFiManager* wifiManager;
     
     // Request handlers
     void handleRoot();
@@ -40,7 +42,7 @@ private:
 
 public:
     TestWebServer(Config* cfg, UploadStateManager* state, 
-                  TimeBudgetManager* budget, ScheduleManager* schedule);
+                  TimeBudgetManager* budget, ScheduleManager* schedule, WiFiManager* wifi = nullptr);
     ~TestWebServer();
     
     bool begin();
@@ -48,6 +50,7 @@ public:
     
     // Update manager references (needed after uploader recreation)
     void updateManagers(UploadStateManager* state, TimeBudgetManager* budget, ScheduleManager* schedule);
+    void setWiFiManager(WiFiManager* wifi);
 };
 
 #endif // TEST_WEB_SERVER_H

@@ -8,9 +8,8 @@ Automatically upload CPAP therapy data from your SD card to network storage. Tes
 - Respects CPAP machine access to SD card
 - Tracks uploaded files (no duplicates)
 - Scheduled uploads with timezone support
-- Responsive web interface for monitoring and testing
+- Web interface for monitoring and testing
 - Automatic retry mechanism with progress tracking
-- Structured logging with INFO/WARN/ERROR levels
 
 ## For End Users
 
@@ -67,8 +66,7 @@ Create `config.json` on your SD card:
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
   "UPLOAD_HOUR": 12,
-  "GMT_OFFSET_HOURS": -8,
-  "STORE_CREDENTIALS_PLAIN_TEXT": false
+  "GMT_OFFSET_HOURS": -8
 }
 ```
 

@@ -135,7 +135,8 @@ void setup() {
     testWebServer = new TestWebServer(&config, 
                                       uploader->getStateManager(),
                                       uploader->getBudgetManager(),
-                                      uploader->getScheduleManager());
+                                      uploader->getScheduleManager(),
+                                      &wifiManager);
     
     if (testWebServer->begin()) {
         LOG("Test web server started successfully");

@@ -14,6 +14,8 @@ public:
     bool isConnected() const;
     void disconnect();
     String getIPAddress() const;
+    int getSignalStrength() const;  // Returns RSSI in dBm
+    String getSignalQuality() const;  // Returns quality description
 };
 
 #endif // WIFI_MANAGER_H

@@ -44,3 +44,32 @@ String WiFiManager::getIPAddress() const {
     }
     return "Not connected";
 }
+
+int WiFiManager::getSignalStrength() const {
+    if (connected && WiFi.status() == WL_CONNECTED) {
+        return WiFi.RSSI();  // Returns signal strength in dBm
+    }
+    return 0;
+}
+
+String WiFiManager::getSignalQuality() const {
+    if (!connected || WiFi.status() != WL_CONNECTED) {
+        return "Not connected";
+    }
+    
+    int rssi = WiFi.RSSI();
+    
+    // Classify signal strength based on RSSI value
+    // RSSI ranges: Excellent > -50, Good > -60, Fair > -70, Weak > -80, Very Weak <= -80
+    if (rssi > -50) {
+        return "Excellent";
+    } else if (rssi > -60) {
+        return "Good";
+    } else if (rssi > -70) {
+        return "Fair";
+    } else if (rssi > -80) {
+        return "Weak";
+    } else {
+        return "Very Weak";
+    }
+}

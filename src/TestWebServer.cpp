@@ -13,12 +13,13 @@ extern bool budgetExhaustedRetry;
 
 // Constructor
 TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
-                             TimeBudgetManager* budget, ScheduleManager* schedule)
+                             TimeBudgetManager* budget, ScheduleManager* schedule, WiFiManager* wifi)
     : server(nullptr),
       config(cfg),
       stateManager(state),
       budgetManager(budget),
-      scheduleManager(schedule) {
+      scheduleManager(schedule),
+      wifiManager(wifi) {
 }
 
 // Destructor
@@ -96,6 +97,29 @@ void TestWebServer::handleRoot() {
     html += "<div class='info'><span class='label'>Uptime:</span><span class='value'>" + getUptimeString() + "</span></div>";
     html += "<div class='info'><span class='label'>Current Time:</span><span class='value'>" + getCurrentTimeString() + "</span></div>";
     html += "<div class='info'><span class='label'>Free Heap:</span><span class='value'>" + String(ESP.getFreeHeap()) + " bytes</span></div>";
+    
+    // WiFi information
+    if (wifiManager && wifiManager->isConnected()) {
+        int rssi = wifiManager->getSignalStrength();
+        String quality = wifiManager->getSignalQuality();
+        String qualityColor = "#0066cc";
+        
+        // Color code based on signal quality
+        if (quality == "Excellent") {
+            qualityColor = "#00cc00";
+        } else if (quality == "Good") {
+            qualityColor = "#66cc00";
+        } else if (quality == "Fair") {
+            qualityColor = "#cc9900";
+        } else if (quality == "Weak") {
+            qualityColor = "#cc6600";
+        } else if (quality == "Very Weak") {
+            qualityColor = "#cc0000";
+        }
+        
+        html += "<div class='info'><span class='label'>WiFi Signal:</span><span class='value' style='color:" + qualityColor + ";'>";
+        html += quality + " (" + String(rssi) + " dBm)</span></div>";
+    }
     
     // Upload status
     html += "<h2>Upload Status</h2>";
@@ -268,6 +292,15 @@ void TestWebServer::handleStatus() {
     json += "\"current_time\":\"" + getCurrentTimeString() + "\",";
     json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
     
+    // WiFi information
+    if (wifiManager && wifiManager->isConnected()) {
+        json += "\"wifi_connected\":true,";
+        json += "\"wifi_rssi\":" + String(wifiManager->getSignalStrength()) + ",";
+        json += "\"wifi_quality\":\"" + wifiManager->getSignalQuality() + "\",";
+    } else {
+        json += "\"wifi_connected\":false,";
+    }
+    
     if (scheduleManager) {
         json += "\"next_upload_seconds\":" + String(scheduleManager->getSecondsUntilNextUpload()) + ",";
         json += "\"time_synced\":" + String(scheduleManager->isTimeSynced() ? "true" : "false") + ",";
@@ -293,10 +326,10 @@ void TestWebServer::handleStatus() {
         if (!retryFolder.isEmpty()) {
             int retryCount = stateManager->getCurrentRetryCount();
             json += "\"current_retry_folder\":\"" + retryFolder + "\",";
-            json += "\"current_retry_count\":" + String(retryCount) + ",";
+            json += "\"current_retry_count\":" + String(retryCount);
         } else {
             json += "\"current_retry_folder\":null,";
-            json += "\"current_retry_count\":0,";
+            json += "\"current_retry_count\":0";
         }
     } else {
         json += "\"completed_folders\":0,";
@@ -304,7 +337,7 @@ void TestWebServer::handleStatus() {
         json += "\"total_folders\":0,";
         json += "\"upload_state_initialized\":false,";
         json += "\"current_retry_folder\":null,";
-        json += "\"current_retry_count\":0,";
+        json += "\"current_retry_count\":0";
     }
     
     if (config) {
@@ -500,6 +533,11 @@ void TestWebServer::updateManagers(UploadStateManager* state, TimeBudgetManager*
     stateManager = state;
     budgetManager = budget;
     scheduleManager = schedule;
+}
+
+// Set WiFi manager reference
+void TestWebServer::setWiFiManager(WiFiManager* wifi) {
+    wifiManager = wifi;
 }
 
 // Helper: Escape special characters for JSON string

@@ -256,6 +256,7 @@ The firmware includes an optional test web server for development and troublesho
 
 **Status Page** (`http://<device-ip>/`)
 - System uptime and current time
+- WiFi signal strength (color-coded)
 - Next scheduled upload time
 - Time budget remaining
 - Pending files count
@@ -466,5 +467,5 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x10000 fi
 For issues, questions, or contributions, visit the project repository.
 
 **Hardware:** ESP32-PICO-D4 (SD WIFI PRO)  
-**Firmware Version:** v0.3.0
+**Firmware Version:** v0.3.3
 
