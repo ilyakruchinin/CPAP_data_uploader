@@ -53,6 +53,15 @@ void setup() {
         return;
     }
 
+    // Boot delay - wait for CPAP machine to finish booting and release SD card
+    // This delay is applied before first SD card access attempt
+    // Note: Config not loaded yet, so we'll apply a default delay here
+    // and use configured delay for subsequent operations
+    const int DEFAULT_BOOT_DELAY_SECONDS = 30;
+    LOGF("Waiting %d seconds for CPAP machine to complete boot sequence...", DEFAULT_BOOT_DELAY_SECONDS);
+    delay(DEFAULT_BOOT_DELAY_SECONDS * 1000);
+    LOG("Boot delay complete, attempting SD card access...");
+
     // Take control of SD card
     LOG("Waiting to access SD card...");
     while (!sdManager.takeControl()) {
@@ -202,7 +211,7 @@ void loop() {
             LOG("SD card control acquired, starting forced upload...");
             
             // Perform upload with force flag to bypass schedule check
-            bool uploadSuccess = uploader->uploadNewFiles(sdManager.getFS(), true);
+            bool uploadSuccess = uploader->uploadNewFiles(&sdManager, true);
             
             // Release SD card
             sdManager.releaseControl();
@@ -294,11 +303,12 @@ void loop() {
 
     // Perform upload session
     // Note: uploadNewFiles() handles:
-    // - Time budget enforcement
+    // - Time budget enforcement (active time only)
+    // - Periodic SD card release (gives CPAP priority access)
     // - File prioritization (DATALOG newest first, then root/SETTINGS)
     // - State persistence
     // - Retry count management
-    bool uploadSuccess = uploader->uploadNewFiles(sdManager.getFS());
+    bool uploadSuccess = uploader->uploadNewFiles(&sdManager);
 
     // Release SD card back to CPAP machine
     sdManager.releaseControl();

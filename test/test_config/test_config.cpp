@@ -90,9 +90,12 @@ void test_config_load_with_defaults() {
     
     // Check default values
     TEST_ASSERT_EQUAL(12, config.getUploadHour());  // Default noon
-    TEST_ASSERT_EQUAL(5, config.getSessionDurationSeconds());  // Default 5 seconds
+    TEST_ASSERT_EQUAL(30, config.getSessionDurationSeconds());  // Default 30 seconds
     TEST_ASSERT_EQUAL(3, config.getMaxRetryAttempts());  // Default 3 attempts
     TEST_ASSERT_EQUAL(0, config.getGmtOffsetHours());  // Default UTC
+    TEST_ASSERT_EQUAL(30, config.getBootDelaySeconds());  // Default 30 seconds
+    TEST_ASSERT_EQUAL(2, config.getSdReleaseIntervalSeconds());  // Default 2 seconds
+    TEST_ASSERT_EQUAL(500, config.getSdReleaseWaitMs());  // Default 500ms
 }
 
 // Test loading configuration with missing SSID (should fail)
@@ -286,6 +289,53 @@ void test_config_high_retry_attempts() {
     TEST_ASSERT_TRUE(loaded);
     TEST_ASSERT_EQUAL(10, config.getMaxRetryAttempts());
 }
+
+// Test new boot delay and SD release configuration
+void test_config_boot_delay_and_sd_release() {
+    std::string configContent = R"({
+        "WIFI_SSID": "TestNetwork",
+        "ENDPOINT": "//server/share",
+        "BOOT_DELAY_SECONDS": 60,
+        "SD_RELEASE_INTERVAL_SECONDS": 5,
+        "SD_RELEASE_WAIT_MS": 1000
+    })";
+    
+    mockSD.addFile("/config.json", configContent);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE(loaded);
+    TEST_ASSERT_EQUAL(60, config.getBootDelaySeconds());
+    TEST_ASSERT_EQUAL(5, config.getSdReleaseIntervalSeconds());
+    TEST_ASSERT_EQUAL(1000, config.getSdReleaseWaitMs());
+}
+
+// Test configuration with all timing fields
+void test_config_all_timing_fields() {
+    std::string configContent = R"({
+        "WIFI_SSID": "TestNetwork",
+        "ENDPOINT": "//server/share",
+        "SESSION_DURATION_SECONDS": 60,
+        "MAX_RETRY_ATTEMPTS": 5,
+        "BOOT_DELAY_SECONDS": 45,
+        "SD_RELEASE_INTERVAL_SECONDS": 3,
+        "SD_RELEASE_WAIT_MS": 750
+    })";
+    
+    mockSD.addFile("/config.json", configContent);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE(loaded);
+    TEST_ASSERT_EQUAL(60, config.getSessionDurationSeconds());
+    TEST_ASSERT_EQUAL(5, config.getMaxRetryAttempts());
+    TEST_ASSERT_EQUAL(45, config.getBootDelaySeconds());
+    TEST_ASSERT_EQUAL(3, config.getSdReleaseIntervalSeconds());
+    TEST_ASSERT_EQUAL(750, config.getSdReleaseWaitMs());
+}
+
 
 // ============================================================================
 // CREDENTIAL SECURITY TESTS (Preferences-based secure storage)
@@ -648,6 +698,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_config_upload_hours);
     RUN_TEST(test_config_long_session_duration);
     RUN_TEST(test_config_high_retry_attempts);
+    RUN_TEST(test_config_boot_delay_and_sd_release);
+    RUN_TEST(test_config_all_timing_fields);
     
     // Credential security tests (Preferences-based)
     RUN_TEST(test_config_plain_text_mode);

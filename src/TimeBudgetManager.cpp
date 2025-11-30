@@ -7,6 +7,9 @@
 TimeBudgetManager::TimeBudgetManager() 
     : sessionStartTime(0),
       sessionDurationMs(0),
+      activeTimeMs(0),
+      pauseStartTime(0),
+      isPaused(false),
       transmissionRateBytesPerSec(DEFAULT_RATE),
       rateHistoryIndex(0),
       rateHistoryCount(0) {
@@ -23,6 +26,9 @@ TimeBudgetManager::TimeBudgetManager()
 void TimeBudgetManager::startSession(unsigned long durationSeconds) {
     sessionStartTime = millis();
     sessionDurationMs = durationSeconds * 1000;
+    activeTimeMs = 0;
+    pauseStartTime = 0;
+    isPaused = false;
 }
 
 /**
@@ -33,14 +39,55 @@ void TimeBudgetManager::startSession(unsigned long durationSeconds) {
 void TimeBudgetManager::startSession(unsigned long durationSeconds, int retryMultiplier) {
     sessionStartTime = millis();
     sessionDurationMs = durationSeconds * 1000 * retryMultiplier;
+    activeTimeMs = 0;
+    pauseStartTime = 0;
+    isPaused = false;
+}
+
+/**
+ * Pause active time tracking (called when releasing SD card)
+ * Accumulates active time up to this point
+ */
+void TimeBudgetManager::pauseActiveTime() {
+    if (!isPaused) {
+        unsigned long now = millis();
+        activeTimeMs += (now - sessionStartTime);
+        pauseStartTime = now;
+        isPaused = true;
+    }
+}
+
+/**
+ * Resume active time tracking (called when retaking SD card)
+ * Resets session start time to exclude pause duration
+ */
+void TimeBudgetManager::resumeActiveTime() {
+    if (isPaused) {
+        sessionStartTime = millis();
+        isPaused = false;
+    }
+}
+
+/**
+ * Get accumulated active time (time with SD card control)
+ * @return Active time in milliseconds
+ */
+unsigned long TimeBudgetManager::getActiveTimeMs() {
+    if (isPaused) {
+        return activeTimeMs;
+    } else {
+        unsigned long now = millis();
+        return activeTimeMs + (now - sessionStartTime);
+    }
 }
 
 /**
  * Get remaining time budget in milliseconds
+ * Based on active time only (excludes pause periods)
  * @return Remaining budget in ms, or 0 if budget exhausted
  */
 unsigned long TimeBudgetManager::getRemainingBudgetMs() {
-    unsigned long elapsed = millis() - sessionStartTime;
+    unsigned long elapsed = getActiveTimeMs();
     
     if (elapsed >= sessionDurationMs) {
         return 0;

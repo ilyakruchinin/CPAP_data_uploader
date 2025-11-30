@@ -9,6 +9,7 @@
 #include "TimeBudgetManager.h"
 #include "ScheduleManager.h"
 #include "WiFiManager.h"
+#include "SDCardManager.h"
 
 // Include uploader implementations based on feature flags
 #ifdef ENABLE_SMB_UPLOAD
@@ -31,6 +32,12 @@ private:
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
     
+    // Periodic SD card release tracking
+    unsigned long lastSdReleaseTime;
+    
+    // Helper method for periodic SD card release
+    bool checkAndReleaseSD(class SDCardManager* sdManager);
+    
     // Uploader instances (only compiled if feature flag is enabled)
 #ifdef ENABLE_SMB_UPLOAD
     SMBUploader* smbUploader;
@@ -48,8 +55,8 @@ private:
     std::vector<String> scanRootAndSettingsFiles(fs::FS &sd);
     
     // Upload logic
-    bool uploadDatalogFolder(fs::FS &sd, const String& folderName);
-    bool uploadSingleFile(fs::FS &sd, const String& filePath);
+    bool uploadDatalogFolder(class SDCardManager* sdManager, const String& folderName);
+    bool uploadSingleFile(class SDCardManager* sdManager, const String& filePath);
     
     // Session management
     bool startUploadSession(fs::FS &sd);
@@ -61,8 +68,7 @@ public:
     
     bool begin(fs::FS &sd);
     bool shouldUpload();
-    bool uploadFile(const String& filePath, fs::FS &sd);
-    bool uploadNewFiles(fs::FS &sd, bool forceUpload = false);
+    bool uploadNewFiles(class SDCardManager* sdManager, bool forceUpload = false);
     
     // Getters for internal components (for web interface access)
     UploadStateManager* getStateManager() { return stateManager; }

@@ -24,6 +24,9 @@ private:
     int sessionDurationSeconds;
     int maxRetryAttempts;
     int gmtOffsetHours;
+    int bootDelaySeconds;
+    int sdReleaseIntervalSeconds;
+    int sdReleaseWaitMs;
     bool isValid;
     
     // Credential storage mode flags
@@ -71,6 +74,9 @@ public:
     int getSessionDurationSeconds() const;
     int getMaxRetryAttempts() const;
     int getGmtOffsetHours() const;
+    int getBootDelaySeconds() const;
+    int getSdReleaseIntervalSeconds() const;
+    int getSdReleaseWaitMs() const;
     bool valid() const;
     
     // Credential storage mode getters

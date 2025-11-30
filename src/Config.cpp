@@ -10,9 +10,12 @@ const char* Config::CENSORED_VALUE = "***STORED_IN_FLASH***";
 
 Config::Config() : 
     uploadHour(12),  // Default: noon
-    sessionDurationSeconds(5),  // Default: 5 seconds
+    sessionDurationSeconds(30),  // Default: 30 seconds
     maxRetryAttempts(3),  // Default: 3 attempts
     gmtOffsetHours(0),  // Default: UTC
+    bootDelaySeconds(30),  // Default: 30 seconds
+    sdReleaseIntervalSeconds(2),  // Default: 2 seconds
+    sdReleaseWaitMs(500),  // Default: 500ms
     isValid(false),
     storePlainText(false),  // Default: secure mode
     credentialsInFlash(false)  // Will be set during loadFromSD
@@ -280,9 +283,12 @@ bool Config::loadFromSD(fs::FS &sd) {
     
     // Parse new configuration fields with defaults
     uploadHour = doc["UPLOAD_HOUR"] | 12;
-    sessionDurationSeconds = doc["SESSION_DURATION_SECONDS"] | 5;
+    sessionDurationSeconds = doc["SESSION_DURATION_SECONDS"] | 30;
     maxRetryAttempts = doc["MAX_RETRY_ATTEMPTS"] | 3;
     gmtOffsetHours = doc["GMT_OFFSET_HOURS"] | 0;
+    bootDelaySeconds = doc["BOOT_DELAY_SECONDS"] | 30;
+    sdReleaseIntervalSeconds = doc["SD_RELEASE_INTERVAL_SECONDS"] | 2;
+    sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 500;
     
     // Step 4: Load credentials based on storage mode
     if (storePlainText) {
@@ -400,6 +406,9 @@ int Config::getUploadHour() const { return uploadHour; }
 int Config::getSessionDurationSeconds() const { return sessionDurationSeconds; }
 int Config::getMaxRetryAttempts() const { return maxRetryAttempts; }
 int Config::getGmtOffsetHours() const { return gmtOffsetHours; }
+int Config::getBootDelaySeconds() const { return bootDelaySeconds; }
+int Config::getSdReleaseIntervalSeconds() const { return sdReleaseIntervalSeconds; }
+int Config::getSdReleaseWaitMs() const { return sdReleaseWaitMs; }
 bool Config::valid() const { return isValid; }
 
 // Credential storage mode getters

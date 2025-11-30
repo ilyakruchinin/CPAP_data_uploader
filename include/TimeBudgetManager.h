@@ -13,6 +13,9 @@ class TimeBudgetManager {
 private:
     unsigned long sessionStartTime;
     unsigned long sessionDurationMs;
+    unsigned long activeTimeMs;  // Tracks only time with SD card control
+    unsigned long pauseStartTime;  // When SD card was released
+    bool isPaused;
     unsigned long transmissionRateBytesPerSec;
     
     // Default transmission rate: 40 KB/s (conservative estimate for SMB over WiFi)
@@ -33,6 +36,11 @@ public:
     // Session management
     void startSession(unsigned long durationSeconds);
     void startSession(unsigned long durationSeconds, int retryMultiplier);
+    
+    // Active time tracking (for periodic SD card release)
+    void pauseActiveTime();   // Call when releasing SD card
+    void resumeActiveTime();  // Call when retaking SD card
+    unsigned long getActiveTimeMs();  // Get accumulated active time
     
     // Budget checking
     unsigned long getRemainingBudgetMs();

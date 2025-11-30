@@ -8,7 +8,8 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
       stateManager(nullptr),
       budgetManager(nullptr),
       scheduleManager(nullptr),
-      wifiManager(wifi)
+      wifiManager(wifi),
+      lastSdReleaseTime(0)
 #ifdef ENABLE_SMB_UPLOAD
       , smbUploader(nullptr)
 #endif
@@ -135,27 +136,67 @@ bool FileUploader::shouldUpload() {
     return scheduleManager->isUploadTime();
 }
 
-// Legacy method - kept for compatibility
-bool FileUploader::uploadFile(const String& filePath, fs::FS &sd) {
-    LOGF("[FileUploader] Uploading file: %s", filePath.c_str());
-    return uploadSingleFile(sd, filePath);
+
+
+// Check if it's time to periodically release SD card control
+// Returns true if SD was released and retaken successfully
+// Returns false if unable to retake control (should abort upload)
+bool FileUploader::checkAndReleaseSD(SDCardManager* sdManager) {
+    unsigned long now = millis();
+    unsigned long intervalMs = config->getSdReleaseIntervalSeconds() * 1000;
+    
+    // Check if it's time to release
+    if (now - lastSdReleaseTime < intervalMs) {
+        return true;  // Not time yet, continue
+    }
+    
+    LOG_DEBUG("[FileUploader] Periodic SD card release - giving CPAP priority access");
+    
+    // Pause active time tracking
+    budgetManager->pauseActiveTime();
+    
+    // Release SD card
+    sdManager->releaseControl();
+    
+    // Wait configured time
+    unsigned long waitMs = config->getSdReleaseWaitMs();
+    LOG_DEBUGF("[FileUploader] Waiting %lu ms before retaking control...", waitMs);
+    delay(waitMs);
+    
+    // Retake control
+    LOG_DEBUG("[FileUploader] Attempting to retake SD card control...");
+    if (!sdManager->takeControl()) {
+        LOG_ERROR("[FileUploader] Failed to retake SD card control");
+        LOG_WARN("[FileUploader] CPAP machine may be actively using SD card");
+        return false;  // Abort upload
+    }
+    
+    // Resume active time tracking
+    budgetManager->resumeActiveTime();
+    
+    // Reset release timer
+    lastSdReleaseTime = millis();
+    
+    LOG_DEBUG("[FileUploader] SD card control reacquired, resuming upload");
+    return true;
 }
 
 // Main upload orchestration
-bool FileUploader::uploadNewFiles(fs::FS &sd, bool forceUpload) {
+bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
+    fs::FS &sd = sdManager->getFS();
     LOG("[FileUploader] Starting upload orchestration...");
     
     // Check WiFi connection first
     if (!wifiManager || !wifiManager->isConnected()) {
-        LOG("[FileUploader] ERROR: WiFi not connected - cannot upload");
-        LOG("[FileUploader] Please ensure WiFi connection is established before upload");
+        LOG_ERROR("[FileUploader] WiFi not connected - cannot upload");
+        LOG_ERROR("[FileUploader] Please ensure WiFi connection is established before upload");
         return false;
     }
     
     // Check if it's time to upload (unless forced)
     if (!forceUpload && !shouldUpload()) {
         unsigned long secondsUntilNext = scheduleManager->getSecondsUntilNextUpload();
-        LOGF("[FileUploader] Not upload time yet. Next upload in %lu hours", secondsUntilNext / 3600);
+        LOG_DEBUGF("[FileUploader] Not upload time yet. Next upload in %lu hours", secondsUntilNext / 3600);
         return false;
     }
     
@@ -166,7 +207,7 @@ bool FileUploader::uploadNewFiles(fs::FS &sd, bool forceUpload) {
     
     // Start upload session with time budget
     if (!startUploadSession(sd)) {
-        LOG("[FileUploader] Error: Failed to start upload session");
+        LOG_ERROR("[FileUploader] Failed to start upload session");
         return false;
     }
     
@@ -183,8 +224,14 @@ bool FileUploader::uploadNewFiles(fs::FS &sd, bool forceUpload) {
             break;
         }
         
+        // Check for periodic SD card release
+        if (!checkAndReleaseSD(sdManager)) {
+            LOG_ERROR("[FileUploader] Failed to retake SD card control, aborting upload");
+            break;
+        }
+        
         // Upload the folder
-        if (uploadDatalogFolder(sd, folderName)) {
+        if (uploadDatalogFolder(sdManager, folderName)) {
             anyUploaded = true;
             LOGF("[FileUploader] Completed folder: %s", folderName.c_str());
         } else {
@@ -206,8 +253,14 @@ bool FileUploader::uploadNewFiles(fs::FS &sd, bool forceUpload) {
                 break;
             }
             
+            // Check for periodic SD card release
+            if (!checkAndReleaseSD(sdManager)) {
+                LOG_ERROR("[FileUploader] Failed to retake SD card control, aborting upload");
+                break;
+            }
+            
             // Upload the file
-            if (uploadSingleFile(sd, filePath)) {
+            if (uploadSingleFile(sdManager, filePath)) {
                 anyUploaded = true;
             }
         }
@@ -218,7 +271,7 @@ bool FileUploader::uploadNewFiles(fs::FS &sd, bool forceUpload) {
     // End upload session and save state
     endUploadSession(sd);
     
-    LOGF("[FileUploader] Upload session complete. Files uploaded: %s", anyUploaded ? "Yes" : "No");
+    LOG_DEBUGF("[FileUploader] Upload session complete. Files uploaded: %s", anyUploaded ? "Yes" : "No");
     
     return anyUploaded;
 }
@@ -229,12 +282,12 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd) {
     
     File root = sd.open("/DATALOG");
     if (!root) {
-        LOG("[FileUploader] WARNING: DATALOG folder not found - no therapy data to upload");
+        LOG_WARN("[FileUploader] DATALOG folder not found - no therapy data to upload");
         return folders;
     }
     
     if (!root.isDirectory()) {
-        LOG("[FileUploader] ERROR: /DATALOG exists but is not a directory");
+        LOG_ERROR("[FileUploader] /DATALOG exists but is not a directory");
         root.close();
         return folders;
     }
@@ -280,13 +333,13 @@ std::vector<String> FileUploader::scanFolderFiles(fs::FS &sd, const String& fold
     
     File folder = sd.open(folderPath);
     if (!folder) {
-        LOGF("[FileUploader] ERROR: Failed to open folder: %s", folderPath.c_str());
-        LOG("[FileUploader] SD card may be experiencing read errors");
+        LOG_ERRORF("[FileUploader] Failed to open folder: %s", folderPath.c_str());
+        LOG_ERROR("[FileUploader] SD card may be experiencing read errors");
         return files;
     }
     
     if (!folder.isDirectory()) {
-        LOGF("[FileUploader] ERROR: Path exists but is not a directory: %s", folderPath.c_str());
+        LOG_ERRORF("[FileUploader] Path exists but is not a directory: %s", folderPath.c_str());
         folder.close();
         return files;
     }
@@ -380,7 +433,11 @@ bool FileUploader::startUploadSession(fs::FS &sd) {
         budgetManager->startSession(sessionDuration);
     }
     
-    LOG_DEBUGF("[FileUploader] Session budget: %lu ms", budgetManager->getRemainingBudgetMs());
+    LOG_DEBUGF("[FileUploader] Session budget: %lu ms (active time only)", budgetManager->getRemainingBudgetMs());
+    LOG_DEBUGF("[FileUploader] Periodic SD release: every %d seconds", config->getSdReleaseIntervalSeconds());
+    
+    // Initialize periodic release timer
+    lastSdReleaseTime = millis();
     
     return true;
 }
@@ -391,8 +448,8 @@ void FileUploader::endUploadSession(fs::FS &sd) {
     
     // Save upload state
     if (!stateManager->save(sd)) {
-        LOG("[FileUploader] ERROR: Failed to save upload state");
-        LOG("[FileUploader] Upload progress may be lost - will retry from last saved state");
+        LOG_ERROR("[FileUploader] Failed to save upload state");
+        LOG_WARN("[FileUploader] Upload progress may be lost - will retry from last saved state");
     }
     
     // Update last upload timestamp
@@ -407,13 +464,14 @@ void FileUploader::endUploadSession(fs::FS &sd) {
     
     // Save state again with updated timestamp
     if (!stateManager->save(sd)) {
-        LOG("[FileUploader] ERROR: Failed to save final state with timestamp");
-        LOG("[FileUploader] Next upload may occur sooner than scheduled");
+        LOG_ERROR("[FileUploader] Failed to save final state with timestamp");
+        LOG_WARN("[FileUploader] Next upload may occur sooner than scheduled");
     }
 }
 
 // Upload all files in a DATALOG folder
-bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
+bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& folderName) {
+    fs::FS &sd = sdManager->getFS();
     LOGF("[FileUploader] Uploading DATALOG folder: %s", folderName.c_str());
     
     // Set this as the current retry folder
@@ -426,7 +484,7 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
     std::vector<String> files = scanFolderFiles(sd, folderPath);
     
     if (files.empty()) {
-        LOG("[FileUploader] No .edf files found in folder");
+        LOG_WARN("[FileUploader] No .edf files found in folder");
         // Mark as completed even if empty
         stateManager->markFolderCompleted(folderName);
         stateManager->clearCurrentRetry();
@@ -436,15 +494,23 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
     // Upload each file
     int uploadedCount = 0;
     for (const String& fileName : files) {
+        // Check for periodic SD card release before each file
+        if (!checkAndReleaseSD(sdManager)) {
+            LOG_ERROR("[FileUploader] Failed to retake SD card control during folder upload");
+            stateManager->incrementCurrentRetryCount();
+            stateManager->save(sd);
+            return false;
+        }
+        
         // Check time budget before uploading
         String localPath = folderPath + "/" + fileName;
         
         // Get file size
         File file = sd.open(localPath);
         if (!file) {
-            LOGF("[FileUploader] ERROR: Cannot open file for reading: %s", localPath.c_str());
-            LOG("[FileUploader] File may be corrupted or SD card has read errors");
-            LOG("[FileUploader] Skipping this file and continuing with next file");
+            LOG_ERRORF("[FileUploader] Cannot open file for reading: %s", localPath.c_str());
+            LOG_ERROR("[FileUploader] File may be corrupted or SD card has read errors");
+            LOG_WARN("[FileUploader] Skipping this file and continuing with next file");
             continue;  // Skip this file but continue with others
         }
         
@@ -452,7 +518,7 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         
         // Sanity check file size
         if (fileSize == 0) {
-            LOGF("[FileUploader] WARNING: File is empty: %s", localPath.c_str());
+            LOG_WARNF("[FileUploader] File is empty: %s", localPath.c_str());
             file.close();
             continue;  // Skip empty files
         }
@@ -485,10 +551,10 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         if (smbUploader && config->getEndpointType() == "SMB") {
             // Ensure SMB connection is established
             if (!smbUploader->isConnected()) {
-                LOG("[FileUploader] SMB not connected, attempting to connect...");
+                LOG_DEBUG("[FileUploader] SMB not connected, attempting to connect...");
                 if (!smbUploader->begin()) {
-                    LOG("[FileUploader] ERROR: Failed to connect to SMB share");
-                    LOG("[FileUploader] Check network connectivity and SMB credentials");
+                    LOG_ERROR("[FileUploader] Failed to connect to SMB share");
+                    LOG_ERROR("[FileUploader] Check network connectivity and SMB credentials");
                     stateManager->incrementCurrentRetryCount();
                     stateManager->save(sd);
                     return false;
@@ -502,10 +568,10 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         if (webdavUploader && config->getEndpointType() == "WEBDAV") {
             // Ensure WebDAV connection is established
             if (!webdavUploader->isConnected()) {
-                LOG("[FileUploader] WebDAV not connected, attempting to connect...");
+                LOG_DEBUG("[FileUploader] WebDAV not connected, attempting to connect...");
                 if (!webdavUploader->begin()) {
-                    LOG("[FileUploader] ERROR: Failed to connect to WebDAV server");
-                    LOG("[FileUploader] Check network connectivity and WebDAV credentials");
+                    LOG_ERROR("[FileUploader] Failed to connect to WebDAV server");
+                    LOG_ERROR("[FileUploader] Check network connectivity and WebDAV credentials");
                     stateManager->incrementCurrentRetryCount();
                     stateManager->save(sd);
                     return false;
@@ -519,10 +585,10 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         if (sleephqUploader && config->getEndpointType() == "SLEEPHQ") {
             // Ensure SleepHQ connection is established
             if (!sleephqUploader->isConnected()) {
-                LOG("[FileUploader] SleepHQ not connected, attempting to connect...");
+                LOG_DEBUG("[FileUploader] SleepHQ not connected, attempting to connect...");
                 if (!sleephqUploader->begin()) {
-                    LOG("[FileUploader] ERROR: Failed to connect to SleepHQ service");
-                    LOG("[FileUploader] Check network connectivity and API credentials");
+                    LOG_ERROR("[FileUploader] Failed to connect to SleepHQ service");
+                    LOG_ERROR("[FileUploader] Check network connectivity and API credentials");
                     stateManager->incrementCurrentRetryCount();
                     stateManager->save(sd);
                     return false;
@@ -533,26 +599,26 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
         } else
 #endif
         {
-            LOG("[FileUploader] ERROR: No uploader available for configured endpoint type");
-            LOG("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
+            LOG_ERROR("[FileUploader] No uploader available for configured endpoint type");
+            LOG_ERROR("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
             stateManager->incrementCurrentRetryCount();
             stateManager->save(sd);
             return false;
         }
         
         if (!uploadSuccess) {
-            LOGF("[FileUploader] ERROR: Failed to upload file: %s", localPath.c_str());
-            LOG("[FileUploader] This may be due to:");
-            LOG("[FileUploader]   - Network connectivity issues");
-            LOG("[FileUploader]   - SMB server unavailable or overloaded");
-            LOG("[FileUploader]   - Insufficient permissions on remote share");
-            LOG("[FileUploader]   - Disk space issues on remote server");
-            LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
+            LOG_ERRORF("[FileUploader] Failed to upload file: %s", localPath.c_str());
+            LOG_ERROR("[FileUploader] This may be due to:");
+            LOG_ERROR("[FileUploader]   - Network connectivity issues");
+            LOG_ERROR("[FileUploader]   - SMB server unavailable or overloaded");
+            LOG_ERROR("[FileUploader]   - Insufficient permissions on remote share");
+            LOG_ERROR("[FileUploader]   - Disk space issues on remote server");
+            LOG_WARNF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
             
             // Don't mark folder as completed, will retry
             stateManager->incrementCurrentRetryCount();
             if (!stateManager->save(sd)) {
-                LOG("[FileUploader] WARNING: Failed to save state after upload error");
+                LOG_WARN("[FileUploader] Failed to save state after upload error");
             }
             return false;  // Stop processing this folder
         }
@@ -584,21 +650,22 @@ bool FileUploader::uploadDatalogFolder(fs::FS &sd, const String& folderName) {
 }
 
 // Upload a single file (for root and SETTINGS files)
-bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
+bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& filePath) {
+    fs::FS &sd = sdManager->getFS();
     LOGF("[FileUploader] Uploading single file: %s", filePath.c_str());
     
     // Check if file exists
     if (!sd.exists(filePath)) {
-        LOGF("[FileUploader] ERROR: File does not exist: %s", filePath.c_str());
-        LOG("[FileUploader] File may have been deleted or SD card structure changed");
+        LOG_ERRORF("[FileUploader] File does not exist: %s", filePath.c_str());
+        LOG_WARN("[FileUploader] File may have been deleted or SD card structure changed");
         return false;
     }
     
     // Get file size
     File file = sd.open(filePath);
     if (!file) {
-        LOGF("[FileUploader] ERROR: Cannot open file for reading: %s", filePath.c_str());
-        LOG("[FileUploader] File may be corrupted or SD card has read errors");
+        LOG_ERRORF("[FileUploader] Cannot open file for reading: %s", filePath.c_str());
+        LOG_ERROR("[FileUploader] File may be corrupted or SD card has read errors");
         return false;
     }
     
@@ -606,7 +673,7 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     
     // Sanity check file size
     if (fileSize == 0) {
-        LOGF("[FileUploader] WARNING: File is empty: %s", filePath.c_str());
+        LOG_WARNF("[FileUploader] File is empty: %s", filePath.c_str());
         file.close();
         return true;  // Consider empty file as "uploaded" (skip it)
     }
@@ -637,10 +704,10 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     if (smbUploader && config->getEndpointType() == "SMB") {
         // Ensure SMB connection is established
         if (!smbUploader->isConnected()) {
-            LOG("[FileUploader] SMB not connected, attempting to connect...");
+            LOG_DEBUG("[FileUploader] SMB not connected, attempting to connect...");
             if (!smbUploader->begin()) {
-                LOG("[FileUploader] ERROR: Failed to connect to SMB share");
-                LOG("[FileUploader] Check network connectivity and SMB credentials");
+                LOG_ERROR("[FileUploader] Failed to connect to SMB share");
+                LOG_ERROR("[FileUploader] Check network connectivity and SMB credentials");
                 return false;
             }
         }
@@ -652,10 +719,10 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     if (webdavUploader && config->getEndpointType() == "WEBDAV") {
         // Ensure WebDAV connection is established
         if (!webdavUploader->isConnected()) {
-            LOG("[FileUploader] WebDAV not connected, attempting to connect...");
+            LOG_DEBUG("[FileUploader] WebDAV not connected, attempting to connect...");
             if (!webdavUploader->begin()) {
-                LOG("[FileUploader] ERROR: Failed to connect to WebDAV server");
-                LOG("[FileUploader] Check network connectivity and WebDAV credentials");
+                LOG_ERROR("[FileUploader] Failed to connect to WebDAV server");
+                LOG_ERROR("[FileUploader] Check network connectivity and WebDAV credentials");
                 return false;
             }
         }
@@ -667,10 +734,10 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     if (sleephqUploader && config->getEndpointType() == "SLEEPHQ") {
         // Ensure SleepHQ connection is established
         if (!sleephqUploader->isConnected()) {
-            LOG("[FileUploader] SleepHQ not connected, attempting to connect...");
+            LOG_DEBUG("[FileUploader] SleepHQ not connected, attempting to connect...");
             if (!sleephqUploader->begin()) {
-                LOG("[FileUploader] ERROR: Failed to connect to SleepHQ service");
-                LOG("[FileUploader] Check network connectivity and API credentials");
+                LOG_ERROR("[FileUploader] Failed to connect to SleepHQ service");
+                LOG_ERROR("[FileUploader] Check network connectivity and API credentials");
                 return false;
             }
         }
@@ -679,14 +746,14 @@ bool FileUploader::uploadSingleFile(fs::FS &sd, const String& filePath) {
     } else
 #endif
     {
-        LOG("[FileUploader] ERROR: No uploader available for configured endpoint type");
-        LOG("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
+        LOG_ERROR("[FileUploader] No uploader available for configured endpoint type");
+        LOG_ERROR("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
         return false;
     }
     
     if (!uploadSuccess) {
-        LOG("[FileUploader] ERROR: Failed to upload file");
-        LOG("[FileUploader] This may be due to network issues or SMB server problems");
+        LOG_ERROR("[FileUploader] Failed to upload file");
+        LOG_ERROR("[FileUploader] This may be due to network issues or SMB server problems");
         return false;
     }
     

@@ -49,7 +49,7 @@ void test_session_initialization_different_durations() {
     TEST_ASSERT_EQUAL(1000, manager.getRemainingBudgetMs());
 }
 
-// Test budget remaining calculation
+// Test budget remaining calculation (active time only)
 void test_budget_remaining_calculation() {
     TimeBudgetManager manager;
     
@@ -58,18 +58,22 @@ void test_budget_remaining_calculation() {
     
     // Initially should have full budget
     TEST_ASSERT_EQUAL(10000, manager.getRemainingBudgetMs());
+    TEST_ASSERT_EQUAL(0, manager.getActiveTimeMs());
     
     // Advance time by 3 seconds
     MockTimeState::advanceMillis(3000);
     TEST_ASSERT_EQUAL(7000, manager.getRemainingBudgetMs());
+    TEST_ASSERT_EQUAL(3000, manager.getActiveTimeMs());
     
     // Advance time by another 5 seconds
     MockTimeState::advanceMillis(5000);
     TEST_ASSERT_EQUAL(2000, manager.getRemainingBudgetMs());
+    TEST_ASSERT_EQUAL(8000, manager.getActiveTimeMs());
     
     // Advance time past budget
     MockTimeState::advanceMillis(3000);
     TEST_ASSERT_EQUAL(0, manager.getRemainingBudgetMs());
+    TEST_ASSERT_EQUAL(11000, manager.getActiveTimeMs());
 }
 
 void test_has_budget() {
@@ -366,6 +370,186 @@ void test_wait_time_with_retry_multiplier() {
     TEST_ASSERT_EQUAL(300000, manager.getWaitTimeMs());
 }
 
+// Test active time tracking with pause/resume
+void test_active_time_pause_resume() {
+    TimeBudgetManager manager;
+    
+    MockTimeState::setMillis(0);
+    manager.startSession(30);  // 30 seconds
+    
+    // Run for 2 seconds
+    MockTimeState::advanceMillis(2000);
+    TEST_ASSERT_EQUAL(2000, manager.getActiveTimeMs());
+    TEST_ASSERT_EQUAL(28000, manager.getRemainingBudgetMs());
+    
+    // Pause (release SD card)
+    manager.pauseActiveTime();
+    
+    // Wait 1 second (this should NOT count against budget)
+    MockTimeState::advanceMillis(1000);
+    TEST_ASSERT_EQUAL(2000, manager.getActiveTimeMs());  // Still 2 seconds
+    TEST_ASSERT_EQUAL(28000, manager.getRemainingBudgetMs());  // Still 28 seconds
+    
+    // Resume (retake SD card)
+    manager.resumeActiveTime();
+    
+    // Run for another 3 seconds
+    MockTimeState::advanceMillis(3000);
+    TEST_ASSERT_EQUAL(5000, manager.getActiveTimeMs());  // 2 + 3 = 5 seconds
+    TEST_ASSERT_EQUAL(25000, manager.getRemainingBudgetMs());  // 30 - 5 = 25 seconds
+}
+
+void test_active_time_multiple_pauses() {
+    TimeBudgetManager manager;
+    
+    MockTimeState::setMillis(0);
+    manager.startSession(30);
+    
+    // Active period 1: 2 seconds
+    MockTimeState::advanceMillis(2000);
+    TEST_ASSERT_EQUAL(2000, manager.getActiveTimeMs());
+    
+    // Pause 1: 500ms (not counted)
+    manager.pauseActiveTime();
+    MockTimeState::advanceMillis(500);
+    TEST_ASSERT_EQUAL(2000, manager.getActiveTimeMs());
+    
+    // Resume and active period 2: 3 seconds
+    manager.resumeActiveTime();
+    MockTimeState::advanceMillis(3000);
+    TEST_ASSERT_EQUAL(5000, manager.getActiveTimeMs());
+    
+    // Pause 2: 1000ms (not counted)
+    manager.pauseActiveTime();
+    MockTimeState::advanceMillis(1000);
+    TEST_ASSERT_EQUAL(5000, manager.getActiveTimeMs());
+    
+    // Resume and active period 3: 4 seconds
+    manager.resumeActiveTime();
+    MockTimeState::advanceMillis(4000);
+    TEST_ASSERT_EQUAL(9000, manager.getActiveTimeMs());
+    
+    // Total active time: 2 + 3 + 4 = 9 seconds
+    // Total wall time: 2 + 0.5 + 3 + 1 + 4 = 10.5 seconds
+    // Budget remaining: 30 - 9 = 21 seconds
+    TEST_ASSERT_EQUAL(21000, manager.getRemainingBudgetMs());
+}
+
+void test_active_time_pause_without_resume() {
+    TimeBudgetManager manager;
+    
+    MockTimeState::setMillis(0);
+    manager.startSession(30);
+    
+    // Run for 5 seconds
+    MockTimeState::advanceMillis(5000);
+    TEST_ASSERT_EQUAL(5000, manager.getActiveTimeMs());
+    
+    // Pause
+    manager.pauseActiveTime();
+    
+    // Wait 10 seconds while paused
+    MockTimeState::advanceMillis(10000);
+    
+    // Active time should still be 5 seconds
+    TEST_ASSERT_EQUAL(5000, manager.getActiveTimeMs());
+    TEST_ASSERT_EQUAL(25000, manager.getRemainingBudgetMs());
+}
+
+void test_active_time_double_pause() {
+    TimeBudgetManager manager;
+    
+    MockTimeState::setMillis(0);
+    manager.startSession(30);
+    
+    // Run for 2 seconds
+    MockTimeState::advanceMillis(2000);
+    TEST_ASSERT_EQUAL(2000, manager.getActiveTimeMs());
+    
+    // Pause
+    manager.pauseActiveTime();
+    MockTimeState::advanceMillis(1000);
+    
+    // Pause again (should be idempotent)
+    manager.pauseActiveTime();
+    MockTimeState::advanceMillis(1000);
+    
+    // Active time should still be 2 seconds
+    TEST_ASSERT_EQUAL(2000, manager.getActiveTimeMs());
+}
+
+void test_active_time_double_resume() {
+    TimeBudgetManager manager;
+    
+    MockTimeState::setMillis(0);
+    manager.startSession(30);
+    
+    // Run for 2 seconds
+    MockTimeState::advanceMillis(2000);
+    manager.pauseActiveTime();
+    MockTimeState::advanceMillis(1000);
+    
+    // Resume
+    manager.resumeActiveTime();
+    
+    // Resume again (should be idempotent)
+    manager.resumeActiveTime();
+    
+    // Run for 3 seconds
+    MockTimeState::advanceMillis(3000);
+    
+    // Should have 2 + 3 = 5 seconds active
+    TEST_ASSERT_EQUAL(5000, manager.getActiveTimeMs());
+}
+
+void test_active_time_with_budget_exhaustion() {
+    TimeBudgetManager manager;
+    
+    MockTimeState::setMillis(0);
+    manager.startSession(10);  // 10 seconds
+    
+    // Run for 8 seconds
+    MockTimeState::advanceMillis(8000);
+    TEST_ASSERT_TRUE(manager.hasBudget());
+    
+    // Pause for 5 seconds (not counted)
+    manager.pauseActiveTime();
+    MockTimeState::advanceMillis(5000);
+    TEST_ASSERT_TRUE(manager.hasBudget());  // Still have budget
+    
+    // Resume and run for 3 more seconds (total 11 seconds active)
+    manager.resumeActiveTime();
+    MockTimeState::advanceMillis(3000);
+    
+    // Budget should be exhausted (11 > 10)
+    TEST_ASSERT_FALSE(manager.hasBudget());
+    TEST_ASSERT_EQUAL(0, manager.getRemainingBudgetMs());
+}
+
+void test_active_time_with_retry_multiplier() {
+    TimeBudgetManager manager;
+    
+    MockTimeState::setMillis(0);
+    manager.startSession(10, 3);  // 10 seconds * 3 = 30 seconds
+    
+    // Run for 5 seconds
+    MockTimeState::advanceMillis(5000);
+    TEST_ASSERT_EQUAL(5000, manager.getActiveTimeMs());
+    TEST_ASSERT_EQUAL(25000, manager.getRemainingBudgetMs());
+    
+    // Pause for 2 seconds
+    manager.pauseActiveTime();
+    MockTimeState::advanceMillis(2000);
+    TEST_ASSERT_EQUAL(5000, manager.getActiveTimeMs());
+    
+    // Resume and run for 20 more seconds
+    manager.resumeActiveTime();
+    MockTimeState::advanceMillis(20000);
+    TEST_ASSERT_EQUAL(25000, manager.getActiveTimeMs());
+    TEST_ASSERT_EQUAL(5000, manager.getRemainingBudgetMs());
+    TEST_ASSERT_TRUE(manager.hasBudget());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     
@@ -398,6 +582,15 @@ int main(int argc, char **argv) {
     RUN_TEST(test_wait_time_calculation);
     RUN_TEST(test_wait_time_various_durations);
     RUN_TEST(test_wait_time_with_retry_multiplier);
+    
+    // Active time tracking tests (pause/resume for periodic SD release)
+    RUN_TEST(test_active_time_pause_resume);
+    RUN_TEST(test_active_time_multiple_pauses);
+    RUN_TEST(test_active_time_pause_without_resume);
+    RUN_TEST(test_active_time_double_pause);
+    RUN_TEST(test_active_time_double_resume);
+    RUN_TEST(test_active_time_with_budget_exhaustion);
+    RUN_TEST(test_active_time_with_retry_multiplier);
     
     return UNITY_END();
 }
