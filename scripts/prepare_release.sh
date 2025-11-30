@@ -78,6 +78,10 @@ cp "$RELEASE_DIR/upload.bat" "$TEMP_DIR/"
 cp "$RELEASE_DIR/README.md" "$TEMP_DIR/"
 cp "$RELEASE_DIR/requirements.txt" "$TEMP_DIR/"
 
+# Copy config example
+echo "Copying config.json.example..."
+cp "docs/config.json.example" "$TEMP_DIR/"
+
 # Copy esptool.exe if it exists
 if [ -f "$ESPTOOL_WIN" ]; then
     echo "Copying esptool.exe for Windows..."
@@ -107,3 +111,4 @@ if [ -f "$ESPTOOL_WIN" ]; then
 fi
 echo "  - README.md (usage instructions)"
 echo "  - requirements.txt (Python dependencies for macOS/Linux)"
+echo "  - config.json.example (configuration template)"
