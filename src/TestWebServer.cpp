@@ -5,6 +5,7 @@
 // Global trigger flags
 volatile bool g_triggerUploadFlag = false;
 volatile bool g_resetStateFlag = false;
+volatile bool g_scanNowFlag = false;
 
 // Constructor
 TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
@@ -33,6 +34,7 @@ bool TestWebServer::begin() {
     // Register request handlers
     server->on("/", [this]() { this->handleRoot(); });
     server->on("/trigger-upload", [this]() { this->handleTriggerUpload(); });
+    server->on("/scan-now", [this]() { this->handleScanNow(); });
     server->on("/status", [this]() { this->handleStatus(); });
     server->on("/reset-state", [this]() { this->handleResetState(); });
     server->on("/config", [this]() { this->handleConfig(); });
@@ -46,6 +48,7 @@ bool TestWebServer::begin() {
     LOG("[TestWebServer] Available endpoints:");
     LOG("[TestWebServer]   GET /              - Status page (HTML)");
     LOG("[TestWebServer]   GET /trigger-upload - Force immediate upload");
+    LOG("[TestWebServer]   GET /scan-now      - Scan SD card for pending folders");
     LOG("[TestWebServer]   GET /status        - Status information (JSON)");
     LOG("[TestWebServer]   GET /reset-state   - Clear upload state");
     LOG("[TestWebServer]   GET /config        - Display configuration");
@@ -127,8 +130,57 @@ void TestWebServer::handleRoot() {
         html += "<div class='info'><span class='label'>Budget:</span><span class='value'>Not initialized</span></div>";
     }
     
-    html += "<div class='info'><span class='label'>Pending Files:</span><span class='value'>";
-    html += String(getPendingFilesCount()) + "</span></div>";
+    // Upload progress
+    if (stateManager) {
+        int completedFolders = stateManager->getCompletedFoldersCount();
+        int incompleteFolders = stateManager->getIncompleteFoldersCount();
+        int totalFolders = completedFolders + incompleteFolders;
+        
+        if (totalFolders == 0) {
+            // State not yet initialized (no upload session has run)
+            html += "<div class='info'><span class='label'>Upload Status:</span><span class='value'>";
+            html += "Not yet scanned (waiting for first upload window)</span></div>";
+        } else {
+            html += "<div class='info'><span class='label'>Upload Progress:</span><span class='value'>";
+            html += String(completedFolders) + " / " + String(totalFolders) + " folders completed</span></div>";
+            
+            html += "<div class='info'><span class='label'>Pending Folders:</span><span class='value'>";
+            html += String(incompleteFolders) + "</span></div>";
+        }
+        
+        // Show retry information if applicable
+        String retryFolder = stateManager->getCurrentRetryFolder();
+        if (!retryFolder.isEmpty()) {
+            int retryCount = stateManager->getCurrentRetryCount();
+            html += "<div class='info'><span class='label'>Current Retry:</span><span class='value' style='color: #cc6600;'>";
+            html += "Folder " + retryFolder + " (attempt " + String(retryCount + 1) + ")</span></div>";
+        }
+    } else {
+        html += "<div class='info'><span class='label'>Pending Folders:</span><span class='value'>Unknown</span></div>";
+    }
+    
+    // Retry warning
+    if (stateManager) {
+        String retryFolder = stateManager->getCurrentRetryFolder();
+        if (!retryFolder.isEmpty()) {
+            int retryCount = stateManager->getCurrentRetryCount();
+            int maxRetries = config ? config->getMaxRetryAttempts() : 3;
+            
+            html += "<h2 style='color: #cc6600;'>⚠️ Upload Retry in Progress</h2>";
+            html += "<div style='background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 10px 0;'>";
+            html += "<p><strong>Folder:</strong> " + retryFolder + "</p>";
+            html += "<p><strong>Attempt:</strong> " + String(retryCount + 1) + " of " + String(maxRetries) + "</p>";
+            html += "<p><strong>Reason:</strong> Upload session time budget exhausted before completing all files.</p>";
+            
+            if (retryCount >= 2) {
+                html += "<p style='color: #cc0000;'><strong>⚠️ Multiple retries detected!</strong></p>";
+                html += "<p>Consider increasing <code>SESSION_DURATION_SECONDS</code> in config.json if uploads consistently fail.</p>";
+                html += "<p>Current session duration: " + String(config ? config->getSessionDurationSeconds() : 0) + " seconds (active time)</p>";
+            }
+            
+            html += "</div>";
+        }
+    }
     
     // Configuration
     html += "<h2>Configuration</h2>";
@@ -142,6 +194,7 @@ void TestWebServer::handleRoot() {
     // Action buttons
     html += "<h2>Actions</h2>";
     html += "<a href='/trigger-upload' class='button'>Trigger Upload Now</a>";
+    html += "<a href='/scan-now' class='button'>Scan SD Card</a>";
     html += "<a href='/status' class='button'>View JSON Status</a>";
     html += "<a href='/config' class='button'>View Full Config</a>";
     html += "<a href='/logs' class='button'>View System Logs</a>";
@@ -168,6 +221,22 @@ void TestWebServer::handleTriggerUpload() {
     server->send(200, "application/json", response);
 }
 
+// GET /scan-now - Scan SD card for pending folders
+void TestWebServer::handleScanNow() {
+    LOG("[TestWebServer] SD card scan requested via web interface");
+    
+    // Set global scan flag
+    g_scanNowFlag = true;
+    
+    // Add CORS headers
+    server->sendHeader("Access-Control-Allow-Origin", "*");
+    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    
+    String response = "{\"status\":\"success\",\"message\":\"SD card scan triggered. Refresh page to see updated folder counts.\"}";
+    server->send(200, "application/json", response);
+}
+
 // GET /status - JSON status information
 void TestWebServer::handleStatus() {
     // Add CORS headers
@@ -190,12 +259,58 @@ void TestWebServer::handleStatus() {
         json += "\"transfer_rate_bytes_per_sec\":" + String(budgetManager->getTransmissionRate()) + ",";
     }
     
-    json += "\"pending_files\":" + String(getPendingFilesCount());
+    // Upload progress and retry information
+    if (stateManager) {
+        int completedFolders = stateManager->getCompletedFoldersCount();
+        int incompleteFolders = stateManager->getIncompleteFoldersCount();
+        int totalFolders = completedFolders + incompleteFolders;
+        
+        json += "\"completed_folders\":" + String(completedFolders) + ",";
+        json += "\"incomplete_folders\":" + String(incompleteFolders) + ",";
+        json += "\"total_folders\":" + String(totalFolders) + ",";
+        json += "\"upload_state_initialized\":" + String(totalFolders > 0 ? "true" : "false") + ",";
+        
+        String retryFolder = stateManager->getCurrentRetryFolder();
+        if (!retryFolder.isEmpty()) {
+            int retryCount = stateManager->getCurrentRetryCount();
+            json += "\"current_retry_folder\":\"" + retryFolder + "\",";
+            json += "\"current_retry_count\":" + String(retryCount) + ",";
+        } else {
+            json += "\"current_retry_folder\":null,";
+            json += "\"current_retry_count\":0,";
+        }
+    } else {
+        json += "\"completed_folders\":0,";
+        json += "\"incomplete_folders\":0,";
+        json += "\"total_folders\":0,";
+        json += "\"upload_state_initialized\":false,";
+        json += "\"current_retry_folder\":null,";
+        json += "\"current_retry_count\":0,";
+    }
     
     if (config) {
         json += ",\"endpoint_type\":\"" + config->getEndpointType() + "\"";
         json += ",\"upload_hour\":" + String(config->getUploadHour());
         json += ",\"session_duration_seconds\":" + String(config->getSessionDurationSeconds());
+        json += ",\"max_retry_attempts\":" + String(config->getMaxRetryAttempts());
+        json += ",\"boot_delay_seconds\":" + String(config->getBootDelaySeconds());
+        json += ",\"sd_release_interval_seconds\":" + String(config->getSdReleaseIntervalSeconds());
+    }
+    
+    // Add recommendations if retries are happening
+    if (stateManager) {
+        String retryFolder = stateManager->getCurrentRetryFolder();
+        if (!retryFolder.isEmpty()) {
+            int retryCount = stateManager->getCurrentRetryCount();
+            json += ",\"retry_warning\":true";
+            
+            if (retryCount >= 2 && config) {
+                json += ",\"recommendation\":\"Consider increasing SESSION_DURATION_SECONDS (current: " + 
+                       String(config->getSessionDurationSeconds()) + "s)\"";
+            }
+        } else {
+            json += ",\"retry_warning\":false";
+        }
     }
     
     json += "}";
@@ -310,10 +425,24 @@ String TestWebServer::getCurrentTimeString() {
 
 // Helper: Get count of pending files (estimate)
 int TestWebServer::getPendingFilesCount() {
-    // This is a simplified estimate
-    // In a real implementation, we would scan the SD card
-    // For now, return 0 as placeholder
-    return 0;
+    if (!stateManager) {
+        return 0;
+    }
+    
+    // Count files in incomplete DATALOG folders
+    // Note: This requires SD card access, which we don't have here
+    // Return -1 to indicate "unknown" rather than misleading 0
+    return -1;
+}
+
+// Helper: Get count of pending DATALOG folders
+int TestWebServer::getPendingFoldersCount() {
+    if (!stateManager) {
+        return 0;
+    }
+    
+    // Get count of incomplete folders from state manager
+    return stateManager->getIncompleteFoldersCount();
 }
 
 // GET /logs - Retrieve system logs from circular buffer

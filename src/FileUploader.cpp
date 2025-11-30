@@ -217,6 +217,9 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
     LOG("[FileUploader] Phase 1: Processing DATALOG folders");
     std::vector<String> datalogFolders = scanDatalogFolders(sd);
     
+    // Update total folders count for progress tracking
+    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount());
+    
     for (const String& folderName : datalogFolders) {
         // Check if we still have budget
         if (!budgetManager->hasBudget()) {
@@ -274,6 +277,27 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
     LOG_DEBUGF("[FileUploader] Upload session complete. Files uploaded: %s", anyUploaded ? "Yes" : "No");
     
     return anyUploaded;
+}
+
+// Scan SD card for pending folders without uploading
+bool FileUploader::scanPendingFolders(SDCardManager* sdManager) {
+    LOG("[FileUploader] Scanning SD card for pending folders...");
+    
+    fs::FS &sd = sdManager->getFS();
+    
+    // Scan DATALOG folders
+    std::vector<String> datalogFolders = scanDatalogFolders(sd);
+    
+    // Update total folders count for progress tracking
+    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount());
+    
+    LOG_DEBUGF("[FileUploader] Found %d incomplete folders", datalogFolders.size());
+    LOG_DEBUGF("[FileUploader] Total folders: %d (completed: %d, pending: %d)", 
+         stateManager->getCompletedFoldersCount() + datalogFolders.size(),
+         stateManager->getCompletedFoldersCount(),
+         datalogFolders.size());
+    
+    return true;
 }
 
 // Scan DATALOG folders and sort by date (newest first)

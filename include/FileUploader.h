@@ -69,6 +69,7 @@ public:
     bool begin(fs::FS &sd);
     bool shouldUpload();
     bool uploadNewFiles(class SDCardManager* sdManager, bool forceUpload = false);
+    bool scanPendingFolders(class SDCardManager* sdManager);  // Scan SD card without uploading
     
     // Getters for internal components (for web interface access)
     UploadStateManager* getStateManager() { return stateManager; }

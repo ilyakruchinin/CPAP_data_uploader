@@ -11,7 +11,8 @@
 UploadStateManager::UploadStateManager() 
     : stateFilePath("/.upload_state.json"),
       lastUploadTimestamp(0),
-      currentRetryCount(0) {
+      currentRetryCount(0),
+      totalFoldersCount(0) {
 }
 
 bool UploadStateManager::begin(fs::FS &sd) {
@@ -150,6 +151,25 @@ void UploadStateManager::incrementCurrentRetryCount() {
 void UploadStateManager::clearCurrentRetry() {
     currentRetryFolder = "";
     currentRetryCount = 0;
+}
+
+int UploadStateManager::getCompletedFoldersCount() const {
+    return completedDatalogFolders.size();
+}
+
+int UploadStateManager::getIncompleteFoldersCount() const {
+    if (totalFoldersCount == 0) {
+        return 0;  // Not yet scanned
+    }
+    return totalFoldersCount - completedDatalogFolders.size();
+}
+
+void UploadStateManager::setTotalFoldersCount(int count) {
+    totalFoldersCount = count;
+}
+
+String UploadStateManager::getCurrentRetryFolder() const {
+    return currentRetryFolder;
 }
 
 unsigned long UploadStateManager::getLastUploadTimestamp() {

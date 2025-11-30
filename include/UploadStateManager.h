@@ -14,6 +14,7 @@ private:
     std::set<String> completedDatalogFolders;
     String currentRetryFolder;
     int currentRetryCount;
+    int totalFoldersCount;  // Total DATALOG folders found (for progress tracking)
     
     String calculateChecksum(fs::FS &sd, const String& filePath);
     bool loadState(fs::FS &sd);
@@ -31,9 +32,13 @@ public:
     // Folder-based tracking for DATALOG
     bool isFolderCompleted(const String& folderName);
     void markFolderCompleted(const String& folderName);
+    int getCompletedFoldersCount() const;
+    int getIncompleteFoldersCount() const;
+    void setTotalFoldersCount(int count);
     
     // Retry tracking (only for current folder)
     int getCurrentRetryCount();
+    String getCurrentRetryFolder() const;
     void setCurrentRetryFolder(const String& folderName);
     void incrementCurrentRetryCount();
     void clearCurrentRetry();

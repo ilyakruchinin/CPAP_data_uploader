@@ -39,6 +39,10 @@ bool SDCardManager::takeControl() {
     setControlPin(true);
     espHasControl = true;
 
+    // Wait for SD card to stabilize after control switch
+    // SD cards need time to stabilize voltage and complete internal initialization
+    delay(500);
+
     // Initialize SD_MMC
     if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {  // false = 4-bit mode
         LOG("SD card mount failed");

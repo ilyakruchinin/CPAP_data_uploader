@@ -36,6 +36,7 @@ unsigned long lastSdCardRetry = 0;
 // External trigger flags (defined in TestWebServer.cpp)
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
+extern volatile bool g_scanNowFlag;
 #endif
 
 // ============================================================================
@@ -197,6 +198,31 @@ void loop() {
         }
     }
     
+    // Check for scan trigger
+    if (g_scanNowFlag) {
+        LOG("=== SD Card Scan Triggered via Web Interface ===");
+        g_scanNowFlag = false;
+        
+        // Try to take control of SD card
+        if (sdManager.takeControl()) {
+            LOG("SD card control acquired, scanning for pending folders...");
+            
+            // Perform scan without uploading
+            if (uploader->scanPendingFolders(&sdManager)) {
+                LOG("SD card scan completed successfully");
+            } else {
+                LOG("SD card scan failed");
+            }
+            
+            // Release SD card
+            sdManager.releaseControl();
+            LOG("SD card control released");
+        } else {
+            LOG_ERROR("Cannot scan SD card - in use by CPAP");
+            LOG("Will retry on next loop iteration");
+        }
+    }
+    
     // Check for upload trigger
     if (g_triggerUploadFlag) {
         LOG("=== Upload Triggered via Web Interface ===");
@@ -223,7 +249,7 @@ void loop() {
                 LOG("Forced upload incomplete (budget exhausted or errors)");
             }
         } else {
-            LOG("ERROR: Cannot start upload - SD card in use by CPAP");
+            LOG_ERROR("Cannot start upload - SD card in use by CPAP");
             LOG("Will retry on next loop iteration");
         }
     }

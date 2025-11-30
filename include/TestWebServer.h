@@ -11,6 +11,7 @@
 // Global trigger flags for upload and state reset
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
+extern volatile bool g_scanNowFlag;
 
 class TestWebServer {
 private:
@@ -23,6 +24,7 @@ private:
     // Request handlers
     void handleRoot();
     void handleTriggerUpload();
+    void handleScanNow();
     void handleStatus();
     void handleResetState();
     void handleConfig();
@@ -33,6 +35,7 @@ private:
     String getUptimeString();
     String getCurrentTimeString();
     int getPendingFilesCount();
+    int getPendingFoldersCount();
     String escapeJson(const String& str);
 
 public:
