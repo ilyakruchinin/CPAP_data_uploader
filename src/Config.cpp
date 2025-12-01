@@ -124,7 +124,7 @@ bool Config::censorConfigFile(fs::FS &sd) {
     }
     
     // Serialize JSON to file
-    size_t bytesWritten = serializeJson(doc, configFile);
+    size_t bytesWritten = serializeJsonPretty(doc, configFile);
     configFile.close();
     
     if (bytesWritten == 0) {
