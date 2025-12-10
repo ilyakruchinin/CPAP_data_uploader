@@ -394,6 +394,7 @@ DeserializationError deserializeJson(T& doc, fs::File& file) {
                     
                     // Parse nested value
                     if (content[pos] == '"') {
+                        // String value
                         pos++;
                         std::string nestedValue;
                         while (pos < content.length() && content[pos] != '"') {
@@ -401,6 +402,21 @@ DeserializationError deserializeJson(T& doc, fs::File& file) {
                         }
                         pos++;
                         obj[nestedKey] = JsonVariant(nestedValue.c_str());
+                    } else if (content[pos] == '-' || (content[pos] >= '0' && content[pos] <= '9')) {
+                        // Numeric value
+                        std::string numStr;
+                        if (content[pos] == '-') {
+                            numStr += '-';
+                            pos++;
+                        }
+                        while (pos < content.length() && content[pos] >= '0' && content[pos] <= '9') {
+                            numStr += content[pos++];
+                        }
+                        
+                        if (!numStr.empty() && numStr != "-") {
+                            long value = std::stol(numStr);
+                            obj[nestedKey] = JsonVariant(value);
+                        }
                     }
                 }
             }
@@ -470,7 +486,13 @@ size_t serializeJson(T& doc, fs::File& file) {
         for (const auto& pair : objPair.second) {
             if (!objFirst) oss << ",";
             objFirst = false;
-            oss << "\"" << pair.first << "\":\"" << pair.second.stringValue << "\"";
+            oss << "\"" << pair.first << "\":";
+            
+            if (pair.second.isString) {
+                oss << "\"" << pair.second.stringValue << "\"";
+            } else {
+                oss << pair.second.longValue;
+            }
         }
         oss << "}";
     }

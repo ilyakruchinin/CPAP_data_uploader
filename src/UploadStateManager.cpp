@@ -26,6 +26,7 @@ bool UploadStateManager::begin(fs::FS &sd) {
         // Initialize with empty state - this is safe and allows operation to continue
         fileChecksums.clear();
         completedDatalogFolders.clear();
+        pendingDatalogFolders.clear();
         currentRetryFolder = "";
         currentRetryCount = 0;
         lastUploadTimestamp = 0;
@@ -126,6 +127,13 @@ bool UploadStateManager::isFolderCompleted(const String& folderName) {
 void UploadStateManager::markFolderCompleted(const String& folderName) {
     completedDatalogFolders.insert(folderName);
     
+    // Remove from pending state if it was pending
+    auto pendingIt = pendingDatalogFolders.find(folderName);
+    if (pendingIt != pendingDatalogFolders.end()) {
+        pendingDatalogFolders.erase(pendingIt);
+        LOG_DEBUGF("[UploadStateManager] Removed folder from pending state: %s", folderName.c_str());
+    }
+    
     // Clear retry tracking for this folder since it's now complete
     if (currentRetryFolder == folderName) {
         clearCurrentRetry();
@@ -161,11 +169,45 @@ int UploadStateManager::getIncompleteFoldersCount() const {
     if (totalFoldersCount == 0) {
         return 0;  // Not yet scanned
     }
-    return totalFoldersCount - completedDatalogFolders.size();
+    return totalFoldersCount - completedDatalogFolders.size() - pendingDatalogFolders.size();
 }
 
 void UploadStateManager::setTotalFoldersCount(int count) {
     totalFoldersCount = count;
+}
+
+bool UploadStateManager::isPendingFolder(const String& folderName) {
+    return pendingDatalogFolders.find(folderName) != pendingDatalogFolders.end();
+}
+
+void UploadStateManager::markFolderPending(const String& folderName, unsigned long timestamp) {
+    pendingDatalogFolders[folderName] = timestamp;
+    LOG_DEBUGF("[UploadStateManager] Marked folder as pending: %s (timestamp: %lu)", 
+         folderName.c_str(), timestamp);
+}
+
+bool UploadStateManager::shouldPromotePendingToCompleted(const String& folderName, unsigned long currentTime) {
+    auto it = pendingDatalogFolders.find(folderName);
+    if (it == pendingDatalogFolders.end()) {
+        return false;  // Not a pending folder
+    }
+    
+    unsigned long firstSeenTime = it->second;
+    return (currentTime - firstSeenTime) >= PENDING_FOLDER_TIMEOUT_SECONDS;
+}
+
+void UploadStateManager::promotePendingToCompleted(const String& folderName) {
+    auto it = pendingDatalogFolders.find(folderName);
+    if (it != pendingDatalogFolders.end()) {
+        pendingDatalogFolders.erase(it);
+        completedDatalogFolders.insert(folderName);
+        LOGF("[UploadStateManager] Promoted pending folder to completed: %s (empty for 7+ days)", 
+             folderName.c_str());
+    }
+}
+
+int UploadStateManager::getPendingFoldersCount() const {
+    return pendingDatalogFolders.size();
 }
 
 String UploadStateManager::getCurrentRetryFolder() const {
@@ -286,6 +328,26 @@ bool UploadStateManager::loadState(fs::FS &sd) {
         }
     }
     
+    // Load pending folders (backward compatibility - initialize empty if missing)
+    pendingDatalogFolders.clear();
+#ifdef UNIT_TEST
+    // Mock ArduinoJson uses getObject()
+    JsonObject pendingFolders = doc.getObject("pending_datalog_folders");
+    if (!pendingFolders.isNull()) {
+        for (auto it = pendingFolders.begin(); it != pendingFolders.end(); ++it) {
+            pendingDatalogFolders[String(it->first.c_str())] = it->second.as<unsigned long>();
+        }
+    }
+#else
+    // Real ArduinoJson v6 uses operator[] and JsonPair
+    JsonObject pendingFolders = doc["pending_datalog_folders"];
+    if (!pendingFolders.isNull()) {
+        for (JsonPair kv : pendingFolders) {
+            pendingDatalogFolders[String(kv.key().c_str())] = kv.value().as<unsigned long>();
+        }
+    }
+#endif
+    
     // Load retry tracking
     currentRetryFolder = doc["current_retry_folder"] | "";
     currentRetryCount = doc["current_retry_count"] | 0;
@@ -293,6 +355,7 @@ bool UploadStateManager::loadState(fs::FS &sd) {
     LOG("[UploadStateManager] State file loaded successfully");
     LOG_DEBUGF("[UploadStateManager]   Tracked files: %u", fileChecksums.size());
     LOG_DEBUGF("[UploadStateManager]   Completed folders: %u", completedDatalogFolders.size());
+    LOG_DEBUGF("[UploadStateManager]   Pending folders: %u", pendingDatalogFolders.size());
     if (!currentRetryFolder.isEmpty()) {
         LOG_DEBUGF("[UploadStateManager]   Current retry folder: %s (attempt %d)", 
              currentRetryFolder.c_str(), currentRetryCount);
@@ -303,9 +366,10 @@ bool UploadStateManager::loadState(fs::FS &sd) {
 
 bool UploadStateManager::saveState(fs::FS &sd) {
     // Calculate required JSON document size dynamically
-    // Estimate: base overhead (200) + folders (30 bytes each) + checksums (100 bytes each)
+    // Estimate: base overhead (200) + folders (30 bytes each) + pending folders (50 bytes each) + checksums (100 bytes each)
     size_t estimatedSize = 200 + 
                           (completedDatalogFolders.size() * 30) + 
+                          (pendingDatalogFolders.size() * 50) +
                           (fileChecksums.size() * 100);
     
     // Add 50% overhead for JSON formatting and safety margin
@@ -316,8 +380,8 @@ bool UploadStateManager::saveState(fs::FS &sd) {
         jsonCapacity = 4096;
     }
     
-    LOG_DEBUGF("[UploadStateManager] Allocating %u bytes for JSON document (%u folders, %u files)", 
-         jsonCapacity, completedDatalogFolders.size(), fileChecksums.size());
+    LOG_DEBUGF("[UploadStateManager] Allocating %u bytes for JSON document (%u completed, %u pending, %u files)", 
+         jsonCapacity, completedDatalogFolders.size(), pendingDatalogFolders.size(), fileChecksums.size());
     
     // Allocate JSON document with calculated capacity
     DynamicJsonDocument doc(jsonCapacity);
@@ -338,6 +402,12 @@ bool UploadStateManager::saveState(fs::FS &sd) {
     JsonArray folders = doc.createNestedArray("completed_datalog_folders");
     for (const String& folder : completedDatalogFolders) {
         folders.add(folder);
+    }
+    
+    // Save pending folders
+    JsonObject pendingFolders = doc.createNestedObject("pending_datalog_folders");
+    for (const auto& pair : pendingDatalogFolders) {
+        pendingFolders[pair.first.c_str()] = pair.second;
     }
     
     // Save retry tracking

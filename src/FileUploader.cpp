@@ -244,7 +244,7 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
     std::vector<String> datalogFolders = scanDatalogFolders(sd);
     
     // Update total folders count for progress tracking
-    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount());
+    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
     
     for (const String& folderName : datalogFolders) {
         // Check if we still have budget
@@ -331,13 +331,14 @@ bool FileUploader::scanPendingFolders(SDCardManager* sdManager) {
     std::vector<String> datalogFolders = scanDatalogFolders(sd);
     
     // Update total folders count for progress tracking
-    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount());
+    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
     
     LOG_DEBUGF("[FileUploader] Found %d incomplete folders", datalogFolders.size());
-    LOG_DEBUGF("[FileUploader] Total folders: %d (completed: %d, pending: %d)", 
-         stateManager->getCompletedFoldersCount() + datalogFolders.size(),
+    LOG_DEBUGF("[FileUploader] Total folders: %d (completed: %d, incomplete: %d, pending: %d)", 
+         stateManager->getCompletedFoldersCount() + datalogFolders.size() + stateManager->getPendingFoldersCount(),
          stateManager->getCompletedFoldersCount(),
-         datalogFolders.size());
+         datalogFolders.size(),
+         stateManager->getPendingFoldersCount());
     
     return true;
 }
@@ -373,11 +374,23 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd) {
             }
             
             // Check if folder is already completed
-            if (!stateManager->isFolderCompleted(folderName)) {
+            if (stateManager->isFolderCompleted(folderName)) {
+                LOG_DEBUGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
+            } else if (stateManager->isPendingFolder(folderName)) {
+                // Check if pending folder has timed out
+                unsigned long currentTime = time(NULL);
+                if (currentTime >= 1000000000 && stateManager->shouldPromotePendingToCompleted(folderName, currentTime)) {
+                    // Timed out pending folder - include in scan for promotion
+                    folders.push_back(folderName);
+                    LOG_DEBUGF("[FileUploader] Found timed-out pending folder: %s", folderName.c_str());
+                } else {
+                    // Still pending, skip for now
+                    LOG_DEBUGF("[FileUploader] Skipping pending folder (within 7-day window): %s", folderName.c_str());
+                }
+            } else {
+                // Regular incomplete folder
                 folders.push_back(folderName);
                 LOG_DEBUGF("[FileUploader] Found incomplete DATALOG folder: %s", folderName.c_str());
-            } else {
-                LOG_DEBUGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
             }
         }
         file.close();
@@ -609,12 +622,42 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         }
         verifyFolder.close();
         
-        // Folder is accessible but truly empty
+        // Folder is accessible but truly empty - handle with pending state
         LOG_WARN("[FileUploader] No .edf files found in folder (folder is empty)");
-        // Mark as completed even if empty
-        stateManager->markFolderCompleted(folderName);
-        stateManager->clearCurrentRetry();
-        return true;
+        
+        // Check if NTP time is valid before tracking pending folders
+        unsigned long currentTime = time(NULL);
+        if (currentTime < 1000000000) {  // Invalid NTP time (before year 2001)
+            LOG_WARN("[FileUploader] NTP time not available - cannot track empty folder timing");
+            LOG_WARN("[FileUploader] Empty folder will be rechecked in next upload session");
+            stateManager->incrementCurrentRetryCount();
+            stateManager->save(sd);
+            return false;  // Will retry when NTP is available
+        }
+        
+        // Check if folder is already in pending state
+        if (stateManager->isPendingFolder(folderName)) {
+            // Check if 7-day timeout has elapsed
+            if (stateManager->shouldPromotePendingToCompleted(folderName, currentTime)) {
+                // Promote to completed after 7 days of being empty
+                stateManager->promotePendingToCompleted(folderName);
+                stateManager->clearCurrentRetry();
+                stateManager->save(sd);
+                return true;
+            } else {
+                // Still within 7-day window, skip for now
+                LOG_DEBUGF("[FileUploader] Pending folder still within 7-day window: %s", folderName.c_str());
+                stateManager->clearCurrentRetry();
+                return true;  // Don't increment retry count
+            }
+        } else {
+            // First time seeing this empty folder - mark as pending
+            stateManager->markFolderPending(folderName, currentTime);
+            LOG_DEBUGF("[FileUploader] Marked empty folder as pending: %s", folderName.c_str());
+            stateManager->clearCurrentRetry();
+            stateManager->save(sd);
+            return true;
+        }
     }
     
     // Upload each file

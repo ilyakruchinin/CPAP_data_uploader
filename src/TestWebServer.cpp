@@ -171,7 +171,8 @@ void TestWebServer::handleRoot() {
     if (stateManager) {
         int completedFolders = stateManager->getCompletedFoldersCount();
         int incompleteFolders = stateManager->getIncompleteFoldersCount();
-        int totalFolders = completedFolders + incompleteFolders;
+        int pendingFolders = stateManager->getPendingFoldersCount();
+        int totalFolders = completedFolders + incompleteFolders + pendingFolders;
         
         if (totalFolders == 0) {
             // State not yet initialized (no upload session has run)
@@ -179,10 +180,16 @@ void TestWebServer::handleRoot() {
             html += "Not yet scanned (waiting for first upload window)</span></div>";
         } else {
             html += "<div class='info'><span class='label'>Upload Progress:</span><span class='value'>";
-            html += String(completedFolders) + " / " + String(totalFolders) + " folders completed</span></div>";
+            if (pendingFolders > 0) {
+                html += String(completedFolders) + " / " + String(totalFolders) + " folders completed, " + String(pendingFolders) + " empty</span></div>";
+            } else {
+                html += String(completedFolders) + " / " + String(totalFolders) + " folders completed</span></div>";
+            }
             
-            html += "<div class='info'><span class='label'>Pending Folders:</span><span class='value'>";
-            html += String(incompleteFolders) + "</span></div>";
+            if (incompleteFolders > 0) {
+                html += "<div class='info'><span class='label'>Incomplete Folders:</span><span class='value'>";
+                html += String(incompleteFolders) + "</span></div>";
+            }
         }
         
         // Show retry information if applicable

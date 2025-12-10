@@ -7,6 +7,7 @@ Automatically upload CPAP therapy data from your SD card to network storage. Tes
 - Secure credential storage in ESP32 flash memory (optional)
 - Respects CPAP machine access to SD card
 - Tracks uploaded files (no duplicates)
+- Smart empty folder handling (waits 7 days before marking folders complete)
 - Scheduled uploads with timezone support
 - Web interface for monitoring and testing
 - Automatic retry mechanism with progress tracking

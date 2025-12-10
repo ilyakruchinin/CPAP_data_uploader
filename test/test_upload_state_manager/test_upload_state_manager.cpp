@@ -575,6 +575,173 @@ void test_timestamp_persistence() {
     TEST_ASSERT_EQUAL(1699876800, manager2.getLastUploadTimestamp());
 }
 
+// **Feature: empty-folder-handling, Property 1: Pending folder creation with valid time**
+void test_pending_folder_creation_with_valid_time() {
+    UploadStateManager manager;
+    manager.begin(testFS);
+    
+    // Set mock time to valid NTP time
+    MockTimeState::setTime(1699876800);  // Valid timestamp
+    
+    String folderName = "20241101";
+    unsigned long timestamp = 1699876800;
+    
+    // Mark folder as pending
+    manager.markFolderPending(folderName, timestamp);
+    
+    // Verify folder is in pending state
+    TEST_ASSERT_TRUE(manager.isPendingFolder(folderName));
+    TEST_ASSERT_EQUAL(1, manager.getPendingFoldersCount());
+    TEST_ASSERT_FALSE(manager.isFolderCompleted(folderName));
+}
+
+// **Feature: empty-folder-handling, Property 2: Timeout calculation correctness**
+void test_timeout_calculation_correctness() {
+    UploadStateManager manager;
+    manager.begin(testFS);
+    
+    String folderName = "20241101";
+    unsigned long firstSeenTime = 1699876800;  // Base time
+    unsigned long sevenDaysLater = firstSeenTime + (7 * 24 * 60 * 60);  // Exactly 7 days
+    unsigned long beforeTimeout = sevenDaysLater - 1;  // 1 second before timeout
+    unsigned long afterTimeout = sevenDaysLater + 1;   // 1 second after timeout
+    
+    // Mark folder as pending
+    manager.markFolderPending(folderName, firstSeenTime);
+    
+    // Test before timeout
+    TEST_ASSERT_FALSE(manager.shouldPromotePendingToCompleted(folderName, beforeTimeout));
+    
+    // Test exactly at timeout
+    TEST_ASSERT_TRUE(manager.shouldPromotePendingToCompleted(folderName, sevenDaysLater));
+    
+    // Test after timeout
+    TEST_ASSERT_TRUE(manager.shouldPromotePendingToCompleted(folderName, afterTimeout));
+}
+
+// **Feature: empty-folder-handling, Property 3: Pending to completed promotion**
+void test_pending_to_completed_promotion() {
+    UploadStateManager manager;
+    manager.begin(testFS);
+    
+    String folderName = "20241101";
+    unsigned long timestamp = 1699876800;
+    
+    // Mark folder as pending
+    manager.markFolderPending(folderName, timestamp);
+    TEST_ASSERT_TRUE(manager.isPendingFolder(folderName));
+    TEST_ASSERT_FALSE(manager.isFolderCompleted(folderName));
+    
+    // Promote to completed
+    manager.promotePendingToCompleted(folderName);
+    
+    // Verify promotion
+    TEST_ASSERT_FALSE(manager.isPendingFolder(folderName));
+    TEST_ASSERT_TRUE(manager.isFolderCompleted(folderName));
+    TEST_ASSERT_EQUAL(0, manager.getPendingFoldersCount());
+    TEST_ASSERT_EQUAL(1, manager.getCompletedFoldersCount());
+}
+
+// **Feature: empty-folder-handling, Property 4: Pending folder with files uploads normally**
+void test_pending_folder_with_files_uploads_normally() {
+    UploadStateManager manager;
+    manager.begin(testFS);
+    
+    String folderName = "20241101";
+    unsigned long timestamp = 1699876800;
+    
+    // Mark folder as pending
+    manager.markFolderPending(folderName, timestamp);
+    TEST_ASSERT_TRUE(manager.isPendingFolder(folderName));
+    
+    // Simulate normal upload completion (folder receives files and is uploaded)
+    manager.markFolderCompleted(folderName);
+    
+    // Verify folder is completed and removed from pending
+    TEST_ASSERT_FALSE(manager.isPendingFolder(folderName));
+    TEST_ASSERT_TRUE(manager.isFolderCompleted(folderName));
+    TEST_ASSERT_EQUAL(0, manager.getPendingFoldersCount());
+}
+
+// **Feature: empty-folder-handling, Property 6: Pending state persistence round-trip**
+void test_pending_state_persistence_round_trip() {
+    UploadStateManager manager1;
+    manager1.begin(testFS);
+    
+    // Add multiple pending folders with different timestamps
+    manager1.markFolderPending("20241101", 1699876800);
+    manager1.markFolderPending("20241102", 1699963200);
+    manager1.markFolderPending("20241103", 1700049600);
+    
+    // Save state
+    TEST_ASSERT_TRUE(manager1.save(testFS));
+    
+    // Create new manager and load state
+    UploadStateManager manager2;
+    TEST_ASSERT_TRUE(manager2.begin(testFS));
+    
+    // Verify all pending folders are restored
+    TEST_ASSERT_TRUE(manager2.isPendingFolder("20241101"));
+    TEST_ASSERT_TRUE(manager2.isPendingFolder("20241102"));
+    TEST_ASSERT_TRUE(manager2.isPendingFolder("20241103"));
+    TEST_ASSERT_EQUAL(3, manager2.getPendingFoldersCount());
+    
+    // Verify timestamps are preserved (test timeout calculation)
+    TEST_ASSERT_TRUE(manager2.shouldPromotePendingToCompleted("20241101", 1699876800 + (7 * 24 * 60 * 60)));
+    TEST_ASSERT_FALSE(manager2.shouldPromotePendingToCompleted("20241101", 1699876800 + (6 * 24 * 60 * 60)));
+}
+
+// Test backward compatibility - loading old state file without pending folders field
+void test_backward_compatibility_missing_pending_field() {
+    UploadStateManager manager;
+    
+    // Create old state file without pending_datalog_folders field
+    const char* oldStateJson = R"({
+        "version": 1,
+        "last_upload_timestamp": 1699876800,
+        "file_checksums": {
+            "/identification.json": "abc123"
+        },
+        "completed_datalog_folders": ["20241101", "20241102"],
+        "current_retry_folder": "",
+        "current_retry_count": 0
+    })";
+    
+    testFS.addFile("/.upload_state.json", oldStateJson);
+    
+    // Load state
+    bool result = manager.begin(testFS);
+    
+    // Should succeed and initialize empty pending folders map
+    TEST_ASSERT_TRUE(result);
+    TEST_ASSERT_EQUAL(0, manager.getPendingFoldersCount());
+    TEST_ASSERT_TRUE(manager.isFolderCompleted("20241101"));
+    TEST_ASSERT_TRUE(manager.isFolderCompleted("20241102"));
+}
+
+// Test incomplete folders count calculation with pending folders
+void test_incomplete_folders_count_with_pending() {
+    UploadStateManager manager;
+    manager.begin(testFS);
+    
+    // Set total folders count
+    manager.setTotalFoldersCount(10);
+    
+    // Mark some folders as completed
+    manager.markFolderCompleted("20241101");
+    manager.markFolderCompleted("20241102");
+    
+    // Mark some folders as pending
+    manager.markFolderPending("20241103", 1699876800);
+    manager.markFolderPending("20241104", 1699963200);
+    
+    // Calculate incomplete count: total - completed - pending
+    // 10 - 2 - 2 = 6
+    TEST_ASSERT_EQUAL(6, manager.getIncompleteFoldersCount());
+    TEST_ASSERT_EQUAL(2, manager.getCompletedFoldersCount());
+    TEST_ASSERT_EQUAL(2, manager.getPendingFoldersCount());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     
@@ -621,6 +788,15 @@ int main(int argc, char **argv) {
     RUN_TEST(test_timestamp_initial_state);
     RUN_TEST(test_timestamp_set_and_get);
     RUN_TEST(test_timestamp_persistence);
+    
+    // Pending folder tests
+    RUN_TEST(test_pending_folder_creation_with_valid_time);
+    RUN_TEST(test_timeout_calculation_correctness);
+    RUN_TEST(test_pending_to_completed_promotion);
+    RUN_TEST(test_pending_folder_with_files_uploads_normally);
+    RUN_TEST(test_pending_state_persistence_round_trip);
+    RUN_TEST(test_backward_compatibility_missing_pending_field);
+    RUN_TEST(test_incomplete_folders_count_with_pending);
     
     return UNITY_END();
 }
