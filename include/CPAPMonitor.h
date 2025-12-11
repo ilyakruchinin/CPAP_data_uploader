@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 
-#ifdef ENABLE_TEST_WEBSERVER
+#if defined(ENABLE_TEST_WEBSERVER) && defined(ENABLE_CPAP_MONITOR)
 
 /**
  * CPAPMonitor - Monitors CPAP SD card usage patterns
@@ -11,6 +11,9 @@
  * Periodically checks if the CPAP machine is using the SD card
  * and stores the data for 24 hours. Data is stored in 10-minute
  * intervals, creating a 24-hour rolling window of usage patterns.
+ * 
+ * NOTE: Requires CS_SENSE pin functionality. Disabled by default
+ * due to hardware issues with CS_SENSE detection.
  */
 class CPAPMonitor {
 private:
@@ -38,6 +41,20 @@ public:
     String getUsageTableHTML() const;  // HTML table for web interface
 };
 
-#endif // ENABLE_TEST_WEBSERVER
+#else // !ENABLE_CPAP_MONITOR || !ENABLE_TEST_WEBSERVER
+
+// Stub implementation when CPAP monitoring is disabled
+class CPAPMonitor {
+public:
+    CPAPMonitor() {}
+    void begin() {}
+    void update() {}
+    int8_t getUsageStatus(int minutesAgo) const { return -1; }
+    int getUsagePercentage() const { return 0; }
+    String getUsageDataJSON() const { return "[]"; }
+    String getUsageTableHTML() const { return "<p>CPAP monitoring disabled (CS_SENSE hardware issue)</p>"; }
+};
+
+#endif // ENABLE_TEST_WEBSERVER && ENABLE_CPAP_MONITOR
 
 #endif // CPAP_MONITOR_H

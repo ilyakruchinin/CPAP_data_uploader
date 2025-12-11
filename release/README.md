@@ -8,6 +8,7 @@ This package contains precompiled firmware for automatically uploading CPAP data
 - Uploads once per day at a scheduled time
 - Respects CPAP machine access to the SD card (short upload sessions)
 - Tracks which files have been uploaded (no duplicates)
+- Automatically creates directories on remote shares as needed
 - **Tested with ResMed CPAP machines** (may work with other brands)
 
 **Capacity:** The firmware can track upload state for **10+ years** of daily CPAP usage (3,000+ folders). The 8GB SD WIFI PRO card can store approximately **8+ years** (3,000+ days) of CPAP data based on typical usage (~2.7 MB per day).
@@ -199,8 +200,9 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
    - DATALOG folders (newest first)
    - Root files (identification.json, STR.edf, journal.jnl)
    - SETTINGS files
-4. Releases SD card after session or time budget exhausted
-5. Saves progress to `.upload_state.json`
+4. Automatically creates directories on remote share if they don't exist
+5. Releases SD card after session or time budget exhausted
+6. Saves progress to `.upload_state.json`
 
 ### Smart File Tracking
 - **DATALOG folders**: Tracks completion (all files uploaded = done)

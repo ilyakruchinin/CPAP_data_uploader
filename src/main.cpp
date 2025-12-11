@@ -144,10 +144,15 @@ void setup() {
 
 #ifdef ENABLE_TEST_WEBSERVER
     // Initialize CPAP monitor
+#ifdef ENABLE_CPAP_MONITOR
     LOG("Initializing CPAP SD card usage monitor...");
     cpapMonitor = new CPAPMonitor();
     cpapMonitor->begin();
     LOG("CPAP monitor started - tracking SD card usage every 10 minutes");
+#else
+    LOG("CPAP monitor disabled (CS_SENSE hardware issue)");
+    cpapMonitor = new CPAPMonitor();  // Use stub implementation
+#endif
     
     // Initialize test web server for on-demand testing
     LOG("Initializing test web server...");
@@ -183,9 +188,11 @@ void setup() {
 void loop() {
 #ifdef ENABLE_TEST_WEBSERVER
     // Update CPAP monitor
+#ifdef ENABLE_CPAP_MONITOR
     if (cpapMonitor) {
         cpapMonitor->update();
     }
+#endif
     
     // Handle web server requests
     if (testWebServer) {

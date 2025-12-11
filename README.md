@@ -11,6 +11,7 @@ Automatically upload CPAP therapy data from your SD card to network storage. Tes
 - Scheduled uploads with timezone support
 - Web interface for monitoring and testing
 - Automatic retry mechanism with progress tracking
+- Automatic directory creation on remote shares
 
 ## For End Users
 
@@ -18,7 +19,6 @@ Automatically upload CPAP therapy data from your SD card to network storage. Tes
 
 ### Known issues
 - Sometimes the CPAP machine will complain about SD card not working. This is likely caused by CPAP machine attempting to access the SD card at the same time as our firmware. When this happens just reinsert the SD card.
-- The upload doesn't create the DATALOG folder. We are tracking this issue. To prevent this issue, copy the data of the SD card into the destination folder or manually create the DATALOG folder.
 
 👉 [Download Latest Release](../../releases) (includes upload tools for Windows, Mac, and Linux)
 
@@ -130,15 +130,16 @@ The device respects your CPAP machine's need for SD card access by keeping uploa
 
 ## Project Status
 
-**Current Version:** v0.3.2 (development)
+**Current Version:** v0.3.3 (development)
 
 **Status:** ✅ Production Ready
 - Hardware tested and validated
 - Integration tested with real CPAP data
-- All unit tests passing (131 tests)
+- All unit tests passing (145 tests)
 - SMB/CIFS upload fully implemented
 - Web interface remains responsive during uploads
 - Automatic retry mechanism with progress tracking
+- Automatic directory creation verified and working
 
 **Supported Upload Methods:**
 - ✅ SMB/CIFS (Windows shares, NAS, Samba)

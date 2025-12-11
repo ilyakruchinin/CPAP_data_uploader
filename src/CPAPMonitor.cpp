@@ -1,6 +1,6 @@
 #include "CPAPMonitor.h"
 
-#ifdef ENABLE_TEST_WEBSERVER
+#if defined(ENABLE_TEST_WEBSERVER) && defined(ENABLE_CPAP_MONITOR)
 
 #include "Logger.h"
 #include "pins_config.h"
@@ -197,4 +197,4 @@ String CPAPMonitor::getUsageTableHTML() const {
     return html;
 }
 
-#endif // ENABLE_TEST_WEBSERVER
+#endif // ENABLE_TEST_WEBSERVER && ENABLE_CPAP_MONITOR

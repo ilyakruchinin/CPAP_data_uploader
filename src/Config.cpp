@@ -123,8 +123,13 @@ bool Config::censorConfigFile(fs::FS &sd) {
         return false;
     }
     
-    // Serialize JSON to file
-    size_t bytesWritten = serializeJsonPretty(doc, configFile);
+    // Serialize JSON to file (pretty printed)
+    // Use serializeJsonPretty if available (ArduinoJson 6.19+), otherwise use serializeJson
+    #if ARDUINOJSON_VERSION_MAJOR >= 6 && ARDUINOJSON_VERSION_MINOR >= 19
+        size_t bytesWritten = serializeJsonPretty(doc, configFile);
+    #else
+        size_t bytesWritten = serializeJson(doc, configFile);
+    #endif
     configFile.close();
     
     if (bytesWritten == 0) {
