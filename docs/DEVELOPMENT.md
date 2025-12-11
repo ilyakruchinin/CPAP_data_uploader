@@ -146,18 +146,39 @@ The project works with:
 
 ## Building
 
-### Quick Build & Upload
+### Quick Build & Upload Script
+
+The `build_upload.sh` script supports separate build and upload steps:
 
 ```bash
+# Build and upload (default)
 ./build_upload.sh
+
+# Build only (no sudo required)
+./build_upload.sh build
+
+# Upload only (requires sudo, must build first)
+./build_upload.sh upload
+
+# Upload to specific port
+./build_upload.sh upload /dev/ttyUSB0
+
+# Show help
+./build_upload.sh --help
 ```
+
+**Benefits of separate steps:**
+- Build without sudo (faster development)
+- Upload only when needed (saves time)
+- Specify custom serial ports
+- Better error isolation
 
 ### Manual Build
 
 ```bash
 source venv/bin/activate
 pio run -e pico32              # Build only
-pio run -e pico32 -t upload    # Build and upload
+sudo pio run -e pico32 -t upload    # Upload (requires sudo)
 ```
 
 ### Build Targets
@@ -350,12 +371,14 @@ To add a new backend (e.g., FTP):
 ```bash
 # Development
 ./setup.sh                     # Initial setup
+./build_upload.sh build        # Build only (no sudo)
+./build_upload.sh upload       # Upload only (requires sudo)
 ./build_upload.sh              # Build and upload
 ./monitor.sh                   # Serial monitor
 
 # PlatformIO
 pio run                        # Build
-pio run -t upload              # Upload
+sudo pio run -t upload         # Upload (requires sudo)
 pio run -t clean               # Clean
 pio test -e native             # Run tests
 pio device list                # List serial ports
