@@ -106,6 +106,62 @@ By default, the system stores WiFi and endpoint passwords securely in ESP32 flas
 
 For production use, always use secure mode (default). Use plain text mode only for development or debugging.
 
+### Updating Configuration
+
+If you need to change WiFi credentials, endpoint settings, or other configuration after initial setup:
+
+**Method: Update Config File and Restart**
+1. Update `config.json` on SD card with new settings
+2. **Important**: Enter credentials in plain text (not censored)
+3. Power cycle the device (unplug and plug back in)
+4. Device will automatically:
+   - **Prioritize new credentials** from `config.json` over stored ones
+   - Connect to new WiFi network if credentials changed
+   - Apply new endpoint settings immediately
+   - Migrate new credentials to secure storage (if enabled)
+   - Update `config.json` with censored placeholders
+
+**How It Works:**
+- **Individual credential priority**: Each credential (WiFi, endpoint) is handled independently
+- **Config file priority**: Plain text credentials in `config.json` always take precedence over stored ones
+- **Automatic detection**: Device detects new credentials and uses them immediately
+- **Partial updates supported**: Update just WiFi password, just endpoint password, or both
+- **Secure migration**: New credentials are automatically migrated to flash memory
+
+**Example Update Process:**
+```json
+// Before: config.json has mixed state (user wants to update WiFi only)
+{
+  "WIFI_SSID": "NewNetwork",
+  "WIFI_PASS": "***STORED_IN_FLASH***",
+  "ENDPOINT": "//server/share", 
+  "ENDPOINT_PASS": "***STORED_IN_FLASH***"
+}
+
+// Update: Replace only WiFi password with new plain text credential
+{
+  "WIFI_SSID": "NewNetwork",
+  "WIFI_PASS": "newwifipassword123",
+  "ENDPOINT": "//server/share",
+  "ENDPOINT_PASS": "***STORED_IN_FLASH***"
+}
+
+// After restart: Device uses new WiFi password, keeps stored endpoint password
+// WiFi password gets migrated and re-censored in config file
+```
+
+**Important Notes:**
+- Always use plain text credentials when updating (not `***STORED_IN_FLASH***`)
+- Device automatically detects and prioritizes config file credentials
+- Upload state and progress are preserved across configuration changes
+- Check serial output for configuration loading status and connection results
+
+**Troubleshooting:**
+- If WiFi connection fails, verify credentials and network availability
+- If device doesn't detect changes, ensure credentials are in plain text format
+- Use `"STORE_CREDENTIALS_PLAIN_TEXT": true` to keep credentials visible for debugging
+- Serial output shows detailed credential loading and migration process
+
 
 
 ## How It Works

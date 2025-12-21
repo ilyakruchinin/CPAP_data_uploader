@@ -326,59 +326,55 @@ bool Config::loadFromSD(fs::FS &sd) {
             bool wifiCensored = isCensored(configWifiPass);
             bool endpointCensored = isCensored(configEndpointPass);
             
-            if (wifiCensored && endpointCensored) {
-                // Both credentials are censored - load from Preferences
-                LOG_DEBUG("Credentials are censored in config.json");
-                LOG_DEBUG("Loading credentials from flash memory (Preferences)...");
-                
-                wifiPassword = loadCredential(PREFS_KEY_WIFI_PASS, "");
-                endpointPassword = loadCredential(PREFS_KEY_ENDPOINT_PASS, "");
-                credentialsInFlash = true;
-                
-                LOG_DEBUG("Credentials loaded from flash memory");
-                LOG("Credential storage: SECURE (flash memory)");
-                
-            } else if (!wifiCensored && !endpointCensored) {
-                // Credentials are NOT censored - trigger migration
-                LOG("Credentials are in plain text in config.json");
-                LOG("Migration to secure storage required");
-                
-                // Temporarily store plain text credentials
+            // PRIORITY: Always use config file credentials if they are not censored
+            // Handle each credential individually - users can update one or both
+            
+            LOG_DEBUG("Processing credentials individually...");
+            LOGF("WiFi password censored: %s", wifiCensored ? "YES" : "NO");
+            LOGF("Endpoint password censored: %s", endpointCensored ? "YES" : "NO");
+            
+            // Handle WiFi password
+            if (!wifiCensored && !configWifiPass.isEmpty()) {
+                LOG("Using WiFi password from config.json (user provided new credential)");
                 wifiPassword = configWifiPass;
+            } else if (wifiCensored) {
+                LOG("Loading WiFi password from flash memory (censored in config)");
+                wifiPassword = loadCredential(PREFS_KEY_WIFI_PASS, "");
+            } else {
+                LOG_WARN("WiFi password is empty in config.json");
+                wifiPassword = "";
+            }
+            
+            // Handle endpoint password
+            if (!endpointCensored && !configEndpointPass.isEmpty()) {
+                LOG("Using endpoint password from config.json (user provided new credential)");
                 endpointPassword = configEndpointPass;
-                
-                // Attempt migration
+            } else if (endpointCensored) {
+                LOG("Loading endpoint password from flash memory (censored in config)");
+                endpointPassword = loadCredential(PREFS_KEY_ENDPOINT_PASS, "");
+            } else {
+                LOG_WARN("Endpoint password is empty in config.json");
+                endpointPassword = "";
+            }
+            
+            // Determine if we have any credentials in flash
+            credentialsInFlash = (wifiCensored || endpointCensored);
+            
+            // Check if user provided any new credentials that need migration
+            bool hasNewWifiCred = (!wifiCensored && !configWifiPass.isEmpty());
+            bool hasNewEndpointCred = (!endpointCensored && !configEndpointPass.isEmpty());
+            
+            if (hasNewWifiCred || hasNewEndpointCred) {
+                // Attempt migration of new credentials
                 if (migrateToSecureStorage(sd)) {
-                    LOG("Migration successful - credentials now in flash memory");
+                    LOG("New credentials migrated to secure storage successfully");
                     credentialsInFlash = true;
                 } else {
-                    LOG_ERROR("Migration failed - continuing with plain text credentials");
-                    LOG_WARN("Credentials remain in plain text in config.json");
-                    credentialsInFlash = false;
+                    LOG_WARN("Migration failed - new credentials will remain in plain text");
                 }
-                
-            } else {
-                // Mixed state - some censored, some not (unexpected)
-                LOG_WARN("Mixed credential state detected");
-                LOGF("WiFi password censored: %s", wifiCensored ? "YES" : "NO");
-                LOGF("Endpoint password censored: %s", endpointCensored ? "YES" : "NO");
-                LOG("Loading available credentials from both sources");
-                
-                // Load from appropriate source for each credential
-                if (wifiCensored) {
-                    wifiPassword = loadCredential(PREFS_KEY_WIFI_PASS, configWifiPass);
-                } else {
-                    wifiPassword = configWifiPass;
-                }
-                
-                if (endpointCensored) {
-                    endpointPassword = loadCredential(PREFS_KEY_ENDPOINT_PASS, configEndpointPass);
-                } else {
-                    endpointPassword = configEndpointPass;
-                }
-                
-                credentialsInFlash = (wifiCensored || endpointCensored);
-                LOG_WARN("Consider re-migrating to ensure consistent credential storage");
+            } else if (wifiCensored && endpointCensored) {
+                LOG("All credentials loaded from secure flash memory");
+                LOG("Credential storage: SECURE (flash memory)");
             }
         }
     }

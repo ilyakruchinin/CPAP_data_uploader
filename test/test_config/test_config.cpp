@@ -676,6 +676,230 @@ void test_config_endpoint_only_secure() {
     TEST_ASSERT_EQUAL_STRING("EndpointOnlyPassword", config.getEndpointPassword().c_str());
 }
 
+// ============================================================================
+// INDIVIDUAL CREDENTIAL UPDATE TESTS
+// ============================================================================
+
+// Test updating only WiFi password (endpoint remains censored)
+void test_config_update_wifi_only() {
+    // First, create initial config and let it migrate to secure storage
+    std::string initialConfig = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "OriginalWiFiPass",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_PASS": "OriginalEndpointPass"
+    })";
+    
+    mockSD.addFile("/config.json", initialConfig);
+    
+    {
+        Config config1;
+        bool loaded1 = config1.loadFromSD(mockSD);
+        TEST_ASSERT_TRUE(loaded1);
+        // Let migration happen and config file get censored
+    }
+    
+    // Now simulate user updating only WiFi password in config.json
+    std::string updatedConfig = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "NewWiFiPassword123",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_PASS": "***STORED_IN_FLASH***"
+    })";
+    
+    mockSD.clear();
+    mockSD.addFile("/config.json", updatedConfig);
+    
+    Config config2;
+    bool loaded2 = config2.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE_MESSAGE(loaded2, "Config should load successfully");
+    TEST_ASSERT_TRUE_MESSAGE(config2.valid(), "Config should be valid");
+    
+    // Should use new WiFi password from config, stored endpoint password from flash
+    TEST_ASSERT_EQUAL_STRING("NewWiFiPassword123", config2.getWifiPassword().c_str());
+    TEST_ASSERT_EQUAL_STRING("OriginalEndpointPass", config2.getEndpointPassword().c_str());
+    TEST_ASSERT_TRUE_MESSAGE(config2.areCredentialsInFlash(), "Should have credentials in flash");
+}
+
+// Test updating only endpoint password (WiFi remains censored)
+void test_config_update_endpoint_only() {
+    // First, create initial config and let it migrate to secure storage
+    std::string initialConfig = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "OriginalWiFiPass",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_PASS": "OriginalEndpointPass"
+    })";
+    
+    mockSD.addFile("/config.json", initialConfig);
+    
+    {
+        Config config1;
+        bool loaded1 = config1.loadFromSD(mockSD);
+        TEST_ASSERT_TRUE(loaded1);
+        // Let migration happen and config file get censored
+    }
+    
+    // Now simulate user updating only endpoint password in config.json
+    std::string updatedConfig = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "***STORED_IN_FLASH***",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_PASS": "NewEndpointPassword456"
+    })";
+    
+    mockSD.clear();
+    mockSD.addFile("/config.json", updatedConfig);
+    
+    Config config2;
+    bool loaded2 = config2.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE_MESSAGE(loaded2, "Config should load successfully");
+    TEST_ASSERT_TRUE_MESSAGE(config2.valid(), "Config should be valid");
+    
+    // Should use stored WiFi password from flash, new endpoint password from config
+    TEST_ASSERT_EQUAL_STRING("OriginalWiFiPass", config2.getWifiPassword().c_str());
+    TEST_ASSERT_EQUAL_STRING("NewEndpointPassword456", config2.getEndpointPassword().c_str());
+    TEST_ASSERT_TRUE_MESSAGE(config2.areCredentialsInFlash(), "Should have credentials in flash");
+}
+
+// Test updating both credentials (both plain text in config)
+void test_config_update_both_credentials() {
+    // First, create initial config and let it migrate to secure storage
+    std::string initialConfig = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "OriginalWiFiPass",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_PASS": "OriginalEndpointPass"
+    })";
+    
+    mockSD.addFile("/config.json", initialConfig);
+    
+    {
+        Config config1;
+        bool loaded1 = config1.loadFromSD(mockSD);
+        TEST_ASSERT_TRUE(loaded1);
+        // Let migration happen and config file get censored
+    }
+    
+    // Now simulate user updating both passwords in config.json
+    std::string updatedConfig = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "NewWiFiPassword123",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_PASS": "NewEndpointPassword456"
+    })";
+    
+    mockSD.clear();
+    mockSD.addFile("/config.json", updatedConfig);
+    
+    Config config2;
+    bool loaded2 = config2.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE_MESSAGE(loaded2, "Config should load successfully");
+    TEST_ASSERT_TRUE_MESSAGE(config2.valid(), "Config should be valid");
+    
+    // Should use both new passwords from config
+    TEST_ASSERT_EQUAL_STRING("NewWiFiPassword123", config2.getWifiPassword().c_str());
+    TEST_ASSERT_EQUAL_STRING("NewEndpointPassword456", config2.getEndpointPassword().c_str());
+    TEST_ASSERT_TRUE_MESSAGE(config2.areCredentialsInFlash(), "Should have credentials in flash after migration");
+}
+
+// Test mixed state: WiFi password new, endpoint censored (starting from fresh)
+void test_config_mixed_state_wifi_new() {
+    // Pre-populate Preferences with endpoint password
+    {
+        Preferences prefs;
+        prefs.begin("cpap_creds", false);
+        prefs.putString("endpoint_pass", "StoredEndpointPass");
+        prefs.end();
+    }
+    
+    std::string mixedConfig = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "NewWiFiPassword",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_PASS": "***STORED_IN_FLASH***"
+    })";
+    
+    mockSD.addFile("/config.json", mixedConfig);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE_MESSAGE(loaded, "Config should load successfully");
+    TEST_ASSERT_TRUE_MESSAGE(config.valid(), "Config should be valid");
+    
+    // Should use new WiFi password from config, stored endpoint password from flash
+    TEST_ASSERT_EQUAL_STRING("NewWiFiPassword", config.getWifiPassword().c_str());
+    TEST_ASSERT_EQUAL_STRING("StoredEndpointPass", config.getEndpointPassword().c_str());
+    TEST_ASSERT_TRUE_MESSAGE(config.areCredentialsInFlash(), "Should have credentials in flash");
+}
+
+// Test mixed state: endpoint password new, WiFi censored (starting from fresh)
+void test_config_mixed_state_endpoint_new() {
+    // Pre-populate Preferences with WiFi password
+    {
+        Preferences prefs;
+        prefs.begin("cpap_creds", false);
+        prefs.putString("wifi_pass", "StoredWiFiPass");
+        prefs.end();
+    }
+    
+    std::string mixedConfig = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "***STORED_IN_FLASH***",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_PASS": "NewEndpointPassword"
+    })";
+    
+    mockSD.addFile("/config.json", mixedConfig);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE_MESSAGE(loaded, "Config should load successfully");
+    TEST_ASSERT_TRUE_MESSAGE(config.valid(), "Config should be valid");
+    
+    // Should use stored WiFi password from flash, new endpoint password from config
+    TEST_ASSERT_EQUAL_STRING("StoredWiFiPass", config.getWifiPassword().c_str());
+    TEST_ASSERT_EQUAL_STRING("NewEndpointPassword", config.getEndpointPassword().c_str());
+    TEST_ASSERT_TRUE_MESSAGE(config.areCredentialsInFlash(), "Should have credentials in flash");
+}
+
+// Test mixed state: both passwords new (overriding stored ones)
+void test_config_mixed_state_both_new() {
+    // Pre-populate Preferences with old passwords (should be overridden)
+    {
+        Preferences prefs;
+        prefs.begin("cpap_creds", false);
+        prefs.putString("wifi_pass", "OldStoredWiFiPass");
+        prefs.putString("endpoint_pass", "OldStoredEndpointPass");
+        prefs.end();
+    }
+    
+    std::string mixedConfig = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "NewWiFiPassword",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_PASS": "NewEndpointPassword"
+    })";
+    
+    mockSD.addFile("/config.json", mixedConfig);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE_MESSAGE(loaded, "Config should load successfully");
+    TEST_ASSERT_TRUE_MESSAGE(config.valid(), "Config should be valid");
+    
+    // Should use new passwords from config (prioritized over stored ones)
+    TEST_ASSERT_EQUAL_STRING("NewWiFiPassword", config.getWifiPassword().c_str());
+    TEST_ASSERT_EQUAL_STRING("NewEndpointPassword", config.getEndpointPassword().c_str());
+    TEST_ASSERT_TRUE_MESSAGE(config.areCredentialsInFlash(), "Should have credentials in flash after migration");
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     
@@ -713,6 +937,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_config_multiple_instances);
     RUN_TEST(test_config_wifi_only_secure);
     RUN_TEST(test_config_endpoint_only_secure);
+    
+    // Individual credential update tests
+    RUN_TEST(test_config_update_wifi_only);
+    RUN_TEST(test_config_update_endpoint_only);
+    RUN_TEST(test_config_update_both_credentials);
+    RUN_TEST(test_config_mixed_state_wifi_new);
+    RUN_TEST(test_config_mixed_state_endpoint_new);
+    RUN_TEST(test_config_mixed_state_both_new);
     
     return UNITY_END();
 }
