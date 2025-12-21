@@ -478,6 +478,7 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
     const char* rootFiles[] = {
         "/Identification.json",
         "/Identification.crc",
+        "/Identification.tgt",
         "/STR.edf",
         "/journal.jnl"
     };
