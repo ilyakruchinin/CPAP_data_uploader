@@ -49,10 +49,6 @@ private:
     void handleOTAUpload();
     void handleOTAUploadComplete();
     void handleOTAURL();
-    void handleOTAStatus();
-    
-    // OTA progress callback
-    static void otaProgressCallback(size_t written, size_t total);
 #endif
     
     // Helper methods

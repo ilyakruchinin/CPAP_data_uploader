@@ -58,7 +58,6 @@ bool TestWebServer::begin() {
                [this]() { this->handleOTAUploadComplete(); },
                [this]() { this->handleOTAUpload(); });
     server->on("/ota-url", HTTP_POST, [this]() { this->handleOTAURL(); });
-    server->on("/ota-status", [this]() { this->handleOTAStatus(); });
 #endif
     
     // Handle common browser requests silently
@@ -658,13 +657,6 @@ void TestWebServer::setOTAManager(OTAManager* ota) {
     otaManager = ota;
 }
 
-// Static progress callback for OTA
-void TestWebServer::otaProgressCallback(size_t written, size_t total) {
-    // This is called from OTA context, just log progress
-    float progress = (float(written) / float(total)) * 100.0;
-    LOG_DEBUGF("[OTA] Progress: %.1f%% (%u/%u bytes)", progress, written, total);
-}
-
 // GET /ota - OTA update page
 void TestWebServer::handleOTAPage() {
     String html = "<!DOCTYPE html><html><head>";
@@ -686,9 +678,6 @@ void TestWebServer::handleOTAPage() {
     html += ".form-group { margin: 15px 0; }";
     html += ".form-group label { display: block; margin-bottom: 5px; font-weight: bold; }";
     html += ".form-group input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }";
-    html += ".progress-container { margin: 20px 0; display: none; }";
-    html += ".progress-bar { width: 100%; height: 20px; background: #f0f0f0; border-radius: 10px; overflow: hidden; }";
-    html += ".progress-fill { height: 100%; background: #0066cc; width: 0%; transition: width 0.3s; }";
     html += ".warning { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 15px 0; }";
     html += ".error { background: #f8d7da; border: 1px solid #f5c6cb; padding: 15px; border-radius: 4px; margin: 15px 0; }";
     html += ".success { background: #d4edda; border: 1px solid #c3e6cb; padding: 15px; border-radius: 4px; margin: 15px 0; }";
@@ -710,12 +699,6 @@ void TestWebServer::handleOTAPage() {
         html += "<div class='warning'>";
         html += "<h3>Update in Progress</h3>";
         html += "<p>A firmware update is currently in progress. Please wait for it to complete.</p>";
-        html += "<div class='progress-container' style='display: block;'>";
-        html += "<div class='progress-bar'>";
-        html += "<div class='progress-fill' style='width: " + String(otaManager->getProgress()) + "%;'></div>";
-        html += "</div>";
-        html += "<p>Progress: " + String(otaManager->getProgress(), 1) + "%</p>";
-        html += "</div>";
         html += "</div>";
     } else {
         // Warning message
@@ -738,6 +721,7 @@ void TestWebServer::handleOTAPage() {
         html += "<input type='file' id='firmwareFile' name='firmware' accept='.bin' required>";
         html += "</div>";
         html += "<button type='submit' class='button'>Upload & Install</button>";
+        html += "<span id='uploadStatus' style='margin-left: 10px; color: #0066cc;'></span>";
         html += "</form>";
         
         // URL download method
@@ -748,17 +732,8 @@ void TestWebServer::handleOTAPage() {
         html += "<input type='url' id='firmwareURL' name='url' placeholder='https://example.com/firmware.bin' required>";
         html += "</div>";
         html += "<button type='submit' class='button'>Download & Install</button>";
+        html += "<span id='downloadStatus' style='margin-left: 10px; color: #0066cc;'></span>";
         html += "</form>";
-        
-        // Progress display
-        html += "<div class='progress-container' id='progressContainer'>";
-        html += "<h3>Update Progress</h3>";
-        html += "<div class='progress-bar'>";
-        html += "<div class='progress-fill' id='progressFill'></div>";
-        html += "</div>";
-        html += "<p id='progressText'>0%</p>";
-        html += "<p id='statusText'>Preparing...</p>";
-        html += "</div>";
         
         // Result display
         html += "<div id='resultContainer'></div>";
@@ -772,7 +747,6 @@ void TestWebServer::handleOTAPage() {
     // JavaScript for handling uploads
     html += "<script>";
     html += "let updateInProgress = false;";
-    html += "let progressInterval;";
     
     // File upload handler
     html += "document.getElementById('uploadForm').addEventListener('submit', function(e) {";
@@ -795,7 +769,7 @@ void TestWebServer::handleOTAPage() {
     // Upload function
     html += "function uploadFirmware(file) {";
     html += "  updateInProgress = true;";
-    html += "  showProgress();";
+    html += "  document.getElementById('uploadStatus').textContent = 'Uploading firmware...';";
     html += "  const formData = new FormData();";
     html += "  formData.append('firmware', file);";
     html += "  fetch('/ota-upload', { method: 'POST', body: formData })";
@@ -807,7 +781,7 @@ void TestWebServer::handleOTAPage() {
     // Download function
     html += "function downloadFirmware(url) {";
     html += "  updateInProgress = true;";
-    html += "  showProgress();";
+    html += "  document.getElementById('downloadStatus').textContent = 'Downloading firmware...';";
     html += "  const formData = new FormData();";
     html += "  formData.append('url', url);";
     html += "  fetch('/ota-url', { method: 'POST', body: formData })";
@@ -816,43 +790,24 @@ void TestWebServer::handleOTAPage() {
     html += "    .catch(error => handleError('Download failed: ' + error));";
     html += "}";
     
-    // Progress monitoring
-    html += "function showProgress() {";
-    html += "  document.getElementById('progressContainer').style.display = 'block';";
-    html += "  progressInterval = setInterval(updateProgress, 1000);";
-    html += "}";
-    
-    html += "function updateProgress() {";
-    html += "  fetch('/ota-status')";
-    html += "    .then(response => response.json())";
-    html += "    .then(data => {";
-    html += "      if (data.in_progress) {";
-    html += "        document.getElementById('progressFill').style.width = data.progress + '%';";
-    html += "        document.getElementById('progressText').textContent = data.progress.toFixed(1) + '%';";
-    html += "        document.getElementById('statusText').textContent = 'Installing firmware...';";
-    html += "      } else {";
-    html += "        clearInterval(progressInterval);";
-    html += "        updateInProgress = false;";
-    html += "      }";
-    html += "    });";
-    html += "}";
-    
     // Result handlers
     html += "function handleResult(data) {";
-    html += "  clearInterval(progressInterval);";
     html += "  updateInProgress = false;";
+    html += "  document.getElementById('uploadStatus').textContent = '';";
+    html += "  document.getElementById('downloadStatus').textContent = '';";
     html += "  const container = document.getElementById('resultContainer');";
     html += "  if (data.success) {";
-    html += "    container.innerHTML = '<div class=\"success\"><h3>Update Successful!</h3><p>' + data.message + '</p></div>';";
-    html += "    setTimeout(() => { window.location.href = '/'; }, 5000);";
+    html += "    container.innerHTML = '<div class=\"success\"><h3>Update Successful!</h3><p>' + data.message + '</p><p>Redirecting to status page in 60 seconds...</p></div>';";
+    html += "    setTimeout(() => { window.location.href = '/'; }, 60000);";
     html += "  } else {";
     html += "    container.innerHTML = '<div class=\"error\"><h3>Update Failed</h3><p>' + data.message + '</p></div>';";
     html += "  }";
     html += "}";
     
     html += "function handleError(message) {";
-    html += "  clearInterval(progressInterval);";
     html += "  updateInProgress = false;";
+    html += "  document.getElementById('uploadStatus').textContent = '';";
+    html += "  document.getElementById('downloadStatus').textContent = '';";
     html += "  document.getElementById('resultContainer').innerHTML = '<div class=\"error\"><h3>Error</h3><p>' + message + '</p></div>';";
     html += "}";
     
@@ -865,6 +820,7 @@ void TestWebServer::handleOTAPage() {
 // POST /ota-upload - Handle firmware file upload
 void TestWebServer::handleOTAUpload() {
     static bool uploadError = false;
+    static bool successResponseSent = false;
     static unsigned long lastUploadAttempt = 0;
     
     LOG_DEBUG("[OTA] handleOTAUpload() called");
@@ -898,6 +854,7 @@ void TestWebServer::handleOTAUpload() {
         lastUploadAttempt = now;
         
         uploadError = false;
+        successResponseSent = false;
         
         if (upload.totalSize == 0) {
             LOG_WARN("[OTA] Total size is 0, using chunked upload mode");
@@ -910,8 +867,6 @@ void TestWebServer::handleOTAUpload() {
         }
         
         LOG_DEBUG("[OTA] Update started successfully");
-        // Set progress callback
-        otaManager->setProgressCallback(otaProgressCallback);
         
     } else if (upload.status == UPLOAD_FILE_WRITE) {
         LOG_DEBUGF("[OTA] UPLOAD_FILE_WRITE - currentSize: %u, uploadError: %s", 
@@ -936,7 +891,10 @@ void TestWebServer::handleOTAUpload() {
         
         if (otaManager->finishUpdate()) {
             LOG("[OTA] Update completed successfully, restarting...");
-            // Don't send response here, let the device restart
+            // Send success response before restarting
+            server->send(200, "application/json", "{\"success\":true,\"message\":\"Update completed! Device will restart in 3 seconds.\"}");
+            successResponseSent = true;
+            
             // Restart after a short delay
             delay(3000);
             ESP.restart();
@@ -967,22 +925,18 @@ void TestWebServer::handleOTAUploadComplete() {
     
     // This is called after the upload is complete
     // The actual upload processing happens in handleOTAUpload()
-    // Here we just send the final response
+    // Here we just send the final response if one hasn't been sent already
     
-    if (otaManager->isUpdateInProgress()) {
-        // Update is still in progress, this shouldn't happen
-        LOG_WARN("[OTA] Update still in progress after upload complete");
-        server->send(202, "application/json", "{\"success\":true,\"message\":\"Upload received, processing...\"}");
+    // Check if there was an error during upload
+    String error = otaManager->getLastError();
+    if (!error.isEmpty()) {
+        LOG_ERROR("[OTA] Upload completed with error");
+        server->send(500, "application/json", "{\"success\":false,\"message\":\"Upload failed: " + error + "\"}");
     } else {
-        // Check if there was an error during upload
-        String error = otaManager->getLastError();
-        if (!error.isEmpty()) {
-            LOG_ERROR("[OTA] Upload completed with error");
-            server->send(500, "application/json", "{\"success\":false,\"message\":\"Upload failed: " + error + "\"}");
-        } else {
-            LOG_DEBUG("[OTA] Upload completed successfully");
-            server->send(200, "application/json", "{\"success\":true,\"message\":\"Upload completed successfully\"}");
-        }
+        // If we reach here and there's no error, it means the update was successful
+        // but the device hasn't restarted yet (which shouldn't normally happen)
+        LOG_DEBUG("[OTA] Upload completed successfully");
+        server->send(200, "application/json", "{\"success\":true,\"message\":\"Upload completed successfully! Device will restart shortly.\"}");
     }
 }
 
@@ -1006,9 +960,6 @@ void TestWebServer::handleOTAURL() {
     String url = server->arg("url");
     LOG_DEBUGF("[OTA] Starting download from URL: %s", url.c_str());
     
-    // Set progress callback
-    otaManager->setProgressCallback(otaProgressCallback);
-    
     if (otaManager->updateFromURL(url)) {
         LOG("[OTA] Update completed successfully, restarting...");
         server->send(200, "application/json", "{\"success\":true,\"message\":\"Update completed! Device will restart in 3 seconds.\"}");
@@ -1023,27 +974,4 @@ void TestWebServer::handleOTAURL() {
     }
 }
 
-// GET /ota-status - Get OTA progress status
-void TestWebServer::handleOTAStatus() {
-    String json = "{";
-    
-    if (otaManager) {
-        json += "\"in_progress\":" + String(otaManager->isUpdateInProgress() ? "true" : "false") + ",";
-        json += "\"progress\":" + String(otaManager->getProgress()) + ",";
-        json += "\"bytes_written\":" + String(otaManager->getBytesWritten()) + ",";
-        json += "\"total_size\":" + String(otaManager->getTotalSize()) + ",";
-        json += "\"current_version\":\"" + otaManager->getCurrentVersion() + "\"";
-    } else {
-        json += "\"in_progress\":false,";
-        json += "\"progress\":0,";
-        json += "\"bytes_written\":0,";
-        json += "\"total_size\":0,";
-        json += "\"current_version\":\"unknown\"";
-    }
-    
-    json += "}";
-    
-    server->sendHeader("Access-Control-Allow-Origin", "*");
-    server->send(200, "application/json", json);
-}
 #endif // ENABLE_OTA_UPDATES
