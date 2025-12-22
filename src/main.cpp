@@ -5,6 +5,11 @@
 #include "FileUploader.h"
 #include "Logger.h"
 #include "pins_config.h"
+#include "version.h"
+
+#ifdef ENABLE_OTA_UPDATES
+#include "OTAManager.h"
+#endif
 
 #ifdef ENABLE_TEST_WEBSERVER
 #include "TestWebServer.h"
@@ -18,6 +23,10 @@ Config config;
 SDCardManager sdManager;
 WiFiManager wifiManager;
 FileUploader* uploader = nullptr;
+
+#ifdef ENABLE_OTA_UPDATES
+OTAManager otaManager;
+#endif
 
 #ifdef ENABLE_TEST_WEBSERVER
 TestWebServer* testWebServer = nullptr;
@@ -61,6 +70,9 @@ void setup() {
     
     delay(1000);
     LOG("\n\n=== CPAP Data Auto-Uploader ===");
+    LOGF("Firmware Version: %s", FIRMWARE_VERSION);
+    LOGF("Build Info: %s", BUILD_INFO);
+    LOGF("Build Time: %s", FIRMWARE_BUILD_TIME);
 
     // Initialize SD card control
     if (!sdManager.begin()) {
@@ -122,6 +134,18 @@ void setup() {
         return;
     }
     
+#ifdef ENABLE_OTA_UPDATES
+    // Initialize OTA manager
+    LOG("Initializing OTA manager...");
+    if (!otaManager.begin()) {
+        LOG_ERROR("Failed to initialize OTA manager");
+        return;
+    }
+    otaManager.setCurrentVersion(VERSION_STRING);
+    LOG("OTA manager initialized successfully");
+    LOGF("OTA Version: %s", VERSION_STRING);
+#endif
+    
     // Synchronize time with NTP server
     LOG("Synchronizing time with NTP server...");
     // The ScheduleManager handles NTP sync internally during begin()
@@ -168,6 +192,12 @@ void setup() {
     if (testWebServer->begin()) {
         LOG("Test web server started successfully");
         LOGF("Access web interface at: http://%s", wifiManager.getIPAddress().c_str());
+        
+#ifdef ENABLE_OTA_UPDATES
+        // Set OTA manager reference in web server
+        testWebServer->setOTAManager(&otaManager);
+        LOG_DEBUG("OTA manager linked to web server");
+#endif
         
         // Set web server reference in uploader for responsive handling during uploads
         if (uploader) {

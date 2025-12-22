@@ -11,8 +11,10 @@ NC='\033[0m'
 
 # Configuration
 RELEASE_DIR="release"
-BUILD_DIR=".pio/build/pico32"
-FIRMWARE_BIN="$BUILD_DIR/firmware.bin"
+BUILD_DIR_STANDARD=".pio/build/pico32"
+BUILD_DIR_OTA=".pio/build/pico32-ota"
+FIRMWARE_BIN_STANDARD="$BUILD_DIR_STANDARD/firmware.bin"
+FIRMWARE_BIN_OTA="$BUILD_DIR_OTA/firmware.bin"
 
 # Get version from git tag (latest tag on current commit)
 GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
@@ -43,11 +45,42 @@ ESPTOOL_WIN="$RELEASE_DIR/esptool.exe"
 
 echo -e "${GREEN}Preparing release package...${NC}"
 
-# Check if firmware exists
-if [ ! -f "$FIRMWARE_BIN" ]; then
-    echo -e "${YELLOW}Firmware not found. Building...${NC}"
+# Generate version header
+echo -e "${YELLOW}Generating version information...${NC}"
+python3 scripts/generate_version.py include/version.h
+
+# Build both firmware targets
+echo -e "${YELLOW}Building firmware targets...${NC}"
+
+# Check if virtual environment exists and activate it
+if [ -d "venv" ]; then
     source venv/bin/activate
-    pio run -e pico32
+    echo "Activated virtual environment"
+fi
+
+# Build standard firmware (no OTA)
+echo "Building standard firmware (pico32)..."
+if ! pio run -e pico32; then
+    echo -e "${RED}Failed to build standard firmware${NC}"
+    exit 1
+fi
+
+# Build OTA firmware
+echo "Building OTA firmware (pico32-ota)..."
+if ! pio run -e pico32-ota; then
+    echo -e "${RED}Failed to build OTA firmware${NC}"
+    exit 1
+fi
+
+# Check if firmware files exist
+if [ ! -f "$FIRMWARE_BIN_STANDARD" ]; then
+    echo -e "${RED}Standard firmware not found: $FIRMWARE_BIN_STANDARD${NC}"
+    exit 1
+fi
+
+if [ ! -f "$FIRMWARE_BIN_OTA" ]; then
+    echo -e "${RED}OTA firmware not found: $FIRMWARE_BIN_OTA${NC}"
+    exit 1
 fi
 
 # Check if esptool.exe exists for Windows package
@@ -67,9 +100,11 @@ fi
 TEMP_DIR="$RELEASE_DIR/$RELEASE_NAME"
 mkdir -p "$TEMP_DIR"
 
-# Copy firmware
-echo "Copying firmware..."
-cp "$FIRMWARE_BIN" "$TEMP_DIR/"
+# Copy firmware files with descriptive names
+echo "Copying firmware files..."
+cp "$FIRMWARE_BIN_OTA" "$TEMP_DIR/firmware.bin"  # Default to OTA firmware
+cp "$FIRMWARE_BIN_OTA" "$TEMP_DIR/firmware-ota.bin"
+cp "$FIRMWARE_BIN_STANDARD" "$TEMP_DIR/firmware-standard.bin"
 
 # Copy upload scripts
 echo "Copying upload tools..."
@@ -103,7 +138,9 @@ rm -rf "$TEMP_DIR"
 echo -e "${GREEN}Release package created: $RELEASE_DIR/$RELEASE_PACKAGE${NC}"
 echo ""
 echo "Package contents:"
-echo "  - firmware.bin (precompiled firmware)"
+echo "  - firmware.bin (OTA-enabled firmware - default)"
+echo "  - firmware-ota.bin (OTA-enabled firmware with web updates)"
+echo "  - firmware-standard.bin (standard firmware, 3MB app space)"
 echo "  - upload.sh (macOS/Linux upload script)"
 echo "  - upload.bat (Windows upload script)"
 if [ -f "$ESPTOOL_WIN" ]; then
@@ -112,3 +149,7 @@ fi
 echo "  - README.md (usage instructions)"
 echo "  - requirements.txt (Python dependencies for macOS/Linux)"
 echo "  - config.json.example (configuration template)"
+echo ""
+echo -e "${GREEN}Firmware sizes:${NC}"
+echo "  Standard: $(du -h "$FIRMWARE_BIN_STANDARD" | cut -f1) (3MB partition)"
+echo "  OTA:      $(du -h "$FIRMWARE_BIN_OTA" | cut -f1) (1.5MB partition)"

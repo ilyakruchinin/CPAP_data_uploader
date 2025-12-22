@@ -18,6 +18,9 @@ dependencies.lock
 sdkconfig*
 compile_commands.json
 
+# Auto-generated files
+include/version.h
+
 # Temporary files
 *.tmp
 *.bak

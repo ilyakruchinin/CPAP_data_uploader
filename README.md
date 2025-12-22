@@ -4,6 +4,7 @@ Automatically upload CPAP therapy data from your SD card to network storage. Tes
 
 **Features:**
 - Automatic daily uploads to Windows shares, NAS, or Samba servers
+- **Over-The-Air (OTA) firmware updates** via web interface
 - Secure credential storage in ESP32 flash memory (optional)
 - Respects CPAP machine access to SD card
 - Tracks uploaded files (no duplicates)
@@ -163,6 +164,56 @@ If you need to change WiFi credentials, endpoint settings, or other configuratio
 - Serial output shows detailed credential loading and migration process
 
 
+
+## Build Targets
+
+The project supports two build configurations:
+
+### **Standard Build** (`pico32`)
+```bash
+pio run -e pico32
+```
+- **3MB app space** (maximum firmware size)
+- **No OTA support** - updates require physical access
+- **Best for**: Development, maximum feature space, or when OTA is not needed
+
+### **OTA-Enabled Build** (`pico32-ota`)  
+```bash
+pio run -e pico32-ota
+```
+- **1.5MB app space** per partition (2 partitions for OTA)
+- **Web-based firmware updates** via `/ota` interface
+- **Best for**: Production deployments requiring remote updates
+
+### **Size Comparison:**
+| Build Type | Firmware Size | Available Space | OTA Support |
+|------------|---------------|-----------------|-------------|
+| `pico32`   | ~1.08MB      | 3MB            | ❌          |
+| `pico32-ota` | ~1.24MB    | 1.5MB          | ✅          |
+
+Both builds include the same core functionality - the only difference is OTA capability and partition layout.
+
+## Firmware Updates
+
+### **OTA Updates** (pico32-ota build only)
+
+The OTA-enabled build supports **Over-The-Air (OTA) updates** through the web interface:
+
+1. **Access the web interface** at `http://[device-ip]/ota`
+2. **Choose update method:**
+   - **File Upload**: Select and upload a `.bin` firmware file
+   - **URL Download**: Enter a URL to download firmware from
+3. **Monitor progress** - Update takes 1-2 minutes
+4. **Device restarts automatically** when complete
+
+**⚠️ Important**: Ensure stable WiFi connection and do not power off during updates.
+
+### **Manual Updates** (both builds)
+
+For devices without OTA support or when OTA fails:
+1. Download firmware from [Releases page](../../releases)
+2. Use esptool.py or PlatformIO to upload via USB/Serial
+3. Follow instructions in the release package
 
 ## How It Works
 

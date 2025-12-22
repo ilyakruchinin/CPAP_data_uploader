@@ -7,6 +7,8 @@ REM Configuration
 set CHIP=esp32
 set BAUD_RATE=460800
 set FIRMWARE_FILE=firmware.bin
+set FIRMWARE_OTA=firmware-ota.bin
+set FIRMWARE_STANDARD=firmware-standard.bin
 set FLASH_OFFSET=0x10000
 set ESPTOOL=esptool.exe
 
@@ -18,9 +20,17 @@ if "%~1"=="" (
     echo.
     echo Error: Serial port not specified
     echo.
-    echo Usage: %~nx0 ^<COM_PORT^>
+    echo Usage: %~nx0 ^<COM_PORT^> [firmware_type]
     echo.
-    echo Example: %~nx0 COM3
+    echo Examples: 
+    echo   %~nx0 COM3
+    echo   %~nx0 COM3 ota
+    echo   %~nx0 COM3 standard
+    echo.
+    echo Firmware options:
+    echo   ^(default^)  - OTA firmware with web update capability
+    echo   ota        - OTA firmware with web update capability  
+    echo   standard   - Standard firmware ^(3MB app space, no OTA^)
     echo.
     echo ========================================
     echo How to find your COM port:
@@ -49,6 +59,32 @@ if "%~1"=="" (
 )
 
 set PORT=%~1
+set FIRMWARE_TYPE=%~2
+
+REM Default to OTA firmware if no type specified
+if "%FIRMWARE_TYPE%"=="" set FIRMWARE_TYPE=ota
+
+REM Select firmware file based on type
+if /i "%FIRMWARE_TYPE%"=="ota" (
+    if exist "%FIRMWARE_OTA%" (
+        set FIRMWARE_FILE=%FIRMWARE_OTA%
+    )
+    set FIRMWARE_DESC=OTA-enabled ^(web updates supported^)
+) else if /i "%FIRMWARE_TYPE%"=="standard" (
+    if exist "%FIRMWARE_STANDARD%" (
+        set FIRMWARE_FILE=%FIRMWARE_STANDARD%
+    ) else (
+        echo Error: Standard firmware file '%FIRMWARE_STANDARD%' not found
+        pause
+        exit /b 1
+    )
+    set FIRMWARE_DESC=Standard ^(3MB app space, no OTA^)
+) else (
+    echo Error: Invalid firmware type '%FIRMWARE_TYPE%'
+    echo Valid options: ota, standard
+    pause
+    exit /b 1
+)
 
 REM Check if firmware file exists
 if not exist "%FIRMWARE_FILE%" (
@@ -70,6 +106,7 @@ echo Uploading firmware to ESP32...
 echo ========================================
 echo Port: %PORT%
 echo Firmware: %FIRMWARE_FILE%
+echo Type: %FIRMWARE_DESC%
 echo Baud rate: %BAUD_RATE%
 echo.
 

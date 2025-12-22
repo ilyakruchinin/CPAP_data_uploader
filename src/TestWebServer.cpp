@@ -21,7 +21,11 @@ TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
       budgetManager(budget),
       scheduleManager(schedule),
       wifiManager(wifi),
-      cpapMonitor(monitor) {
+      cpapMonitor(monitor)
+#ifdef ENABLE_OTA_UPDATES
+      , otaManager(nullptr)
+#endif
+{
 }
 
 // Destructor
@@ -46,6 +50,14 @@ bool TestWebServer::begin() {
     server->on("/reset-state", [this]() { this->handleResetState(); });
     server->on("/config", [this]() { this->handleConfig(); });
     server->on("/logs", [this]() { this->handleLogs(); });
+    
+#ifdef ENABLE_OTA_UPDATES
+    // OTA handlers
+    server->on("/ota", [this]() { this->handleOTAPage(); });
+    server->on("/ota-upload", HTTP_POST, [this]() { this->handleOTAUpload(); });
+    server->on("/ota-url", HTTP_POST, [this]() { this->handleOTAURL(); });
+    server->on("/ota-status", [this]() { this->handleOTAStatus(); });
+#endif
     
     // Handle common browser requests silently
     server->on("/favicon.ico", [this]() { 
@@ -269,6 +281,9 @@ void TestWebServer::handleRoot() {
     html += "<a href='/status' class='button'>View JSON Status</a>";
     html += "<a href='/config' class='button'>View Full Config</a>";
     html += "<a href='/logs' class='button'>View System Logs</a>";
+#ifdef ENABLE_OTA_UPDATES
+    html += "<a href='/ota' class='button'>Firmware Update</a>";
+#endif
     html += "<a href='/reset-state' class='button danger' onclick='return confirm(\"Are you sure you want to reset upload state?\")'>Reset Upload State</a>";
     
     html += "</div></body></html>";
@@ -634,3 +649,329 @@ String TestWebServer::escapeJson(const String& str) {
     
     return escaped;
 }
+
+#ifdef ENABLE_OTA_UPDATES
+// Set OTA manager reference
+void TestWebServer::setOTAManager(OTAManager* ota) {
+    otaManager = ota;
+}
+
+// Static progress callback for OTA
+void TestWebServer::otaProgressCallback(size_t written, size_t total) {
+    // This is called from OTA context, just log progress
+    float progress = (float(written) / float(total)) * 100.0;
+    LOG_DEBUGF("[OTA] Progress: %.1f%% (%u/%u bytes)", progress, written, total);
+}
+
+// GET /ota - OTA update page
+void TestWebServer::handleOTAPage() {
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<title>Firmware Update - CPAP Auto-Uploader</title>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<style>";
+    html += "body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }";
+    html += "h1 { color: #333; }";
+    html += "h2 { color: #666; margin-top: 30px; }";
+    html += ".container { background: white; padding: 20px; border-radius: 8px; max-width: 800px; }";
+    html += ".info { margin: 10px 0; }";
+    html += ".label { font-weight: bold; display: inline-block; width: 200px; }";
+    html += ".value { color: #0066cc; }";
+    html += ".button { display: inline-block; padding: 10px 20px; margin: 10px 5px; ";
+    html += "background: #0066cc; color: white; text-decoration: none; border-radius: 4px; border: none; cursor: pointer; }";
+    html += ".button:hover { background: #0052a3; }";
+    html += ".button.danger { background: #cc0000; }";
+    html += ".button.danger:hover { background: #a30000; }";
+    html += ".form-group { margin: 15px 0; }";
+    html += ".form-group label { display: block; margin-bottom: 5px; font-weight: bold; }";
+    html += ".form-group input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }";
+    html += ".progress-container { margin: 20px 0; display: none; }";
+    html += ".progress-bar { width: 100%; height: 20px; background: #f0f0f0; border-radius: 10px; overflow: hidden; }";
+    html += ".progress-fill { height: 100%; background: #0066cc; width: 0%; transition: width 0.3s; }";
+    html += ".warning { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 15px 0; }";
+    html += ".error { background: #f8d7da; border: 1px solid #f5c6cb; padding: 15px; border-radius: 4px; margin: 15px 0; }";
+    html += ".success { background: #d4edda; border: 1px solid #c3e6cb; padding: 15px; border-radius: 4px; margin: 15px 0; }";
+    html += "</style>";
+    html += "</head><body>";
+    html += "<div class='container'>";
+    html += "<h1>Firmware Update</h1>";
+    
+    // Current version info
+    html += "<h2>Current Firmware</h2>";
+    if (otaManager) {
+        html += "<div class='info'><span class='label'>Version:</span><span class='value'>" + otaManager->getCurrentVersion() + "</span></div>";
+    } else {
+        html += "<div class='info'><span class='label'>Version:</span><span class='value'>Unknown</span></div>";
+    }
+    
+    // Check if update is in progress
+    if (otaManager && otaManager->isUpdateInProgress()) {
+        html += "<div class='warning'>";
+        html += "<h3>Update in Progress</h3>";
+        html += "<p>A firmware update is currently in progress. Please wait for it to complete.</p>";
+        html += "<div class='progress-container' style='display: block;'>";
+        html += "<div class='progress-bar'>";
+        html += "<div class='progress-fill' style='width: " + String(otaManager->getProgress()) + "%;'></div>";
+        html += "</div>";
+        html += "<p>Progress: " + String(otaManager->getProgress(), 1) + "%</p>";
+        html += "</div>";
+        html += "</div>";
+    } else {
+        // Warning message
+        html += "<div class='warning'>";
+        html += "<h3>⚠️ Important Warning</h3>";
+        html += "<ul>";
+        html += "<li><strong>Do not power off</strong> the device during update</li>";
+        html += "<li><strong>Ensure stable WiFi</strong> connection before starting</li>";
+        html += "<li><strong>Remove SD card</strong> from CPAP machine during update</li>";
+        html += "<li>Update process takes 1-2 minutes</li>";
+        html += "<li>Device will restart automatically when complete</li>";
+        html += "</ul>";
+        html += "</div>";
+        
+        // File upload method
+        html += "<h2>Method 1: Upload Firmware File</h2>";
+        html += "<form id='uploadForm' enctype='multipart/form-data'>";
+        html += "<div class='form-group'>";
+        html += "<label for='firmwareFile'>Select firmware file (.bin):</label>";
+        html += "<input type='file' id='firmwareFile' name='firmware' accept='.bin' required>";
+        html += "</div>";
+        html += "<button type='submit' class='button'>Upload & Install</button>";
+        html += "</form>";
+        
+        // URL download method
+        html += "<h2>Method 2: Download from URL</h2>";
+        html += "<form id='urlForm'>";
+        html += "<div class='form-group'>";
+        html += "<label for='firmwareURL'>Firmware URL:</label>";
+        html += "<input type='url' id='firmwareURL' name='url' placeholder='https://example.com/firmware.bin' required>";
+        html += "</div>";
+        html += "<button type='submit' class='button'>Download & Install</button>";
+        html += "</form>";
+        
+        // Progress display
+        html += "<div class='progress-container' id='progressContainer'>";
+        html += "<h3>Update Progress</h3>";
+        html += "<div class='progress-bar'>";
+        html += "<div class='progress-fill' id='progressFill'></div>";
+        html += "</div>";
+        html += "<p id='progressText'>0%</p>";
+        html += "<p id='statusText'>Preparing...</p>";
+        html += "</div>";
+        
+        // Result display
+        html += "<div id='resultContainer'></div>";
+    }
+    
+    html += "<h2>Navigation</h2>";
+    html += "<a href='/' class='button'>Back to Status</a>";
+    
+    html += "</div>";
+    
+    // JavaScript for handling uploads
+    html += "<script>";
+    html += "let updateInProgress = false;";
+    html += "let progressInterval;";
+    
+    // File upload handler
+    html += "document.getElementById('uploadForm').addEventListener('submit', function(e) {";
+    html += "  e.preventDefault();";
+    html += "  if (updateInProgress) return;";
+    html += "  const fileInput = document.getElementById('firmwareFile');";
+    html += "  if (!fileInput.files[0]) { alert('Please select a file'); return; }";
+    html += "  uploadFirmware(fileInput.files[0]);";
+    html += "});";
+    
+    // URL download handler
+    html += "document.getElementById('urlForm').addEventListener('submit', function(e) {";
+    html += "  e.preventDefault();";
+    html += "  if (updateInProgress) return;";
+    html += "  const url = document.getElementById('firmwareURL').value;";
+    html += "  if (!url) { alert('Please enter a URL'); return; }";
+    html += "  downloadFirmware(url);";
+    html += "});";
+    
+    // Upload function
+    html += "function uploadFirmware(file) {";
+    html += "  updateInProgress = true;";
+    html += "  showProgress();";
+    html += "  const formData = new FormData();";
+    html += "  formData.append('firmware', file);";
+    html += "  fetch('/ota-upload', { method: 'POST', body: formData })";
+    html += "    .then(response => response.json())";
+    html += "    .then(data => handleResult(data))";
+    html += "    .catch(error => handleError('Upload failed: ' + error));";
+    html += "}";
+    
+    // Download function
+    html += "function downloadFirmware(url) {";
+    html += "  updateInProgress = true;";
+    html += "  showProgress();";
+    html += "  const formData = new FormData();";
+    html += "  formData.append('url', url);";
+    html += "  fetch('/ota-url', { method: 'POST', body: formData })";
+    html += "    .then(response => response.json())";
+    html += "    .then(data => handleResult(data))";
+    html += "    .catch(error => handleError('Download failed: ' + error));";
+    html += "}";
+    
+    // Progress monitoring
+    html += "function showProgress() {";
+    html += "  document.getElementById('progressContainer').style.display = 'block';";
+    html += "  progressInterval = setInterval(updateProgress, 1000);";
+    html += "}";
+    
+    html += "function updateProgress() {";
+    html += "  fetch('/ota-status')";
+    html += "    .then(response => response.json())";
+    html += "    .then(data => {";
+    html += "      if (data.in_progress) {";
+    html += "        document.getElementById('progressFill').style.width = data.progress + '%';";
+    html += "        document.getElementById('progressText').textContent = data.progress.toFixed(1) + '%';";
+    html += "        document.getElementById('statusText').textContent = 'Installing firmware...';";
+    html += "      } else {";
+    html += "        clearInterval(progressInterval);";
+    html += "        updateInProgress = false;";
+    html += "      }";
+    html += "    });";
+    html += "}";
+    
+    // Result handlers
+    html += "function handleResult(data) {";
+    html += "  clearInterval(progressInterval);";
+    html += "  updateInProgress = false;";
+    html += "  const container = document.getElementById('resultContainer');";
+    html += "  if (data.success) {";
+    html += "    container.innerHTML = '<div class=\"success\"><h3>Update Successful!</h3><p>' + data.message + '</p></div>';";
+    html += "    setTimeout(() => { window.location.href = '/'; }, 5000);";
+    html += "  } else {";
+    html += "    container.innerHTML = '<div class=\"error\"><h3>Update Failed</h3><p>' + data.message + '</p></div>';";
+    html += "  }";
+    html += "}";
+    
+    html += "function handleError(message) {";
+    html += "  clearInterval(progressInterval);";
+    html += "  updateInProgress = false;";
+    html += "  document.getElementById('resultContainer').innerHTML = '<div class=\"error\"><h3>Error</h3><p>' + message + '</p></div>';";
+    html += "}";
+    
+    html += "</script>";
+    html += "</body></html>";
+    
+    server->send(200, "text/html", html);
+}
+
+// POST /ota-upload - Handle firmware file upload
+void TestWebServer::handleOTAUpload() {
+    if (!otaManager) {
+        server->send(500, "application/json", "{\"success\":false,\"message\":\"OTA manager not initialized\"}");
+        return;
+    }
+    
+    if (otaManager->isUpdateInProgress()) {
+        server->send(400, "application/json", "{\"success\":false,\"message\":\"Update already in progress\"}");
+        return;
+    }
+    
+    HTTPUpload& upload = server->upload();
+    
+    if (upload.status == UPLOAD_FILE_START) {
+        LOG_DEBUGF("[OTA] Starting file upload: %s", upload.filename.c_str());
+        
+        if (!otaManager->startUpdate(upload.totalSize)) {
+            LOG_ERROR("[OTA] Failed to start update");
+            server->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to start update\"}");
+            return;
+        }
+        
+        // Set progress callback
+        otaManager->setProgressCallback(otaProgressCallback);
+        
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (!otaManager->writeChunk(upload.buf, upload.currentSize)) {
+            LOG_ERROR("[OTA] Failed to write chunk");
+            server->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to write firmware data\"}");
+            return;
+        }
+        
+    } else if (upload.status == UPLOAD_FILE_END) {
+        if (otaManager->finishUpdate()) {
+            LOG("[OTA] Update completed successfully, restarting...");
+            server->send(200, "application/json", "{\"success\":true,\"message\":\"Update completed! Device will restart in 3 seconds.\"}");
+            
+            // Restart after a short delay
+            delay(3000);
+            ESP.restart();
+        } else {
+            LOG_ERROR("[OTA] Failed to finish update");
+            String error = otaManager->getLastError();
+            server->send(500, "application/json", "{\"success\":false,\"message\":\"Update failed: " + error + "\"}");
+        }
+        
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+        LOG_WARN("[OTA] Upload aborted");
+        otaManager->abortUpdate();
+        server->send(400, "application/json", "{\"success\":false,\"message\":\"Upload aborted\"}");
+    }
+}
+
+// POST /ota-url - Handle firmware download from URL
+void TestWebServer::handleOTAURL() {
+    if (!otaManager) {
+        server->send(500, "application/json", "{\"success\":false,\"message\":\"OTA manager not initialized\"}");
+        return;
+    }
+    
+    if (otaManager->isUpdateInProgress()) {
+        server->send(400, "application/json", "{\"success\":false,\"message\":\"Update already in progress\"}");
+        return;
+    }
+    
+    if (!server->hasArg("url")) {
+        server->send(400, "application/json", "{\"success\":false,\"message\":\"URL parameter required\"}");
+        return;
+    }
+    
+    String url = server->arg("url");
+    LOG_DEBUGF("[OTA] Starting download from URL: %s", url.c_str());
+    
+    // Set progress callback
+    otaManager->setProgressCallback(otaProgressCallback);
+    
+    if (otaManager->updateFromURL(url)) {
+        LOG("[OTA] Update completed successfully, restarting...");
+        server->send(200, "application/json", "{\"success\":true,\"message\":\"Update completed! Device will restart in 3 seconds.\"}");
+        
+        // Restart after a short delay
+        delay(3000);
+        ESP.restart();
+    } else {
+        LOG_ERROR("[OTA] Failed to update from URL");
+        String error = otaManager->getLastError();
+        server->send(500, "application/json", "{\"success\":false,\"message\":\"Update failed: " + error + "\"}");
+    }
+}
+
+// GET /ota-status - Get OTA progress status
+void TestWebServer::handleOTAStatus() {
+    String json = "{";
+    
+    if (otaManager) {
+        json += "\"in_progress\":" + String(otaManager->isUpdateInProgress() ? "true" : "false") + ",";
+        json += "\"progress\":" + String(otaManager->getProgress()) + ",";
+        json += "\"bytes_written\":" + String(otaManager->getBytesWritten()) + ",";
+        json += "\"total_size\":" + String(otaManager->getTotalSize()) + ",";
+        json += "\"current_version\":\"" + otaManager->getCurrentVersion() + "\"";
+    } else {
+        json += "\"in_progress\":false,";
+        json += "\"progress\":0,";
+        json += "\"bytes_written\":0,";
+        json += "\"total_size\":0,";
+        json += "\"current_version\":\"unknown\"";
+    }
+    
+    json += "}";
+    
+    server->sendHeader("Access-Control-Allow-Origin", "*");
+    server->send(200, "application/json", json);
+}
+#endif // ENABLE_OTA_UPDATES

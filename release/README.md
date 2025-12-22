@@ -15,6 +15,35 @@ This package contains precompiled firmware for automatically uploading CPAP data
 
 ---
 
+## Firmware Options
+
+This package includes two firmware versions:
+
+### **OTA Firmware** (Recommended - Default)
+- **File:** `firmware.bin` or `firmware-ota.bin`
+- **Features:** Web-based firmware updates via `/ota` interface
+- **Partition:** 1.5MB app space (dual OTA partitions)
+- **Best for:** Production use, remote deployments
+- **Update method:** Upload new firmware via web browser
+
+### **Standard Firmware**
+- **File:** `firmware-standard.bin`
+- **Features:** Maximum app space, no OTA capability
+- **Partition:** 3MB app space
+- **Best for:** Development, maximum feature space
+- **Update method:** USB/Serial upload only
+
+**Default:** The upload scripts use OTA firmware by default. To use standard firmware:
+```bash
+# Windows
+upload.bat COM3 standard
+
+# macOS/Linux
+./upload.sh /dev/ttyUSB0 standard
+```
+
+---
+
 ## Quick Start
 
 ### 1. Upload Firmware
@@ -285,6 +314,13 @@ The firmware includes an optional test web server for development and troublesho
 - Shows recent log messages from circular buffer
 - Useful for troubleshooting
 
+**Firmware Update** (`http://<device-ip>/ota`) - OTA firmware only
+- Upload new firmware via web browser
+- Download firmware from URL
+- Real-time progress monitoring
+- Automatic device restart after update
+- **⚠️ Important:** Ensure stable WiFi and do not power off during updates
+
 ### Security Warning
 ⚠️ The web server has no authentication. Only use on trusted networks.
 
@@ -450,7 +486,11 @@ If the upload scripts don't work, you can use esptool directly:
 
 ### Windows
 ```cmd
+REM OTA firmware (default)
 esptool.exe --chip esp32 --port COM3 --baud 460800 write_flash 0x10000 firmware.bin
+
+REM Standard firmware
+esptool.exe --chip esp32 --port COM3 --baud 460800 write_flash 0x10000 firmware-standard.bin
 ```
 
 ### macOS/Linux
@@ -458,8 +498,11 @@ esptool.exe --chip esp32 --port COM3 --baud 460800 write_flash 0x10000 firmware.
 # Install esptool
 pip install esptool
 
-# Upload firmware
+# OTA firmware (default)
 esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x10000 firmware.bin
+
+# Standard firmware
+esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x10000 firmware-standard.bin
 ```
 
 ---

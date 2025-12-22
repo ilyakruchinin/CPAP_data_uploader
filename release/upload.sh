@@ -15,18 +15,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Configuration
 CHIP="esp32"
 BAUD_RATE="460800"
-FIRMWARE_FILE="$SCRIPT_DIR/firmware.bin"
+FIRMWARE_FILE="$SCRIPT_DIR/firmware.bin"  # Defaults to OTA firmware
+FIRMWARE_OTA="$SCRIPT_DIR/firmware-ota.bin"
+FIRMWARE_STANDARD="$SCRIPT_DIR/firmware-standard.bin"
 FLASH_OFFSET="0x10000"
 VENV_DIR="$SCRIPT_DIR/.venv"
 
 # Check if port is provided
 if [ -z "$1" ]; then
     echo -e "${RED}Error: Serial port not specified${NC}"
-    echo "Usage: $0 <serial_port>"
+    echo "Usage: $0 <serial_port> [firmware_type]"
     echo ""
     echo "Examples:"
     echo "  macOS:  $0 /dev/cu.usbserial-0001"
     echo "  Linux:  $0 /dev/ttyUSB0"
+    echo ""
+    echo "Firmware options:"
+    echo "  (default)  - OTA firmware with web update capability"
+    echo "  ota        - OTA firmware with web update capability"
+    echo "  standard   - Standard firmware (3MB app space, no OTA)"
+    echo ""
+    echo "Examples with firmware type:"
+    echo "  $0 /dev/ttyUSB0 ota"
+    echo "  $0 /dev/ttyUSB0 standard"
     echo ""
     echo "Available ports:"
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -38,6 +49,31 @@ if [ -z "$1" ]; then
 fi
 
 PORT="$1"
+FIRMWARE_TYPE="${2:-ota}"  # Default to OTA firmware
+
+# Select firmware file based on type
+case "$FIRMWARE_TYPE" in
+    "ota")
+        if [ -f "$FIRMWARE_OTA" ]; then
+            FIRMWARE_FILE="$FIRMWARE_OTA"
+        fi
+        FIRMWARE_DESC="OTA-enabled (web updates supported)"
+        ;;
+    "standard")
+        if [ -f "$FIRMWARE_STANDARD" ]; then
+            FIRMWARE_FILE="$FIRMWARE_STANDARD"
+        else
+            echo -e "${RED}Error: Standard firmware file '$FIRMWARE_STANDARD' not found${NC}"
+            exit 1
+        fi
+        FIRMWARE_DESC="Standard (3MB app space, no OTA)"
+        ;;
+    *)
+        echo -e "${RED}Error: Invalid firmware type '$FIRMWARE_TYPE'${NC}"
+        echo "Valid options: ota, standard"
+        exit 1
+        ;;
+esac
 
 # Check if firmware file exists
 if [ ! -f "$FIRMWARE_FILE" ]; then
@@ -71,6 +107,7 @@ fi
 echo -e "${GREEN}Uploading firmware to ESP32...${NC}"
 echo "Port: $PORT"
 echo "Firmware: $FIRMWARE_FILE"
+echo "Type: $FIRMWARE_DESC"
 echo "Baud rate: $BAUD_RATE"
 echo ""
 

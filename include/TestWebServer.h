@@ -10,6 +10,10 @@
 #include "WiFiManager.h"
 #include "CPAPMonitor.h"
 
+#ifdef ENABLE_OTA_UPDATES
+#include "OTAManager.h"
+#endif
+
 // Global trigger flags for upload and state reset
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
@@ -25,6 +29,10 @@ private:
     WiFiManager* wifiManager;
     CPAPMonitor* cpapMonitor;
     
+#ifdef ENABLE_OTA_UPDATES
+    OTAManager* otaManager;
+#endif
+    
     // Request handlers
     void handleRoot();
     void handleTriggerUpload();
@@ -34,6 +42,17 @@ private:
     void handleConfig();
     void handleLogs();
     void handleNotFound();
+    
+#ifdef ENABLE_OTA_UPDATES
+    // OTA handlers
+    void handleOTAPage();
+    void handleOTAUpload();
+    void handleOTAURL();
+    void handleOTAStatus();
+    
+    // OTA progress callback
+    static void otaProgressCallback(size_t written, size_t total);
+#endif
     
     // Helper methods
     String getUptimeString();
@@ -54,6 +73,11 @@ public:
     // Update manager references (needed after uploader recreation)
     void updateManagers(UploadStateManager* state, TimeBudgetManager* budget, ScheduleManager* schedule);
     void setWiFiManager(WiFiManager* wifi);
+    
+#ifdef ENABLE_OTA_UPDATES
+    // OTA manager access
+    void setOTAManager(OTAManager* ota);
+#endif
 };
 
 #endif // TEST_WEB_SERVER_H
