@@ -49,8 +49,8 @@ bool TestWebServer::begin() {
     
     // Handle common browser requests silently
     server->on("/favicon.ico", [this]() { 
-        // Return empty 204 No Content to avoid error logs
-        server->send(204); 
+        // Return empty 204 No Content with proper content type
+        server->send(204, "text/plain", ""); 
     });
     
     server->onNotFound([this]() { this->handleNotFound(); });
