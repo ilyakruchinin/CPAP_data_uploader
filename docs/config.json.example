@@ -1,35 +1,15 @@
 {
-  "_comment_wifi": "=== WIFI CONFIGURATION ===",
   "WIFI_SSID": "YourNetworkName",
   "WIFI_PASS": "YourNetworkPassword",
 
-  "_comment_endpoint": "=== UPLOAD ENDPOINT CONFIGURATION ===",
   "ENDPOINT": "//192.168.1.100/cpap_backups",
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
-
-  "_comment_schedule": "=== UPLOAD SCHEDULE ===",
-  "_comment_schedule_1": "UPLOAD_HOUR: Hour of day (0-23) to perform daily upload",
   "UPLOAD_HOUR": 12,
 
-  "_comment_timing": "=== TIMING CONFIGURATION ===",
-  "_comment_timing_1": "SESSION_DURATION_SECONDS: Max active upload time per session (default: 30)",
-  "_comment_timing_2": "MAX_RETRY_ATTEMPTS: Upload retry attempts before giving up (default: 3)",
-  "_comment_timing_3": "BOOT_DELAY_SECONDS: Wait time before first SD access (default: 30)",
-  "_comment_timing_4": "SD_RELEASE_INTERVAL_SECONDS: How often to release SD card (default: 2)",
-  "_comment_timing_5": "SD_RELEASE_WAIT_MS: Wait time after releasing before retaking (default: 500)",
   "SESSION_DURATION_SECONDS": 30,
   "MAX_RETRY_ATTEMPTS": 3,
-  "BOOT_DELAY_SECONDS": 30,
-  "SD_RELEASE_INTERVAL_SECONDS": 2,
-  "SD_RELEASE_WAIT_MS": 500,
-
-  "_comment_timezone": "=== TIMEZONE CONFIGURATION ===",
   "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
   "GMT_OFFSET_HOURS": 0,
-
-  "_comment_security": "=== CREDENTIAL SECURITY ===",
-  "_comment_security_1": "  true: Passwords remain visible in this file (use only for development), otherwise remove",
-  "STORE_CREDENTIALS_PLAIN_TEXT": false,
 }

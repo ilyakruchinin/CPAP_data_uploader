@@ -15,7 +15,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Configuration
 CHIP="esp32"
 BAUD_RATE="460800"
-FIRMWARE_FILE="$SCRIPT_DIR/firmware.bin"  # Defaults to OTA firmware
 FIRMWARE_OTA="$SCRIPT_DIR/firmware-ota.bin"
 FIRMWARE_STANDARD="$SCRIPT_DIR/firmware-standard.bin"
 FLASH_OFFSET="0x10000"
@@ -56,6 +55,9 @@ case "$FIRMWARE_TYPE" in
     "ota")
         if [ -f "$FIRMWARE_OTA" ]; then
             FIRMWARE_FILE="$FIRMWARE_OTA"
+        else
+            echo -e "${RED}Error: OTA firmware file '$FIRMWARE_OTA' not found${NC}"
+            exit 1
         fi
         FIRMWARE_DESC="OTA-enabled (web updates supported)"
         ;;

@@ -19,8 +19,8 @@ This package contains precompiled firmware for automatically uploading CPAP data
 
 This package includes two firmware versions:
 
-### **OTA Firmware** (Recommended - Default)
-- **File:** `firmware.bin` or `firmware-ota.bin`
+### **OTA Firmware** (Recommended)
+- **File:** `firmware-ota.bin`
 - **Features:** Web-based firmware updates via `/ota` interface
 - **Partition:** 1.5MB app space (dual OTA partitions)
 - **Best for:** Production use, remote deployments
@@ -46,8 +46,13 @@ upload.bat COM3 standard
 
 ## Quick Start
 
+### 0. Initialize the SD card
+
+Insert the SD card in your CPAP machine and allow for the CPAP machine to format it.
+
 ### 1. Upload Firmware
 
+#### First time or when upgrading from a non OTA version
 **Important:** Connect the SD WIFI PRO to the development board with switches set to:
 - Switch 1: OFF
 - Switch 2: ON
@@ -66,6 +71,13 @@ upload.bat COM3
 
 Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
 
+#### When upgrading from an OTA version
+
+Go to the CPAP Data uploader website and clik on `Firmware Update`
+
+Use either Method 1 or Method 2 to pick the firmware you want to upgrade/downgrade
+Method 2 can use the firmware directly from github.
+
 ### 2. Create Configuration File
 
 Create a file named `config.json` in the root of your SD card with your settings:
@@ -79,7 +91,7 @@ Create a file named `config.json` in the root of your SD card with your settings
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
   "UPLOAD_HOUR": 12,
-  "SESSION_DURATION_SECONDS": 5,
+  "SESSION_DURATION_SECONDS": 30,
   "MAX_RETRY_ATTEMPTS": 3,
   "GMT_OFFSET_HOURS": 0
 }

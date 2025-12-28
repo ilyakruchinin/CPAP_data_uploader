@@ -102,9 +102,13 @@ mkdir -p "$TEMP_DIR"
 
 # Copy firmware files with descriptive names
 echo "Copying firmware files..."
-cp "$FIRMWARE_BIN_OTA" "$TEMP_DIR/firmware.bin"  # Default to OTA firmware
 cp "$FIRMWARE_BIN_OTA" "$TEMP_DIR/firmware-ota.bin"
 cp "$FIRMWARE_BIN_STANDARD" "$TEMP_DIR/firmware-standard.bin"
+
+# Keep copies in release folder for GitHub releases
+echo "Keeping firmware copies in release folder..."
+cp "$FIRMWARE_BIN_OTA" "$RELEASE_DIR/firmware-ota-${VERSION}.bin"
+cp "$FIRMWARE_BIN_STANDARD" "$RELEASE_DIR/firmware-standard-${VERSION}.bin"
 
 # Copy upload scripts
 echo "Copying upload tools..."
@@ -136,9 +140,11 @@ cd ..
 rm -rf "$TEMP_DIR"
 
 echo -e "${GREEN}Release package created: $RELEASE_DIR/$RELEASE_PACKAGE${NC}"
+echo -e "${GREEN}Firmware copies saved in release folder:${NC}"
+echo "  - firmware-ota-${VERSION}.bin (OTA-enabled with web updates)"
+echo "  - firmware-standard-${VERSION}.bin (standard firmware, 3MB app space)"
 echo ""
 echo "Package contents:"
-echo "  - firmware.bin (OTA-enabled firmware - default)"
 echo "  - firmware-ota.bin (OTA-enabled firmware with web updates)"
 echo "  - firmware-standard.bin (standard firmware, 3MB app space)"
 echo "  - upload.sh (macOS/Linux upload script)"
@@ -153,3 +159,9 @@ echo ""
 echo -e "${GREEN}Firmware sizes:${NC}"
 echo "  Standard: $(du -h "$FIRMWARE_BIN_STANDARD" | cut -f1) (3MB partition)"
 echo "  OTA:      $(du -h "$FIRMWARE_BIN_OTA" | cut -f1) (1.5MB partition)"
+echo ""
+echo -e "${YELLOW}Next steps for GitHub release:${NC}"
+echo "1. Upload the release package: $RELEASE_DIR/$RELEASE_PACKAGE"
+echo "2. Upload individual firmware files from release/ folder:"
+echo "   - firmware-ota-${VERSION}.bin" 
+echo "   - firmware-standard-${VERSION}.bin"

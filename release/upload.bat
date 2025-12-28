@@ -6,7 +6,6 @@ setlocal enabledelayedexpansion
 REM Configuration
 set CHIP=esp32
 set BAUD_RATE=460800
-set FIRMWARE_FILE=firmware.bin
 set FIRMWARE_OTA=firmware-ota.bin
 set FIRMWARE_STANDARD=firmware-standard.bin
 set FLASH_OFFSET=0x10000
