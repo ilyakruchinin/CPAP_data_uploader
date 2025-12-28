@@ -800,6 +800,63 @@ void test_pending_folder_immediate_removal_on_files() {
     TEST_ASSERT_EQUAL(0, manager.getPendingFoldersCount());
 }
 
+// **Feature: empty-folder-handling, Property 9: Multiple pending folders updated correctly on scan**
+void test_multiple_pending_folders_scan_update() {
+    UploadStateManager manager;
+    manager.begin(testFS);
+    
+    // Simulate scenario where multiple folders were previously identified as empty
+    String folder1 = "20241201";
+    String folder2 = "20241202"; 
+    String folder3 = "20241203";
+    unsigned long timestamp = 1699876800;
+    
+    // Mark all three folders as pending (empty)
+    manager.markFolderPending(folder1, timestamp);
+    manager.markFolderPending(folder2, timestamp + 86400);  // Next day
+    manager.markFolderPending(folder3, timestamp + 172800); // Day after
+    
+    // Verify initial pending state
+    TEST_ASSERT_TRUE(manager.isPendingFolder(folder1));
+    TEST_ASSERT_TRUE(manager.isPendingFolder(folder2));
+    TEST_ASSERT_TRUE(manager.isPendingFolder(folder3));
+    TEST_ASSERT_EQUAL(3, manager.getPendingFoldersCount());
+    TEST_ASSERT_FALSE(manager.isFolderCompleted(folder1));
+    TEST_ASSERT_FALSE(manager.isFolderCompleted(folder2));
+    TEST_ASSERT_FALSE(manager.isFolderCompleted(folder3));
+    
+    // Simulate new scan revealing that folder1 and folder3 now have files
+    // This simulates what happens in scanDatalogFolders() when files are detected
+    manager.removeFolderFromPending(folder1);
+    manager.removeFolderFromPending(folder3);
+    
+    // Verify metadata is correctly updated
+    TEST_ASSERT_FALSE(manager.isPendingFolder(folder1));  // No longer pending
+    TEST_ASSERT_TRUE(manager.isPendingFolder(folder2));   // Still pending (no files)
+    TEST_ASSERT_FALSE(manager.isPendingFolder(folder3));  // No longer pending
+    TEST_ASSERT_EQUAL(1, manager.getPendingFoldersCount()); // Only folder2 remains pending
+    
+    // Verify folders with files are not automatically completed (they go through normal upload)
+    TEST_ASSERT_FALSE(manager.isFolderCompleted(folder1));
+    TEST_ASSERT_FALSE(manager.isFolderCompleted(folder2));
+    TEST_ASSERT_FALSE(manager.isFolderCompleted(folder3));
+    
+    // Simulate folder2 also getting files later
+    manager.removeFolderFromPending(folder2);
+    
+    // Verify all folders are now removed from pending state
+    TEST_ASSERT_FALSE(manager.isPendingFolder(folder1));
+    TEST_ASSERT_FALSE(manager.isPendingFolder(folder2));
+    TEST_ASSERT_FALSE(manager.isPendingFolder(folder3));
+    TEST_ASSERT_EQUAL(0, manager.getPendingFoldersCount());
+    
+    // Test edge case: removing already removed folders should be safe
+    manager.removeFolderFromPending(folder1);
+    manager.removeFolderFromPending(folder2);
+    manager.removeFolderFromPending(folder3);
+    TEST_ASSERT_EQUAL(0, manager.getPendingFoldersCount());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     
@@ -854,6 +911,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_pending_folder_with_files_uploads_normally);
     RUN_TEST(test_remove_folder_from_pending);
     RUN_TEST(test_pending_folder_immediate_removal_on_files);
+    RUN_TEST(test_multiple_pending_folders_scan_update);
     RUN_TEST(test_pending_state_persistence_round_trip);
     RUN_TEST(test_backward_compatibility_missing_pending_field);
     RUN_TEST(test_incomplete_folders_count_with_pending);
