@@ -77,8 +77,8 @@ This document is for developers who want to build, modify, or contribute to the 
 │   ├── test_native/
 │   ├── test_schedule_manager/
 │   └── mocks/               # Mock implementations
-├── components/               # ESP-IDF components
-│   └── libsmb2/             # SMB2/3 client library (cloned)
+├── components/               # ESP-IDF components (not in git)
+│   └── libsmb2/             # SMB2/3 client library (cloned by setup script)
 ├── scripts/                  # Build and release scripts
 │   ├── setup_libsmb2.sh     # Setup SMB library
 │   └── prepare_release.sh   # Create release packages
@@ -105,7 +105,7 @@ This document is for developers who want to build, modify, or contribute to the 
 
 ### Quick Setup
 
-Run the automated setup script (caution this has only been tested on linux):
+Run the automated setup script:
 
 ```bash
 ./setup.sh
@@ -113,7 +113,7 @@ Run the automated setup script (caution this has only been tested on linux):
 
 This will:
 1. Create Python virtual environment
-2. Install PlatformIO
+2. Install PlatformIO and esptool
 3. Clone and configure libsmb2 component
 4. Install all dependencies
 
@@ -125,16 +125,31 @@ If you prefer manual setup:
 # 1. Create Python venv
 python3 -m venv venv
 
-# 2. Install PlatformIO
+# 2. Install dependencies
 source venv/bin/activate
-pip install platformio
+pip install -r requirements.txt
 
-# 3. Setup libsmb2 (if using SMB upload)
+# 3. Setup libsmb2 component (required for SMB upload)
 ./scripts/setup_libsmb2.sh
 
-# 4. Install dependencies
+# 4. Install library dependencies
 pio pkg install
 ```
+
+### Project Cleanup
+
+To clean build artifacts and start fresh:
+
+```bash
+./clean.sh
+```
+
+This removes:
+- Build artifacts (`.pio/build`, `.pio/libdeps`)
+- Python virtual environment (`venv/`)
+- libsmb2 component (`components/libsmb2/`)
+- Temporary files (`*.tmp`, `*.log`)
+- Firmware binaries
 
 ### IDE Setup
 
@@ -148,20 +163,25 @@ The project works with:
 
 ### Quick Build & Upload Script
 
-The `build_upload.sh` script supports separate build and upload steps:
+The `build_upload.sh` script supports both firmware types and separate build/upload steps:
 
 ```bash
-# Build and upload (default)
-./build_upload.sh
+# Build and upload standard firmware (default)
+./build_upload.sh both pico32
+
+# Build and upload OTA firmware
+./build_upload.sh both pico32-ota
 
 # Build only (no sudo required)
-./build_upload.sh build
+./build_upload.sh build pico32
+./build_upload.sh build pico32-ota
 
 # Upload only (requires sudo, must build first)
-./build_upload.sh upload
+./build_upload.sh upload pico32
+./build_upload.sh upload pico32-ota
 
 # Upload to specific port
-./build_upload.sh upload /dev/ttyUSB0
+./build_upload.sh upload pico32 /dev/ttyUSB0
 
 # Show help
 ./build_upload.sh --help
@@ -173,19 +193,42 @@ The `build_upload.sh` script supports separate build and upload steps:
 - Specify custom serial ports
 - Better error isolation
 
+### Build Targets
+
+The project supports two firmware configurations:
+
+#### Standard Build (`pico32`)
+```bash
+pio run -e pico32
+```
+- **3MB app space** (maximum firmware size)
+- **No OTA support** - updates require physical access
+- **Best for**: Development, maximum feature space
+
+#### OTA-Enabled Build (`pico32-ota`)
+```bash
+pio run -e pico32-ota
+```
+- **1.5MB app space** per partition (2 partitions for OTA)
+- **Web-based firmware updates** via `/ota` interface
+- **Best for**: Production deployments requiring remote updates
+
 ### Manual Build
 
 ```bash
 source venv/bin/activate
-pio run -e pico32              # Build only
+pio run -e pico32              # Build standard firmware
+pio run -e pico32-ota          # Build OTA firmware
 sudo pio run -e pico32 -t upload    # Upload (requires sudo)
 ```
 
 ### Build Targets
 
 ```bash
-pio run -e pico32              # Build firmware
-pio run -e pico32 -t upload    # Upload to device
+pio run -e pico32              # Build standard firmware
+pio run -e pico32-ota          # Build OTA firmware
+pio run -e pico32 -t upload    # Upload standard firmware
+pio run -e pico32-ota -t upload # Upload OTA firmware
 pio run -e pico32 -t clean     # Clean build
 pio run -e pico32 -t size      # Show memory usage
 pio run -e pico32 -t erase     # Erase flash
@@ -216,11 +259,17 @@ build_flags =
 
 ### Memory Usage
 
-Current build (with SMB enabled):
-- **Flash:** 25.9% (1,058,372 / 4,096,000 bytes) - ESP32 has 4MB flash, app partition is 3MB
-- **RAM:** 10.5% (47,165 / 450,000 bytes estimated) - Static: 34KB, Dynamic buffers grow with usage
+Current build sizes (with SMB enabled):
 
-**Dynamic Memory Analysis:** The `.upload_state.json` file grows with DATALOG folder count (~30 bytes per folder, ~100 bytes per file checksum), and the system now dynamically allocates DynamicJsonDocument buffers sized at 2x the file size for loading and 1.5x estimated size for saving, allowing it to handle thousands of folders limited only by available RAM (~340KB free, supporting ~10+ years of daily CPAP usage before memory exhaustion).
+#### Standard Build (`pico32`)
+- **Flash:** ~33.9% (1,066,637 / 3,145,728 bytes) - 3MB app partition
+- **RAM:** ~14.5% (47,600 / 327,680 bytes) - Static allocation
+
+#### OTA Build (`pico32-ota`)
+- **Flash:** ~77.8% (1,223,321 / 1,572,864 bytes) - 1.5MB app partition
+- **RAM:** ~14.9% (48,776 / 327,680 bytes) - Static allocation
+
+**Dynamic Memory Analysis:** The `.upload_state.json` file grows with DATALOG folder count (~30 bytes per folder, ~100 bytes per file checksum), and the system now dynamically allocates DynamicJsonDocument buffers sized at 2x the file size for loading and 1.5x estimated size for saving, allowing it to handle thousands of folders limited only by available RAM (~280KB free, supporting ~10+ years of daily CPAP usage before memory exhaustion).
 
 ---
 
@@ -243,11 +292,17 @@ pio test -e native -f test_schedule_manager
 
 ### Test Coverage
 
-- `test_time_budget_manager`: 18 tests - Time budget and rate calculation
-- `test_config`: 14 tests - Configuration parsing and validation
+Current test results: **154 test cases, all passing**
+
+- `test_time_budget_manager`: 25 tests - Time budget and rate calculation
+- `test_config`: 33 tests - Configuration parsing and validation  
+- `test_credential_migration`: 6 tests - Secure credential storage
+- `test_sd_scan_failure`: 7 tests - SD card error handling
 - `test_webserver`: 9 tests - Web server endpoints
 - `test_native`: 9 tests - Mock infrastructure
+- `test_upload_state_manager`: 42 tests - Upload state tracking
 - `test_schedule_manager`: 22 tests - Scheduling and NTP
+- `test_fileuploader_webserver`: 1 test - Integration testing
 
 ### Hardware Testing
 
@@ -371,14 +426,20 @@ To add a new backend (e.g., FTP):
 ```bash
 # Development
 ./setup.sh                     # Initial setup
-./build_upload.sh build        # Build only (no sudo)
-./build_upload.sh upload       # Upload only (requires sudo)
-./build_upload.sh              # Build and upload
+./clean.sh                     # Clean all build artifacts
+./build_upload.sh build pico32 # Build standard firmware (no sudo)
+./build_upload.sh build pico32-ota # Build OTA firmware (no sudo)
+./build_upload.sh upload pico32    # Upload standard firmware (requires sudo)
+./build_upload.sh upload pico32-ota # Upload OTA firmware (requires sudo)
+./build_upload.sh both pico32      # Build and upload standard
+./build_upload.sh both pico32-ota  # Build and upload OTA
 ./monitor.sh                   # Serial monitor
 
 # PlatformIO
-pio run                        # Build
-sudo pio run -t upload         # Upload (requires sudo)
+pio run -e pico32              # Build standard firmware
+pio run -e pico32-ota          # Build OTA firmware
+sudo pio run -e pico32 -t upload    # Upload standard (requires sudo)
+sudo pio run -e pico32-ota -t upload # Upload OTA (requires sudo)
 pio run -t clean               # Clean
 pio test -e native             # Run tests
 pio device list                # List serial ports
@@ -388,7 +449,7 @@ pio device monitor             # Serial monitor
 ./scripts/prepare_release.sh   # Create release package
 
 # Cleanup
-rm -rf venv/ components/libsmb2/ .pio/  # Clean for portability
+./clean.sh                     # Clean build artifacts and venv
 ```
 
 ---
@@ -621,7 +682,8 @@ CPAP machines need regular SD card access. Time budgeting ensures:
 - Base firmware: ~800KB
 - SMB backend: +220-270KB
 - WebDAV backend: +50-80KB (estimated)
-- Total available: 3MB (huge_app partition)
+- **Standard build**: 3MB available (huge_app partition)
+- **OTA build**: 1.5MB available per partition
 
 ### RAM Usage
 

@@ -28,8 +28,12 @@ echo "Upgrading pip..."
 pip install --upgrade pip
 
 # Install requirements
-echo "Installing PlatformIO..."
+echo "Installing PlatformIO and dependencies..."
 pip install -r requirements.txt
+
+# Setup libsmb2 component
+echo "Setting up libsmb2 component..."
+./scripts/setup_libsmb2.sh
 
 echo ""
 echo "✓ Setup complete!"
@@ -38,4 +42,5 @@ echo "To activate the environment in the future, run:"
 echo "  source venv/bin/activate"
 echo ""
 echo "To build and upload firmware, run:"
-echo "  ./build_upload.sh"
+echo "  ./build_upload.sh build pico32        # Standard firmware"
+echo "  ./build_upload.sh build pico32-ota    # OTA firmware"

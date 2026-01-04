@@ -38,7 +38,7 @@ See the [User Guide](release/README.md) for complete setup and usage instruction
 
 **Want to build or contribute?** See the [Development Guide](docs/DEVELOPMENT.md) for:
 - Architecture overview
-- Build instructions
+- Build instructions (libsmb2 automatically set up)
 - Testing procedures
 - Contributing guidelines
 
