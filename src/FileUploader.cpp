@@ -475,7 +475,7 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
     std::vector<String> files;
     
     // Root files to track
-    const char* rootFiles[] = {
+    std::vector<String> rootFiles = {
         "/Identification.json",
         "/Identification.crc",
         "/Identification.tgt",
@@ -483,28 +483,28 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
         "/journal.jnl"
     };
     
-    for (int i = 0; i < 3; i++) {
-        if (sd.exists(rootFiles[i])) {
+    for (const String& file : rootFiles) {
+        if (sd.exists(file)) {
             // Check if file has changed
-            if (stateManager->hasFileChanged(sd, rootFiles[i])) {
-                files.push_back(String(rootFiles[i]));
-                LOG_DEBUGF("[FileUploader] Root file changed: %s", rootFiles[i]);
+            if (stateManager->hasFileChanged(sd, file)) {
+                files.push_back(file);
+                LOG_DEBUGF("[FileUploader] Root file changed: %s", file.c_str());
             }
         }
     }
     
     // SETTINGS files to track
-    const char* settingsFiles[] = {
+    std::vector<String> settingsFiles = {
         "/SETTINGS/CurrentSettings.json",
         "/SETTINGS/CurrentSettings.crc"
     };
     
-    for (int i = 0; i < 2; i++) {
-        if (sd.exists(settingsFiles[i])) {
+    for (const String& file : settingsFiles) {
+        if (sd.exists(file)) {
             // Check if file has changed
-            if (stateManager->hasFileChanged(sd, settingsFiles[i])) {
-                files.push_back(String(settingsFiles[i]));
-                LOG_DEBUGF("[FileUploader] SETTINGS file changed: %s", settingsFiles[i]);
+            if (stateManager->hasFileChanged(sd, file)) {
+                files.push_back(file);
+                LOG_DEBUGF("[FileUploader] SETTINGS file changed: %s", file.c_str());
             }
         }
     }

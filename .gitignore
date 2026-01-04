@@ -17,7 +17,6 @@ components/
 dependencies.lock
 sdkconfig*
 compile_commands.json
-include/version.h
 
 # Auto-generated files
 include/version.h
