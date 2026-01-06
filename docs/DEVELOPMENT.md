@@ -257,6 +257,17 @@ build_flags =
 
 **Debug Logging:** By default, `LOG_DEBUG()` and `LOG_DEBUGF()` macros are compiled out (zero overhead). Enable with `-DENABLE_VERBOSE_LOGGING` to see detailed diagnostics including progress updates, state details, and troubleshooting information. Saves ~10-15KB flash and ~35-75ms per upload session when disabled.
 
+**SD Card Logging:** For advanced debugging, logs can be written to SD card by setting `LOG_TO_SD_CARD: true` in `config.json`. 
+
+⚠️ **WARNING: SD card logging is for debugging only and can cause conflicts when accessing the SD card for CPAP data uploads. Only enable when troubleshooting issues and disable for normal operation.**
+
+When enabled:
+- Logs are written to `/debug_log.txt` on the SD card
+- All log messages (including serial and buffer logs) are also written to the file
+- File is opened in append mode for each log message
+- If file creation fails, SD logging is automatically disabled
+- Can interfere with CPAP machine SD card access
+
 ### Memory Usage
 
 Current build sizes (with SMB enabled):

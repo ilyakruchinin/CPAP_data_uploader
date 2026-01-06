@@ -108,6 +108,12 @@ void setup() {
     LOG_DEBUGF("WiFi SSID: %s", config.getWifiSSID().c_str());
     LOG_DEBUGF("Endpoint: %s", config.getEndpoint().c_str());
 
+    // Configure SD card logging if enabled (debugging only)
+    if (config.getLogToSdCard()) {
+        LOG_WARN("Enabling SD card logging - DEBUGGING ONLY - May cause conflicts with CPAP data access");
+        Logger::getInstance().enableSdCardLogging(true, &sdManager.getFS());
+    }
+
     // Release SD card back to CPAP machine
     sdManager.releaseControl();
 

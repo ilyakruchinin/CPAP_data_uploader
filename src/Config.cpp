@@ -17,6 +17,7 @@ Config::Config() :
     sdReleaseIntervalSeconds(2),  // Default: 2 seconds
     sdReleaseWaitMs(500),  // Default: 500ms
     logRetainAfterRead(false),  // Default: clear logs after reading
+    logToSdCard(false),  // Default: do not log to SD card (debugging only)
     isValid(false),
     storePlainText(false),  // Default: secure mode
     credentialsInFlash(false)  // Will be set during loadFromSD
@@ -305,6 +306,7 @@ bool Config::loadFromSD(fs::FS &sd) {
     sdReleaseIntervalSeconds = doc["SD_RELEASE_INTERVAL_SECONDS"] | 2;
     sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 500;
     logRetainAfterRead = doc["LOG_RETAIN_AFTER_READ"] | false;
+    logToSdCard = doc["LOG_TO_SD_CARD"] | false;
     
     // Step 4: Load credentials based on storage mode
     if (storePlainText) {
@@ -422,6 +424,7 @@ int Config::getBootDelaySeconds() const { return bootDelaySeconds; }
 int Config::getSdReleaseIntervalSeconds() const { return sdReleaseIntervalSeconds; }
 int Config::getSdReleaseWaitMs() const { return sdReleaseWaitMs; }
 bool Config::getLogRetainAfterRead() const { return logRetainAfterRead; }
+bool Config::getLogToSdCard() const { return logToSdCard; }
 bool Config::valid() const { return isValid; }
 
 // Credential storage mode getters

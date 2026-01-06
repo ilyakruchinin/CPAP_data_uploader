@@ -18,6 +18,9 @@ Logger::Logger()
     , userReadIndex(0)
     , mutex(nullptr)
     , initialized(false)
+    , sdCardLoggingEnabled(false)
+    , sdFileSystem(nullptr)
+    , logFileName("/debug_log.txt")
 {
     // Allocate circular buffer
     buffer = (char*)malloc(bufferSize);
@@ -97,6 +100,11 @@ void Logger::log(const char* message) {
     // Write to buffer if initialized
     if (initialized && buffer != nullptr) {
         writeToBuffer(finalMsg, len);
+    }
+    
+    // Write to SD card if enabled (debugging only)
+    if (sdCardLoggingEnabled && sdFileSystem != nullptr) {
+        writeToSdCard(finalMsg, len);
     }
 }
 
@@ -255,4 +263,55 @@ Logger::LogData Logger::retrieveLogs(bool clearAfterRead) {
     xSemaphoreGive(mutex);
 
     return result;
+}
+// Enable or disable SD card logging (debugging only)
+void Logger::enableSdCardLogging(bool enable, fs::FS* sdFS) {
+    if (enable && sdFS == nullptr) {
+        // Cannot enable without valid filesystem
+        return;
+    }
+    
+    sdCardLoggingEnabled = enable;
+    sdFileSystem = enable ? sdFS : nullptr;
+    
+    if (enable) {
+        // Log a warning message about debugging use
+        String warningMsg = getTimestamp() + "[WARN] SD card logging enabled - DEBUGGING ONLY - May cause SD access conflicts\n";
+        writeToSerial(warningMsg.c_str(), warningMsg.length());
+        if (initialized && buffer != nullptr) {
+            writeToBuffer(warningMsg.c_str(), warningMsg.length());
+        }
+    }
+}
+
+// Write data to SD card log file (debugging only)
+void Logger::writeToSdCard(const char* data, size_t len) {
+#ifndef UNIT_TEST
+    if (!sdCardLoggingEnabled || sdFileSystem == nullptr) {
+        return;
+    }
+    
+    // Try to open/create log file in append mode
+    File logFile = sdFileSystem->open(logFileName, FILE_APPEND);
+    if (!logFile) {
+        // If file doesn't exist, try to create it
+        logFile = sdFileSystem->open(logFileName, FILE_WRITE);
+        if (!logFile) {
+            // Failed to create/open file - disable SD logging to prevent spam
+            sdCardLoggingEnabled = false;
+            return;
+        }
+    }
+    
+    // Write data to file
+    logFile.write((const uint8_t*)data, len);
+    
+    // Ensure newline is present
+    if (len > 0 && data[len - 1] != '\n') {
+        logFile.write('\n');
+    }
+    
+    // Close file to ensure data is written
+    logFile.close();
+#endif
 }

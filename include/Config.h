@@ -28,6 +28,7 @@ private:
     int sdReleaseIntervalSeconds;
     int sdReleaseWaitMs;
     bool logRetainAfterRead;
+    bool logToSdCard;
     bool isValid;
     
     // Credential storage mode flags
@@ -79,6 +80,7 @@ public:
     int getSdReleaseIntervalSeconds() const;
     int getSdReleaseWaitMs() const;
     bool getLogRetainAfterRead() const;
+    bool getLogToSdCard() const;
     bool valid() const;
     
     // Credential storage mode getters

@@ -6,6 +6,7 @@
 #ifndef UNIT_TEST
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <FS.h>
 #else
 // Mock FreeRTOS types for native testing
 typedef void* SemaphoreHandle_t;
@@ -98,6 +99,16 @@ public:
     LogData retrieveLogs(bool clearAfterRead = true);
 
     /**
+     * Enable or disable SD card logging
+     * WARNING: SD card logging is for debugging only and can cause conflicts
+     * when accessing the SD card for CPAP data uploads. Use with caution.
+     * 
+     * @param enable True to enable SD card logging, false to disable
+     * @param sdFS Pointer to SD card filesystem (required when enabling)
+     */
+    void enableSdCardLogging(bool enable, fs::FS* sdFS = nullptr);
+
+    /**
      * Check if logger is properly initialized
      * Returns false if memory allocation or mutex creation failed
      */
@@ -129,6 +140,12 @@ private:
     void writeToBuffer(const char* data, size_t len);
 
     /**
+     * Write data to SD card log file (debugging only)
+     * WARNING: Can cause conflicts with CPAP data access
+     */
+    void writeToSdCard(const char* data, size_t len);
+
+    /**
      * Calculate number of bytes lost since last read
      * Returns difference between lastReadIndex and tailIndex if data was overwritten
      */
@@ -150,6 +167,11 @@ private:
 
     // Initialization state
     bool initialized;
+
+    // SD card logging (debugging only)
+    bool sdCardLoggingEnabled;
+    fs::FS* sdFileSystem;
+    String logFileName;
 };
 
 // Convenience macros for logging
