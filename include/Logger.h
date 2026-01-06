@@ -77,16 +77,25 @@ public:
     void logf(const char* format, ...);
 
     /**
-     * Retrieve all logs from circular buffer and drain the buffer
+     * Retrieve all logs from circular buffer with optional draining
      * Returns log content and count of bytes lost due to overflow
      * Thread-safe for concurrent access
      * 
-     * After this call:
+     * @param clearAfterRead If true (default), buffer is emptied after reading
+     *                       If false, logs are retained but only new logs returned on subsequent calls
+     * 
+     * When clearAfterRead is true:
      * - Buffer is emptied (tail = head)
-     * - lastReadIndex is updated to current head position
+     * - Returns all available logs from buffer
      * - Future calls will only return new logs
+     * 
+     * When clearAfterRead is false:
+     * - Buffer remains unchanged for overflow protection
+     * - Returns all logs from last user read position to current head
+     * - First call returns all logs, subsequent calls return only new logs
+     * - Logs may still be lost on buffer overflow, but retention is attempted
      */
-    LogData retrieveLogs();
+    LogData retrieveLogs(bool clearAfterRead = true);
 
     /**
      * Check if logger is properly initialized
@@ -134,6 +143,7 @@ private:
     volatile uint32_t headIndex;      // Next write position (monotonic counter)
     volatile uint32_t tailIndex;      // Oldest valid data position (monotonic counter)
     volatile uint32_t lastReadIndex;  // Last API read position (monotonic counter)
+    volatile uint32_t userReadIndex;  // Last position read by user (for retain mode)
 
     // Thread safety for dual-core ESP32
     SemaphoreHandle_t mutex;

@@ -579,8 +579,9 @@ void TestWebServer::handleLogs() {
     server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
     
-    // Retrieve logs from Logger
-    Logger::LogData logData = Logger::getInstance().retrieveLogs();
+    // Retrieve logs from Logger with retention setting from config
+    bool retainLogs = config->getLogRetainAfterRead();
+    Logger::LogData logData = Logger::getInstance().retrieveLogs(!retainLogs);
     
     // Build JSON response
     String json = "{";

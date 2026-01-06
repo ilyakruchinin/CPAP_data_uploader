@@ -15,6 +15,7 @@ Logger::Logger()
     , headIndex(0)
     , tailIndex(0)
     , lastReadIndex(0)
+    , userReadIndex(0)
     , mutex(nullptr)
     , initialized(false)
 {
@@ -193,8 +194,8 @@ uint32_t Logger::calculateLostBytes() {
     return 0;
 }
 
-// Retrieve all logs from buffer and drain it
-Logger::LogData Logger::retrieveLogs() {
+// Retrieve all logs from buffer with optional draining
+Logger::LogData Logger::retrieveLogs(bool clearAfterRead) {
     LogData result;
     result.bytesLost = 0;
 
@@ -209,11 +210,21 @@ Logger::LogData Logger::retrieveLogs() {
         return result;
     }
 
-    // Calculate lost bytes before draining
+    // Calculate lost bytes before reading
     result.bytesLost = calculateLostBytes();
 
-    // Calculate available data in buffer
-    uint32_t availableBytes = headIndex - tailIndex;
+    // Determine read start position based on retention mode
+    uint32_t readStartIndex;
+    if (clearAfterRead) {
+        // Normal mode: read from tail (oldest available data)
+        readStartIndex = tailIndex;
+    } else {
+        // Retain mode: read from last user read position, but not older than tail
+        readStartIndex = (userReadIndex < tailIndex) ? tailIndex : userReadIndex;
+    }
+
+    // Calculate available data to read
+    uint32_t availableBytes = headIndex - readStartIndex;
     
     // Safety check - should never exceed buffer size
     if (availableBytes > bufferSize) {
@@ -223,18 +234,22 @@ Logger::LogData Logger::retrieveLogs() {
     // Reserve space in String to avoid multiple reallocations
     result.content.reserve(availableBytes);
 
-    // Read data from tail to head
+    // Read data from readStartIndex to head
     for (uint32_t i = 0; i < availableBytes; i++) {
-        uint32_t logicalIndex = tailIndex + i;
+        uint32_t logicalIndex = readStartIndex + i;
         size_t physicalPos = logicalIndex % bufferSize;
         result.content += buffer[physicalPos];
     }
 
-    // Update lastReadIndex to current head position
+    // Update tracking indices
     lastReadIndex = headIndex;
+    userReadIndex = headIndex;
     
-    // Drain buffer by moving tail to head (buffer is now empty)
-    tailIndex = headIndex;
+    if (clearAfterRead) {
+        // Drain buffer by moving tail to head (buffer is now empty)
+        tailIndex = headIndex;
+    }
+    // If clearAfterRead is false, buffer remains unchanged for future reads
 
     // Release mutex
     xSemaphoreGive(mutex);

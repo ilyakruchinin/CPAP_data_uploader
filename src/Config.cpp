@@ -16,6 +16,7 @@ Config::Config() :
     bootDelaySeconds(30),  // Default: 30 seconds
     sdReleaseIntervalSeconds(2),  // Default: 2 seconds
     sdReleaseWaitMs(500),  // Default: 500ms
+    logRetainAfterRead(false),  // Default: clear logs after reading
     isValid(false),
     storePlainText(false),  // Default: secure mode
     credentialsInFlash(false)  // Will be set during loadFromSD
@@ -303,6 +304,7 @@ bool Config::loadFromSD(fs::FS &sd) {
     bootDelaySeconds = doc["BOOT_DELAY_SECONDS"] | 30;
     sdReleaseIntervalSeconds = doc["SD_RELEASE_INTERVAL_SECONDS"] | 2;
     sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 500;
+    logRetainAfterRead = doc["LOG_RETAIN_AFTER_READ"] | false;
     
     // Step 4: Load credentials based on storage mode
     if (storePlainText) {
@@ -419,6 +421,7 @@ int Config::getGmtOffsetHours() const { return gmtOffsetHours; }
 int Config::getBootDelaySeconds() const { return bootDelaySeconds; }
 int Config::getSdReleaseIntervalSeconds() const { return sdReleaseIntervalSeconds; }
 int Config::getSdReleaseWaitMs() const { return sdReleaseWaitMs; }
+bool Config::getLogRetainAfterRead() const { return logRetainAfterRead; }
 bool Config::valid() const { return isValid; }
 
 // Credential storage mode getters

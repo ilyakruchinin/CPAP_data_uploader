@@ -27,6 +27,7 @@ private:
     int bootDelaySeconds;
     int sdReleaseIntervalSeconds;
     int sdReleaseWaitMs;
+    bool logRetainAfterRead;
     bool isValid;
     
     // Credential storage mode flags
@@ -77,6 +78,7 @@ public:
     int getBootDelaySeconds() const;
     int getSdReleaseIntervalSeconds() const;
     int getSdReleaseWaitMs() const;
+    bool getLogRetainAfterRead() const;
     bool valid() const;
     
     // Credential storage mode getters
