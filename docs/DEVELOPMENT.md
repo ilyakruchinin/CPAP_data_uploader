@@ -39,6 +39,16 @@ This document is for developers who want to build, modify, or contribute to the 
 - **Logger** - Circular buffer logging system with web API access
 - **TestWebServer** - Optional web server for development/testing
 
+### Power Management (v0.4.3+)
+
+The system includes configurable power management to reduce current consumption during active use:
+
+- **CPU Frequency Scaling** - Configurable from 80-240MHz via `CPU_SPEED_MHZ`
+- **WiFi TX Power Control** - Adjustable transmission power via `WIFI_TX_PWR` (high/mid/low)
+- **WiFi Power Saving** - Modem sleep modes via `WIFI_PWR_SAVING` (none/mid/max)
+
+Power settings are applied automatically during startup and maintain full web server functionality. The implementation uses type-safe enums with validation and fallback to safe defaults.
+
 ### Design Principles
 
 1. **Dependency Injection** - Components receive dependencies via constructor
@@ -156,6 +166,38 @@ This removes:
 The project works with:
 - **PlatformIO IDE** (VS Code extension) - Recommended
 - **Command line** - All features available via CLI
+
+---
+
+## Configuration
+
+### Power Management Settings
+
+The system supports configurable power management through `config.json`:
+
+```json
+{
+  "CPU_SPEED_MHZ": 160,        // CPU frequency: 80-240MHz (default: 240)
+  "WIFI_TX_PWR": "mid",        // WiFi TX power: "high"/"mid"/"low" (default: "high")  
+  "WIFI_PWR_SAVING": "mid"     // WiFi power save: "none"/"mid"/"max" (default: "none")
+}
+```
+
+**Implementation Details:**
+- Settings are validated with fallback to safe defaults
+- Applied automatically during startup in `main.cpp`
+- Uses type-safe enums internally (`WifiTxPower`, `WifiPowerSaving`)
+- WiFi settings applied after successful connection
+
+**Power Consumption Impact:**
+- CPU 240→80MHz: ~40-60mA reduction
+- WiFi TX high→low: ~15-20mA reduction
+- WiFi power save max: ~50-80mA reduction
+
+**Development Notes:**
+- Enum values avoid Arduino macro conflicts (e.g., `POWER_HIGH` vs `HIGH`)
+- Helper methods convert between string config and enum values
+- WiFiManager provides methods for dynamic power mode switching
 
 ---
 

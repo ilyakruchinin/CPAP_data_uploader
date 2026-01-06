@@ -1,5 +1,6 @@
 #include "WiFiManager.h"
 #include "Logger.h"
+#include "Config.h"  // For power management enums
 #include <WiFi.h>
 
 WiFiManager::WiFiManager() : connected(false) {}
@@ -88,5 +89,74 @@ String WiFiManager::getSignalQuality() const {
         return "Weak";
     } else {
         return "Very Weak";
+    }
+}
+// Power management methods
+void WiFiManager::setHighPerformanceMode() {
+    if (connected && WiFi.status() == WL_CONNECTED) {
+        WiFi.setSleep(false);  // Disable all power saving
+        LOG_DEBUG("WiFi set to high performance mode (no power saving)");
+    }
+}
+
+void WiFiManager::setPowerSaveMode() {
+    if (connected && WiFi.status() == WL_CONNECTED) {
+        WiFi.setSleep(WIFI_PS_MIN_MODEM);  // Enable minimum modem sleep
+        LOG_DEBUG("WiFi set to power save mode (WIFI_PS_MIN_MODEM)");
+    }
+}
+
+void WiFiManager::setMaxPowerSave() {
+    if (connected && WiFi.status() == WL_CONNECTED) {
+        WiFi.setSleep(WIFI_PS_MAX_MODEM);  // Enable maximum modem sleep
+        LOG_DEBUG("WiFi set to maximum power save mode (WIFI_PS_MAX_MODEM)");
+    }
+}
+void WiFiManager::applyPowerSettings(WifiTxPower txPower, WifiPowerSaving powerSaving) {
+    if (!connected || WiFi.status() != WL_CONNECTED) {
+        LOG_WARN("Cannot apply power settings - WiFi not connected");
+        return;
+    }
+    
+    // Apply TX power setting
+    wifi_power_t espTxPower;
+    switch (txPower) {
+        case WifiTxPower::POWER_HIGH:
+            espTxPower = WIFI_POWER_19_5dBm;  // ~20dBm (maximum)
+            LOG_DEBUG("WiFi TX power set to HIGH (19.5dBm)");
+            break;
+        case WifiTxPower::POWER_MID:
+            espTxPower = WIFI_POWER_11dBm;    // 11dBm (medium)
+            LOG_DEBUG("WiFi TX power set to MID (11dBm)");
+            break;
+        case WifiTxPower::POWER_LOW:
+            espTxPower = WIFI_POWER_5dBm;     // 5dBm (low)
+            LOG_DEBUG("WiFi TX power set to LOW (5dBm)");
+            break;
+        default:
+            espTxPower = WIFI_POWER_19_5dBm;
+            LOG_WARN("Unknown TX power setting, using HIGH");
+            break;
+    }
+    WiFi.setTxPower(espTxPower);
+    
+    // Apply power saving setting
+    switch (powerSaving) {
+        case WifiPowerSaving::SAVE_NONE:
+            WiFi.setSleep(false);
+            LOG_DEBUG("WiFi power saving disabled (high performance)");
+            break;
+        case WifiPowerSaving::SAVE_MID:
+            WiFi.setSleep(WIFI_PS_MIN_MODEM);
+            LOG_DEBUG("WiFi power saving set to MID (WIFI_PS_MIN_MODEM)");
+            break;
+        case WifiPowerSaving::SAVE_MAX:
+            WiFi.setSleep(WIFI_PS_MAX_MODEM);
+            LOG_DEBUG("WiFi power saving set to MAX (WIFI_PS_MAX_MODEM)");
+            break;
+        default:
+            WiFi.setSleep(false);
+            LOG_WARN("Unknown power saving setting, disabling power save");
+            break;
     }
 }

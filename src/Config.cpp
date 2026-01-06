@@ -20,7 +20,12 @@ Config::Config() :
     logToSdCard(false),  // Default: do not log to SD card (debugging only)
     isValid(false),
     storePlainText(false),  // Default: secure mode
-    credentialsInFlash(false)  // Will be set during loadFromSD
+    credentialsInFlash(false),  // Will be set during loadFromSD
+    
+    // Power management defaults
+    cpuSpeedMhz(240),  // Default: 240MHz (full speed)
+    wifiTxPower(WifiTxPower::POWER_HIGH),  // Default: high power
+    wifiPowerSaving(WifiPowerSaving::SAVE_NONE)  // Default: no power saving
 {}
 
 Config::~Config() {
@@ -308,6 +313,22 @@ bool Config::loadFromSD(fs::FS &sd) {
     logRetainAfterRead = doc["LOG_RETAIN_AFTER_READ"] | false;
     logToSdCard = doc["LOG_TO_SD_CARD"] | false;
     
+    // Power management settings with validation
+    cpuSpeedMhz = doc["CPU_SPEED_MHZ"] | 240;
+    if (cpuSpeedMhz < 80) {
+        LOG_WARN("CPU_SPEED_MHZ below minimum (80MHz), setting to 80MHz");
+        cpuSpeedMhz = 80;
+    } else if (cpuSpeedMhz > 240) {
+        LOG_WARN("CPU_SPEED_MHZ above maximum (240MHz), setting to 240MHz");
+        cpuSpeedMhz = 240;
+    }
+    
+    String wifiTxPowerStr = doc["WIFI_TX_PWR"] | "high";
+    wifiTxPower = parseWifiTxPower(wifiTxPowerStr);
+    
+    String wifiPowerSavingStr = doc["WIFI_PWR_SAVING"] | "none";
+    wifiPowerSaving = parseWifiPowerSaving(wifiPowerSavingStr);
+    
     // Step 4: Load credentials based on storage mode
     if (storePlainText) {
         // Plain text mode: Load credentials directly from config.json
@@ -430,3 +451,58 @@ bool Config::valid() const { return isValid; }
 // Credential storage mode getters
 bool Config::isStoringPlainText() const { return storePlainText; }
 bool Config::areCredentialsInFlash() const { return credentialsInFlash; }
+// Power management getters
+int Config::getCpuSpeedMhz() const { return cpuSpeedMhz; }
+WifiTxPower Config::getWifiTxPower() const { return wifiTxPower; }
+WifiPowerSaving Config::getWifiPowerSaving() const { return wifiPowerSaving; }
+
+// Helper methods for enum conversion
+WifiTxPower Config::parseWifiTxPower(const String& str) {
+    String lowerStr = str;
+    lowerStr.toLowerCase();
+    
+    if (lowerStr == "high") {
+        return WifiTxPower::POWER_HIGH;
+    } else if (lowerStr == "mid") {
+        return WifiTxPower::POWER_MID;
+    } else if (lowerStr == "low") {
+        return WifiTxPower::POWER_LOW;
+    } else {
+        LOG_WARN("Invalid WIFI_TX_PWR value, defaulting to 'high'");
+        return WifiTxPower::POWER_HIGH;
+    }
+}
+
+WifiPowerSaving Config::parseWifiPowerSaving(const String& str) {
+    String lowerStr = str;
+    lowerStr.toLowerCase();
+    
+    if (lowerStr == "none") {
+        return WifiPowerSaving::SAVE_NONE;
+    } else if (lowerStr == "mid") {
+        return WifiPowerSaving::SAVE_MID;
+    } else if (lowerStr == "max") {
+        return WifiPowerSaving::SAVE_MAX;
+    } else {
+        LOG_WARN("Invalid WIFI_PWR_SAVING value, defaulting to 'none'");
+        return WifiPowerSaving::SAVE_NONE;
+    }
+}
+
+String Config::wifiTxPowerToString(WifiTxPower power) {
+    switch (power) {
+        case WifiTxPower::POWER_HIGH: return "high";
+        case WifiTxPower::POWER_MID: return "mid";
+        case WifiTxPower::POWER_LOW: return "low";
+        default: return "high";
+    }
+}
+
+String Config::wifiPowerSavingToString(WifiPowerSaving saving) {
+    switch (saving) {
+        case WifiPowerSaving::SAVE_NONE: return "none";
+        case WifiPowerSaving::SAVE_MID: return "mid";
+        case WifiPowerSaving::SAVE_MAX: return "max";
+        default: return "none";
+    }
+}

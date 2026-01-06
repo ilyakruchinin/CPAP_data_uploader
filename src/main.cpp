@@ -117,6 +117,18 @@ void setup() {
     // Release SD card back to CPAP machine
     sdManager.releaseControl();
 
+    // Apply power management settings from config
+    LOG("Applying power management settings...");
+    
+    // Set CPU frequency
+    int targetCpuMhz = config.getCpuSpeedMhz();
+    setCpuFrequencyMhz(targetCpuMhz);
+    LOGF("CPU frequency set to %dMHz", getCpuFrequencyMhz());
+    
+    // Apply WiFi power settings
+    wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
+    LOG("Power management settings applied");
+
     // Initialize WiFi in station mode
     if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
         LOG("Failed to connect to WiFi");

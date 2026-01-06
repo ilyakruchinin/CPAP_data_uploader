@@ -910,6 +910,139 @@ void test_config_mixed_state_both_new() {
     TEST_ASSERT_TRUE_MESSAGE(config.areCredentialsInFlash(), "Should have credentials in flash after migration");
 }
 
+// Test power management configuration with default values
+void test_config_power_management_defaults() {
+    std::string configContent = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "password",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_TYPE": "SMB",
+        "ENDPOINT_USER": "user",
+        "ENDPOINT_PASS": "pass"
+    })";
+    
+    mockSD.addFile("/config.json", configContent);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE(loaded);
+    TEST_ASSERT_TRUE(config.valid());
+    
+    // Test default power management values
+    TEST_ASSERT_EQUAL(240, config.getCpuSpeedMhz());
+    TEST_ASSERT_EQUAL(WifiTxPower::POWER_HIGH, config.getWifiTxPower());
+    TEST_ASSERT_EQUAL(WifiPowerSaving::SAVE_NONE, config.getWifiPowerSaving());
+}
+
+// Test power management configuration with custom values
+void test_config_power_management_custom() {
+    std::string configContent = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "password",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_TYPE": "SMB",
+        "ENDPOINT_USER": "user",
+        "ENDPOINT_PASS": "pass",
+        "CPU_SPEED_MHZ": 160,
+        "WIFI_TX_PWR": "mid",
+        "WIFI_PWR_SAVING": "max"
+    })";
+    
+    mockSD.addFile("/config.json", configContent);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE(loaded);
+    TEST_ASSERT_TRUE(config.valid());
+    
+    // Test custom power management values
+    TEST_ASSERT_EQUAL(160, config.getCpuSpeedMhz());
+    TEST_ASSERT_EQUAL(WifiTxPower::POWER_MID, config.getWifiTxPower());
+    TEST_ASSERT_EQUAL(WifiPowerSaving::SAVE_MAX, config.getWifiPowerSaving());
+}
+
+// Test power management configuration with case insensitive values
+void test_config_power_management_case_insensitive() {
+    std::string configContent = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "password",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_TYPE": "SMB",
+        "ENDPOINT_USER": "user",
+        "ENDPOINT_PASS": "pass",
+        "CPU_SPEED_MHZ": 80,
+        "WIFI_TX_PWR": "LOW",
+        "WIFI_PWR_SAVING": "MID"
+    })";
+    
+    mockSD.addFile("/config.json", configContent);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE(loaded);
+    TEST_ASSERT_TRUE(config.valid());
+    
+    // Test case insensitive parsing
+    TEST_ASSERT_EQUAL(80, config.getCpuSpeedMhz());
+    TEST_ASSERT_EQUAL(WifiTxPower::POWER_LOW, config.getWifiTxPower());
+    TEST_ASSERT_EQUAL(WifiPowerSaving::SAVE_MID, config.getWifiPowerSaving());
+}
+
+// Test power management configuration with invalid values (should use defaults)
+void test_config_power_management_invalid_values() {
+    std::string configContent = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "password",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_TYPE": "SMB",
+        "ENDPOINT_USER": "user",
+        "ENDPOINT_PASS": "pass",
+        "CPU_SPEED_MHZ": 50,
+        "WIFI_TX_PWR": "invalid",
+        "WIFI_PWR_SAVING": "unknown"
+    })";
+    
+    mockSD.addFile("/config.json", configContent);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE(loaded);
+    TEST_ASSERT_TRUE(config.valid());
+    
+    // Test validation and fallback to defaults
+    TEST_ASSERT_EQUAL(80, config.getCpuSpeedMhz());  // Should be clamped to minimum
+    TEST_ASSERT_EQUAL(WifiTxPower::POWER_HIGH, config.getWifiTxPower());  // Should fallback to default
+    TEST_ASSERT_EQUAL(WifiPowerSaving::SAVE_NONE, config.getWifiPowerSaving());  // Should fallback to default
+}
+
+// Test power management configuration with boundary values
+void test_config_power_management_boundaries() {
+    std::string configContent = R"({
+        "WIFI_SSID": "TestNetwork",
+        "WIFI_PASS": "password",
+        "ENDPOINT": "//server/share",
+        "ENDPOINT_TYPE": "SMB",
+        "ENDPOINT_USER": "user",
+        "ENDPOINT_PASS": "pass",
+        "CPU_SPEED_MHZ": 300
+    })";
+    
+    mockSD.addFile("/config.json", configContent);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE(loaded);
+    TEST_ASSERT_TRUE(config.valid());
+    
+    // Test boundary validation (should be clamped to maximum)
+    TEST_ASSERT_EQUAL(240, config.getCpuSpeedMhz());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     
@@ -955,6 +1088,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_config_mixed_state_wifi_new);
     RUN_TEST(test_config_mixed_state_endpoint_new);
     RUN_TEST(test_config_mixed_state_both_new);
+    
+    // Power management tests
+    RUN_TEST(test_config_power_management_defaults);
+    RUN_TEST(test_config_power_management_custom);
+    RUN_TEST(test_config_power_management_case_insensitive);
+    RUN_TEST(test_config_power_management_invalid_values);
+    RUN_TEST(test_config_power_management_boundaries);
     
     return UNITY_END();
 }

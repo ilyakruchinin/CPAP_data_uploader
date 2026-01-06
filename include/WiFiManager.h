@@ -3,6 +3,10 @@
 
 #include <Arduino.h>
 
+// Forward declarations for power management enums
+enum class WifiTxPower;
+enum class WifiPowerSaving;
+
 class WiFiManager {
 private:
     bool connected;
@@ -16,6 +20,12 @@ public:
     String getIPAddress() const;
     int getSignalStrength() const;  // Returns RSSI in dBm
     String getSignalQuality() const;  // Returns quality description
+    
+    // Power management methods
+    void setHighPerformanceMode();    // Disable power save for uploads
+    void setPowerSaveMode();          // Enable power save for idle periods
+    void setMaxPowerSave();          // Maximum power savings
+    void applyPowerSettings(WifiTxPower txPower, WifiPowerSaving powerSaving);  // Apply config settings
 };
 
 #endif // WIFI_MANAGER_H

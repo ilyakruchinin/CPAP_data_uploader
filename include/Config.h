@@ -4,6 +4,19 @@
 #include <Arduino.h>
 #include <FS.h>
 
+// Power management enums
+enum class WifiTxPower {
+    POWER_HIGH,
+    POWER_MID,
+    POWER_LOW
+};
+
+enum class WifiPowerSaving {
+    SAVE_NONE,
+    SAVE_MID,
+    SAVE_MAX
+};
+
 // Conditionally include Preferences for ESP32 or use mock for testing
 #ifdef UNIT_TEST
     #include "MockPreferences.h"
@@ -30,6 +43,11 @@ private:
     bool logRetainAfterRead;
     bool logToSdCard;
     bool isValid;
+    
+    // Power management settings
+    int cpuSpeedMhz;
+    WifiTxPower wifiTxPower;
+    WifiPowerSaving wifiPowerSaving;
     
     // Credential storage mode flags
     bool storePlainText;
@@ -83,9 +101,21 @@ public:
     bool getLogToSdCard() const;
     bool valid() const;
     
+    // Power management getters
+    int getCpuSpeedMhz() const;
+    WifiTxPower getWifiTxPower() const;
+    WifiPowerSaving getWifiPowerSaving() const;
+    
     // Credential storage mode getters
     bool isStoringPlainText() const;
     bool areCredentialsInFlash() const;
+    
+private:
+    // Helper methods for enum conversion
+    static WifiTxPower parseWifiTxPower(const String& str);
+    static WifiPowerSaving parseWifiPowerSaving(const String& str);
+    static String wifiTxPowerToString(WifiTxPower power);
+    static String wifiPowerSavingToString(WifiPowerSaving saving);
 };
 
 #endif // CONFIG_H

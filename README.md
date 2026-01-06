@@ -72,7 +72,34 @@ Create `config.json` on your SD card:
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
   "UPLOAD_HOUR": 12,
-  "GMT_OFFSET_HOURS": -8
+  "GMT_OFFSET_HOURS": -8,
+  "CPU_SPEED_MHZ": 240,
+  "WIFI_TX_PWR": "high",
+  "WIFI_PWR_SAVING": "none"
+}
+```
+
+### Power Management Settings
+Some devices might not be able to provide the card with enough power. in those cases it is useful to reduce the power consumption which comes at the cost of performance.
+
+**New in v0.4.3**: Configurable power management to reduce current consumption during active use while maintaining full web server functionality. **UNTESTED**
+
+- **CPU_SPEED_MHZ** (80-240, default: 240): CPU frequency in MHz. Lower values reduce power consumption but will slow performance.
+- **WIFI_TX_PWR** ("high"/"mid"/"low", default: "high"): WiFi transmission power. Lower power reduces range but saves current.
+- **WIFI_PWR_SAVING** ("none"/"mid"/"max", default: "none"): WiFi power saving mode. Higher levels save more power but may increase response latency.
+
+**Power Savings Examples:**
+- CPU 240→160MHz: ~20-30mA reduction
+- WiFi TX high→mid: ~10-15mA reduction  
+- WiFi power save "mid": ~30-50mA reduction
+- WiFi power save "max": ~50-80mA reduction
+
+**Recommended for low power:**
+```json
+{
+  "CPU_SPEED_MHZ": 160,
+  "WIFI_TX_PWR": "mid",
+  "WIFI_PWR_SAVING": "mid"
 }
 ```
 
@@ -237,9 +264,9 @@ The device respects your CPAP machine's need for SD card access by keeping uploa
 
 ## Project Status
 
-**Current Version:** v0.3.3 (development)
+**Current Version:** v0.4.3-pre (development)
 
-**Status:** ✅ Production Ready
+**Status:** ✅ Production Ready + Power Management
 - Hardware tested and validated
 - Integration tested with real CPAP data
 - All unit tests passing (145 tests)
@@ -247,6 +274,7 @@ The device respects your CPAP machine's need for SD card access by keeping uploa
 - Web interface remains responsive during uploads
 - Automatic retry mechanism with progress tracking
 - Automatic directory creation verified and working
+- **NEW**: Configurable power management for reduced current consumption
 
 **Supported Upload Methods:**
 - ✅ SMB/CIFS (Windows shares, NAS, Samba)
