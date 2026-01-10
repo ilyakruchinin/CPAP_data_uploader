@@ -1,6 +1,7 @@
 #include "WiFiManager.h"
 #include "Logger.h"
 #include "Config.h"  // For power management enums
+#include "SDCardManager.h"
 #include <WiFi.h>
 
 WiFiManager::WiFiManager() : connected(false) {}
@@ -9,12 +10,14 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
     // Validate SSID before attempting connection
     if (ssid.isEmpty()) {
         LOG_ERROR("Cannot connect to WiFi: SSID is empty");
+        Logger::getInstance().dumpLogsToSDCard("wifi_config_error");
         return false;
     }
     
     if (ssid.length() > 32) {
         LOG_ERROR("Cannot connect to WiFi: SSID exceeds 32 character limit");
         LOGF("SSID length: %d characters", ssid.length());
+        Logger::getInstance().dumpLogsToSDCard("wifi_config_error");
         return false;
     }
     
@@ -42,6 +45,29 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
         return true;
     } else {
         LOG("\nWiFi connection failed");
+        LOGF("WiFi status: %d", WiFi.status());
+        
+        // Log detailed failure reason
+        switch (WiFi.status()) {
+            case WL_NO_SSID_AVAIL:
+                LOG_ERROR("WiFi failure: SSID not found");
+                break;
+            case WL_CONNECT_FAILED:
+                LOG_ERROR("WiFi failure: Connection failed (wrong password?)");
+                break;
+            case WL_CONNECTION_LOST:
+                LOG_ERROR("WiFi failure: Connection lost");
+                break;
+            case WL_DISCONNECTED:
+                LOG_ERROR("WiFi failure: Disconnected");
+                break;
+            default:
+                LOGF("WiFi failure: Unknown status %d", WiFi.status());
+                break;
+        }
+        
+        // Dump logs to SD card for critical connection failures
+        Logger::getInstance().dumpLogsToSDCard("wifi_connection_failed");
         connected = false;
         return false;
     }

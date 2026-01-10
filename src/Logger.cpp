@@ -1,6 +1,8 @@
 #include "Logger.h"
+#include "SDCardManager.h"
 #include <stdarg.h>
 #include <time.h>
+#include <WiFi.h>
 
 // Singleton instance getter
 Logger& Logger::getInstance() {
@@ -313,5 +315,95 @@ void Logger::writeToSdCard(const char* data, size_t len) {
     
     // Close file to ensure data is written
     logFile.close();
+#endif
+}
+// Dump current logs to SD card for critical failures
+bool Logger::dumpLogsToSDCard(const String& reason, bool clearAfterDump) {
+#ifdef UNIT_TEST
+    return false; // Not supported in unit tests
+#else
+    // Create a temporary SD card manager to dump logs
+    SDCardManager tempSDManager;
+    
+    if (!tempSDManager.begin()) {
+        // Try to log error, but don't recurse into SD dump
+        String errorMsg = getTimestamp() + "[ERROR] Failed to initialize SD card for log dump\n";
+        writeToSerial(errorMsg.c_str(), errorMsg.length());
+        if (initialized && buffer != nullptr) {
+            writeToBuffer(errorMsg.c_str(), errorMsg.length());
+        }
+        return false;
+    }
+    
+    if (!tempSDManager.takeControl()) {
+        // Try to log error, but don't recurse into SD dump
+        String errorMsg = getTimestamp() + "[ERROR] Cannot dump logs - SD card in use by CPAP\n";
+        writeToSerial(errorMsg.c_str(), errorMsg.length());
+        if (initialized && buffer != nullptr) {
+            writeToBuffer(errorMsg.c_str(), errorMsg.length());
+        }
+        return false;
+    }
+    
+    // Get current logs from logger
+    LogData logData = retrieveLogs(clearAfterDump);
+    
+    if (logData.content.isEmpty()) {
+        String warnMsg = getTimestamp() + "[WARN] No logs available to dump\n";
+        writeToSerial(warnMsg.c_str(), warnMsg.length());
+        if (initialized && buffer != nullptr) {
+            writeToBuffer(warnMsg.c_str(), warnMsg.length());
+        }
+        tempSDManager.releaseControl();
+        return false;
+    }
+    
+    // Use the existing logFileName for debug logs
+    String filename = logFileName;
+    
+    // Write logs to SD card (append mode to preserve previous dumps)
+    File logFile = tempSDManager.getFS().open(filename, FILE_APPEND);
+    if (!logFile) {
+        // If file doesn't exist, create it
+        logFile = tempSDManager.getFS().open(filename, FILE_WRITE);
+        if (!logFile) {
+            String errorMsg = getTimestamp() + "[ERROR] Failed to create log dump file: " + filename + "\n";
+            writeToSerial(errorMsg.c_str(), errorMsg.length());
+            if (initialized && buffer != nullptr) {
+                writeToBuffer(errorMsg.c_str(), errorMsg.length());
+            }
+            tempSDManager.releaseControl();
+            return false;
+        }
+    }
+    
+    // Write separator and reason header
+    logFile.println("\n===== REASON: " + reason + " =====");
+    logFile.println("Timestamp: " + String(millis()) + "ms");
+    logFile.println("Free heap: " + String(ESP.getFreeHeap()) + " bytes");
+    logFile.println("WiFi status: " + String(WiFi.status()));
+    if (logData.bytesLost > 0) {
+        logFile.println("WARNING: " + String(logData.bytesLost) + " bytes of logs were lost due to buffer overflow");
+    }
+    logFile.println("Buffer cleared after dump: " + String(clearAfterDump ? "Yes" : "No"));
+    logFile.println("=== Log Content ===");
+    
+    // Write log content
+    logFile.print(logData.content);
+    
+    // Write end separator
+    logFile.println("=== End of Log Dump ===\n");
+    
+    logFile.close();
+    tempSDManager.releaseControl();
+    
+    // Log success message
+    String successMsg = getTimestamp() + "[INFO] Debug logs dumped to SD card: " + filename + " (reason: " + reason + ")\n";
+    writeToSerial(successMsg.c_str(), successMsg.length());
+    if (initialized && buffer != nullptr && !clearAfterDump) {
+        writeToBuffer(successMsg.c_str(), successMsg.length());
+    }
+    
+    return true;
 #endif
 }

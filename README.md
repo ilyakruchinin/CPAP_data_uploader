@@ -103,6 +103,12 @@ Some devices might not be able to provide the card with enough power. in those c
 }
 ```
 
+**⚠️ Important JSON Syntax:** 
+- **No trailing commas** - Remove any comma after the last property
+- **Valid JSON only** - Use an online JSON validator if unsure
+
+Invalid JSON will cause "SSID is empty" errors even when SSID is configured correctly.
+
 See the [User Guide](release/README.md) for complete configuration reference.
 
 ### Credential Security

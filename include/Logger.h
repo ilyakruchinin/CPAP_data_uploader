@@ -109,6 +109,17 @@ public:
     void enableSdCardLogging(bool enable, fs::FS* sdFS = nullptr);
 
     /**
+     * Dump current logs to SD card for critical failures
+     * This method handles SD card control internally and is safe to call
+     * from any context. It creates a timestamped debug log file.
+     * 
+     * @param reason Description of why logs are being dumped (e.g., "wifi_connection_failed")
+     * @param clearAfterDump If true, clears the log buffer after dumping
+     * @return true if logs were successfully dumped, false otherwise
+     */
+    bool dumpLogsToSDCard(const String& reason, bool clearAfterDump = false);
+
+    /**
      * Check if logger is properly initialized
      * Returns false if memory allocation or mutex creation failed
      */
