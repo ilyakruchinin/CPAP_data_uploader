@@ -97,6 +97,22 @@ Create a file named `config.json` in the root of your SD card with your settings
 }
 ```
 
+**⚠️ Critical JSON Syntax Rules:**
+- **No trailing commas** - Do not add a comma after the last property
+- **Proper quotes** - Use double quotes `"` around all strings
+- **Valid JSON format** - Test with an online JSON validator if unsure
+
+**Common mistake that causes "SSID is empty" errors:**
+```json
+{
+  "WIFI_SSID": "MyNetwork",
+  "WIFI_PASS": "password",
+  "UPLOAD_HOUR": 12,  ← Remove this comma if it's the last line
+}
+```
+
+Invalid JSON syntax will prevent configuration loading, causing WiFi connection failures even when credentials are correct.
+
 ### 3. Insert SD Card and Power On
 
 Insert the SD card into your CPAP machine's SD slot and power it on. The device will:

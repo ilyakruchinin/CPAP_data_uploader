@@ -100,6 +100,10 @@ void setup() {
     if (!config.loadFromSD(sdManager.getFS())) {
         LOG_ERROR("Failed to load configuration - cannot continue");
         LOG_ERROR("Please check config.json file on SD card");
+        
+        // Dump logs to SD card for configuration failures
+        Logger::getInstance().dumpLogsToSDCard("config_load_failed");
+        
         sdManager.releaseControl();
         return;
     }
@@ -120,6 +124,7 @@ void setup() {
     // Initialize WiFi in station mode
     if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
         LOG("Failed to connect to WiFi");
+        // Note: WiFiManager already dumps logs to SD card on connection failures
         return;
     }
 
