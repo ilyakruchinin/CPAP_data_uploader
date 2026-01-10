@@ -79,6 +79,7 @@ public:
     bool shouldUpload();
     bool uploadNewFiles(class SDCardManager* sdManager, bool forceUpload = false);
     bool scanPendingFolders(class SDCardManager* sdManager);  // Scan SD card without uploading
+    bool performDeltaScan(class SDCardManager* sdManager);    // Compare remote vs local file counts
     
     // Getters for internal components (for web interface access)
     UploadStateManager* getStateManager() { return stateManager; }

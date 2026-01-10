@@ -6,6 +6,10 @@
 volatile bool g_triggerUploadFlag = false;
 volatile bool g_resetStateFlag = false;
 volatile bool g_scanNowFlag = false;
+volatile bool g_deltaScanFlag = false;
+
+// Global scan status flag
+volatile bool g_scanInProgress = false;
 
 // External retry timing variables (defined in main.cpp)
 extern unsigned long nextUploadRetryTime;
@@ -46,6 +50,7 @@ bool TestWebServer::begin() {
     server->on("/", [this]() { this->handleRoot(); });
     server->on("/trigger-upload", [this]() { this->handleTriggerUpload(); });
     server->on("/scan-now", [this]() { this->handleScanNow(); });
+    server->on("/delta-scan", [this]() { this->handleDeltaScan(); });
     server->on("/status", [this]() { this->handleStatus(); });
     server->on("/reset-state", [this]() { this->handleResetState(); });
     server->on("/config", [this]() { this->handleConfig(); });
@@ -76,6 +81,7 @@ bool TestWebServer::begin() {
     LOG("[TestWebServer]   GET /              - Status page (HTML)");
     LOG("[TestWebServer]   GET /trigger-upload - Force immediate upload");
     LOG("[TestWebServer]   GET /scan-now      - Scan SD card for pending folders");
+    LOG("[TestWebServer]   GET /delta-scan    - Compare remote vs local file counts");
     LOG("[TestWebServer]   GET /status        - Status information (JSON)");
     LOG("[TestWebServer]   GET /reset-state   - Clear upload state");
     LOG("[TestWebServer]   GET /config        - Display configuration");
@@ -96,6 +102,12 @@ void TestWebServer::handleRoot() {
     String html = "<!DOCTYPE html><html><head>";
     html += "<title>CPAP Auto-Uploader Status</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    
+    // Add auto-refresh if scan is in progress
+    if (g_scanInProgress) {
+        html += "<meta http-equiv='refresh' content='5'>";
+    }
+    
     html += "<style>";
     html += "body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }";
     html += "h1 { color: #333; }";
@@ -109,10 +121,22 @@ void TestWebServer::handleRoot() {
     html += ".button:hover { background: #0052a3; }";
     html += ".button.danger { background: #cc0000; }";
     html += ".button.danger:hover { background: #a30000; }";
+    html += ".button.disabled { background: #cccccc; color: #666666; cursor: not-allowed; }";
+    html += ".scan-warning { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 15px 0; }";
     html += "</style>";
     html += "</head><body>";
     html += "<div class='container'>";
     html += "<h1>CPAP Auto-Uploader Status</h1>";
+    
+    // Show scan warning if scan is in progress
+    if (g_scanInProgress) {
+        html += "<div class='scan-warning'>";
+        html += "<h3>⏳ Scan in Progress</h3>";
+        html += "<p><strong>A scan operation is currently running.</strong></p>";
+        html += "<p>This page will automatically refresh every 5 seconds until the scan completes.</p>";
+        html += "<p>Please wait for the scan to finish before triggering another scan.</p>";
+        html += "</div>";
+    }
     
     // System information
     html += "<h2>System Information</h2>";
@@ -278,7 +302,16 @@ void TestWebServer::handleRoot() {
     // Action buttons
     html += "<h2>Actions</h2>";
     html += "<a href='/trigger-upload' class='button'>Trigger Upload Now</a>";
-    html += "<a href='/scan-now' class='button'>Scan SD Card</a>";
+    
+    // Disable scan buttons if scan is in progress
+    if (g_scanInProgress) {
+        html += "<span class='button disabled'>Scan SD Card (In Progress)</span>";
+        html += "<span class='button disabled'>Delta Scan (In Progress)</span>";
+    } else {
+        html += "<a href='/scan-now' class='button'>Scan SD Card</a>";
+        html += "<a href='/delta-scan' class='button'>Delta Scan (Compare Remote)</a>";
+    }
+    
     html += "<a href='/status' class='button'>View JSON Status</a>";
     html += "<a href='/config' class='button'>View Full Config</a>";
     html += "<a href='/logs' class='button'>View System Logs</a>";
@@ -312,6 +345,11 @@ void TestWebServer::handleTriggerUpload() {
 void TestWebServer::handleScanNow() {
     LOG("[TestWebServer] SD card scan requested via web interface");
     
+    // Check if scan is already in progress
+    if (handleScanInProgress("SD card scan")) {
+        return;
+    }
+    
     // Set global scan flag
     g_scanNowFlag = true;
     
@@ -321,6 +359,27 @@ void TestWebServer::handleScanNow() {
     server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
     
     String response = "{\"status\":\"success\",\"message\":\"SD card scan triggered. Refresh page to see updated folder counts.\"}";
+    server->send(200, "application/json", response);
+}
+
+// GET /delta-scan - Compare remote vs local file counts and mark differences for re-upload
+void TestWebServer::handleDeltaScan() {
+    LOG("[TestWebServer] Delta scan requested via web interface");
+    
+    // Check if scan is already in progress
+    if (handleScanInProgress("Delta scan")) {
+        return;
+    }
+    
+    // Set global delta scan flag
+    g_deltaScanFlag = true;
+    
+    // Add CORS headers
+    server->sendHeader("Access-Control-Allow-Origin", "*");
+    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    
+    String response = "{\"status\":\"success\",\"message\":\"Delta scan triggered. Comparing remote vs local file counts. Check logs for results.\"}";
     server->send(200, "application/json", response);
 }
 
@@ -335,6 +394,7 @@ void TestWebServer::handleStatus() {
     json += "\"uptime_seconds\":" + String(millis() / 1000) + ",";
     json += "\"current_time\":\"" + getCurrentTimeString() + "\",";
     json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
+    json += "\"scan_in_progress\":" + String(g_scanInProgress ? "true" : "false") + ",";
     
     // WiFi information
     if (wifiManager && wifiManager->isConnected()) {
@@ -512,6 +572,23 @@ void TestWebServer::handleNotFound() {
     
     String message = "{\"status\":\"error\",\"message\":\"Endpoint not found\",\"path\":\"" + uri + "\"}";
     server->send(404, "application/json", message);
+}
+
+// Helper: Check if scan is in progress and send appropriate response
+bool TestWebServer::handleScanInProgress(const String& scanType) {
+    if (g_scanInProgress) {
+        LOGF("[TestWebServer] %s already in progress, ignoring request", scanType.c_str());
+        
+        // Add CORS headers
+        server->sendHeader("Access-Control-Allow-Origin", "*");
+        server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+        server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+        
+        String response = "{\"status\":\"warning\",\"message\":\"Scan already in progress. Please wait for current scan to complete.\"}";
+        server->send(409, "application/json", response);
+        return true;
+    }
+    return false;
 }
 
 // Helper: Get uptime as formatted string

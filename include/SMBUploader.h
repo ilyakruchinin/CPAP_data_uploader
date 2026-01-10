@@ -121,6 +121,15 @@ public:
      * @return true if connected, false otherwise
      */
     bool isConnected() const;
+    
+    /**
+     * Scan remote directory and count files (for delta scan functionality)
+     * Only counts files, not subdirectories
+     * 
+     * @param remotePath Path on SMB share to scan (e.g., "/DATALOG/20241101")
+     * @return Number of files in the directory, -1 on error
+     */
+    int countRemoteFiles(const String& remotePath);
 };
 
 #endif // ENABLE_SMB_UPLOAD

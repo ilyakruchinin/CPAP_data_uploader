@@ -52,6 +52,10 @@ unsigned long lastSdCardRetry = 0;
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
 extern volatile bool g_scanNowFlag;
+extern volatile bool g_deltaScanFlag;
+
+// External scan status flag
+extern volatile bool g_scanInProgress;
 #endif
 
 // ============================================================================
@@ -294,6 +298,9 @@ void loop() {
         if (sdManager.takeControl()) {
             LOG("SD card control acquired, scanning for pending folders...");
             
+            // Set scan in progress flag
+            g_scanInProgress = true;
+            
             // Perform scan without uploading
             if (uploader->scanPendingFolders(&sdManager)) {
                 LOG("SD card scan completed successfully");
@@ -301,11 +308,45 @@ void loop() {
                 LOG("SD card scan failed");
             }
             
+            // Clear scan in progress flag
+            g_scanInProgress = false;
+            
             // Release SD card
             sdManager.releaseControl();
             LOG("SD card control released");
         } else {
             LOG_ERROR("Cannot scan SD card - in use by CPAP");
+            LOG("Will retry on next loop iteration");
+        }
+    }
+    
+    // Check for delta scan trigger
+    if (g_deltaScanFlag) {
+        LOG("=== Delta Scan Triggered via Web Interface ===");
+        g_deltaScanFlag = false;
+        
+        // Try to take control of SD card
+        if (sdManager.takeControl()) {
+            LOG("SD card control acquired, performing delta scan...");
+            
+            // Set scan in progress flag
+            g_scanInProgress = true;
+            
+            // Perform delta scan (compare remote vs local file counts)
+            if (uploader->performDeltaScan(&sdManager)) {
+                LOG("Delta scan completed successfully");
+            } else {
+                LOG("Delta scan failed");
+            }
+            
+            // Clear scan in progress flag
+            g_scanInProgress = false;
+            
+            // Release SD card
+            sdManager.releaseControl();
+            LOG("SD card control released");
+        } else {
+            LOG_ERROR("Cannot perform delta scan - SD card in use by CPAP");
             LOG("Will retry on next loop iteration");
         }
     }

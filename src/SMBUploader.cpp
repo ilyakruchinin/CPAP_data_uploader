@@ -426,4 +426,71 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
     return success;
 }
 
+int SMBUploader::countRemoteFiles(const String& remotePath) {
+    if (!connected) {
+        LOG("[SMB] ERROR: Not connected - cannot scan remote directory");
+        return -1;
+    }
+    
+    // Prepend base path if configured
+    String fullRemotePath = remotePath;
+    if (!smbBasePath.isEmpty()) {
+        // Remove leading slash from remotePath if present
+        String cleanRemotePath = remotePath;
+        if (cleanRemotePath.startsWith("/")) {
+            cleanRemotePath = cleanRemotePath.substring(1);
+        }
+        fullRemotePath = smbBasePath + "/" + cleanRemotePath;
+    } else if (fullRemotePath.startsWith("/")) {
+        // Remove leading slash for libsmb2 compatibility
+        fullRemotePath = fullRemotePath.substring(1);
+    }
+    
+    LOG_DEBUGF("[SMB] Scanning remote directory: %s", fullRemotePath.c_str());
+    
+    // Check if directory exists
+    struct smb2_stat_64 st;
+    int stat_result = smb2_stat(smb2, fullRemotePath.c_str(), &st);
+    if (stat_result < 0) {
+        const char* error = smb2_get_error(smb2);
+        LOG_DEBUGF("[SMB] Directory does not exist or cannot access: %s (%s)", fullRemotePath.c_str(), error);
+        return 0;  // Directory doesn't exist, so 0 files
+    }
+    
+    if (st.smb2_type != SMB2_TYPE_DIRECTORY) {
+        LOG_DEBUGF("[SMB] Path exists but is not a directory: %s", fullRemotePath.c_str());
+        return -1;  // Error - path exists but is not a directory
+    }
+    
+    // Open directory for reading
+    struct smb2dir* dir = smb2_opendir(smb2, fullRemotePath.c_str());
+    if (dir == nullptr) {
+        const char* error = smb2_get_error(smb2);
+        LOG_DEBUGF("[SMB] Failed to open directory: %s (%s)", fullRemotePath.c_str(), error);
+        return -1;
+    }
+    
+    // Count files (not directories)
+    int fileCount = 0;
+    struct smb2dirent* entry;
+    
+    while ((entry = smb2_readdir(smb2, dir)) != nullptr) {
+        // Skip "." and ".." entries
+        if (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "..") == 0) {
+            continue;
+        }
+        
+        // Only count regular files, not directories
+        if (entry->st.smb2_type == SMB2_TYPE_FILE) {
+            fileCount++;
+        }
+    }
+    
+    // Close directory
+    smb2_closedir(smb2, dir);
+    
+    LOG_DEBUGF("[SMB] Found %d files in remote directory: %s", fileCount, fullRemotePath.c_str());
+    return fileCount;
+}
+
 #endif // ENABLE_SMB_UPLOAD
