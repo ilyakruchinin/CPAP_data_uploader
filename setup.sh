@@ -35,6 +35,10 @@ pip install -r requirements.txt
 echo "Setting up libsmb2 component..."
 ./scripts/setup_libsmb2.sh
 
+# Install library dependencies, this is needed to run monitor.sh without building.
+echo "Installing library dependencies..."
+pio lib install
+
 echo ""
 echo "✓ Setup complete!"
 echo ""
