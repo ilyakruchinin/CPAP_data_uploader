@@ -60,7 +60,7 @@ inline unsigned long millis() {
 }
 
 // Mock time() function (standard C function)
-inline time_t time(time_t* t) {
+time_t time(time_t* t) {
     time_t current = MockTimeState::getTime();
     if (t != nullptr) {
         *t = current;
