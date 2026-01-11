@@ -41,7 +41,7 @@ public:
         }
     }
 
-    LogData retrieveLogs(bool clearAfterRead = true) {
+    LogData retrieveLogs() {
         return LogData();
     }
 

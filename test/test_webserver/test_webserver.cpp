@@ -38,6 +38,9 @@ public:
 // Global trigger flags (normally defined in TestWebServer.cpp)
 volatile bool g_triggerUploadFlag = false;
 volatile bool g_resetStateFlag = false;
+volatile bool g_scanNowFlag = false;
+volatile bool g_deltaScanFlag = false;
+volatile bool g_deepScanFlag = false;
 
 // Simplified TestWebServer for testing (without actual WebServer dependency)
 class TestWebServer {
@@ -67,6 +70,9 @@ public:
         // Register handlers (simplified for testing)
         server->on("/", [this]() { this->handleRoot(); });
         server->on("/trigger-upload", [this]() { this->handleTriggerUpload(); });
+        server->on("/scan-now", [this]() { this->handleScanNow(); });
+        server->on("/delta-scan", [this]() { this->handleDeltaScan(); });
+        server->on("/deep-scan", [this]() { this->handleDeepScan(); });
         server->on("/status", [this]() { this->handleStatus(); });
         server->on("/reset-state", [this]() { this->handleResetState(); });
         server->on("/config", [this]() { this->handleConfig(); });
@@ -92,26 +98,47 @@ private:
     
     void handleTriggerUpload() {
         g_triggerUploadFlag = true;
-        server->sendHeader("Access-Control-Allow-Origin", "*");
+        addCorsHeaders();
         String response = "{\"status\":\"success\"}";
         server->send(200, "application/json", response);
     }
     
+    void handleScanNow() {
+        g_scanNowFlag = true;
+        addCorsHeaders();
+        String response = "{\"status\":\"success\",\"message\":\"SD card scan triggered.\"}";
+        server->send(200, "application/json", response);
+    }
+    
+    void handleDeltaScan() {
+        g_deltaScanFlag = true;
+        addCorsHeaders();
+        String response = "{\"status\":\"success\",\"message\":\"Delta scan triggered.\"}";
+        server->send(200, "application/json", response);
+    }
+    
+    void handleDeepScan() {
+        g_deepScanFlag = true;
+        addCorsHeaders();
+        String response = "{\"status\":\"success\",\"message\":\"Deep scan triggered.\"}";
+        server->send(200, "application/json", response);
+    }
+    
     void handleStatus() {
-        server->sendHeader("Access-Control-Allow-Origin", "*");
+        addCorsHeaders();
         String json = "{\"uptime_seconds\":100}";
         server->send(200, "application/json", json);
     }
     
     void handleResetState() {
         g_resetStateFlag = true;
-        server->sendHeader("Access-Control-Allow-Origin", "*");
+        addCorsHeaders();
         String response = "{\"status\":\"success\"}";
         server->send(200, "application/json", response);
     }
     
     void handleConfig() {
-        server->sendHeader("Access-Control-Allow-Origin", "*");
+        addCorsHeaders();
         String json = "{\"endpoint_type\":\"SMB\"}";
         server->send(200, "application/json", json);
     }
@@ -119,6 +146,13 @@ private:
     void handleNotFound() {
         String message = "{\"status\":\"error\"}";
         server->send(404, "application/json", message);
+    }
+    
+    // Static helper method for CORS headers
+    void addCorsHeaders() {
+        server->sendHeader("Access-Control-Allow-Origin", "*");
+        server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+        server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
     }
 };
 
@@ -133,6 +167,9 @@ void setUp(void) {
     // Reset global flags
     g_triggerUploadFlag = false;
     g_resetStateFlag = false;
+    g_scanNowFlag = false;
+    g_deltaScanFlag = false;
+    g_deepScanFlag = false;
     
     // Create test server
     testServer = new TestWebServer(&testConfig, &testStateManager, 
@@ -262,18 +299,100 @@ void test_handle_client(void) {
     TEST_ASSERT_TRUE(true);
 }
 
-// Test: Global flags are volatile
-void test_global_flags_volatile(void) {
-    // Verify flags can be set and read
-    g_triggerUploadFlag = true;
-    TEST_ASSERT_TRUE(g_triggerUploadFlag);
-    g_triggerUploadFlag = false;
-    TEST_ASSERT_FALSE(g_triggerUploadFlag);
+// Test: Scan now endpoint
+void test_scan_now_endpoint(void) {
+    testServer->begin();
     
-    g_resetStateFlag = true;
-    TEST_ASSERT_TRUE(g_resetStateFlag);
-    g_resetStateFlag = false;
-    TEST_ASSERT_FALSE(g_resetStateFlag);
+    WebServer* server = testServer->getServer();
+    TEST_ASSERT_FALSE(g_scanNowFlag);
+    
+    // Simulate request
+    server->simulateRequest("/scan-now");
+    
+    // Verify flag was set
+    TEST_ASSERT_TRUE(g_scanNowFlag);
+    
+    // Verify response
+    TEST_ASSERT_EQUAL(200, server->getLastResponseCode());
+    TEST_ASSERT_EQUAL_STRING("application/json", server->getLastResponseType().c_str());
+    String body = server->getLastResponseBody();
+    TEST_ASSERT_TRUE(body.length() > 0);
+    TEST_ASSERT_TRUE(strstr(body.c_str(), "success") != NULL);
+    TEST_ASSERT_TRUE(strstr(body.c_str(), "SD card scan triggered") != NULL);
+    TEST_ASSERT_EQUAL_STRING("*", server->getResponseHeader("Access-Control-Allow-Origin").c_str());
+    
+    // Reset
+    g_scanNowFlag = false;
+}
+
+// Test: Delta scan endpoint
+void test_delta_scan_endpoint(void) {
+    testServer->begin();
+    
+    WebServer* server = testServer->getServer();
+    TEST_ASSERT_FALSE(g_deltaScanFlag);
+    
+    // Simulate request
+    server->simulateRequest("/delta-scan");
+    
+    // Verify flag was set
+    TEST_ASSERT_TRUE(g_deltaScanFlag);
+    
+    // Verify response
+    TEST_ASSERT_EQUAL(200, server->getLastResponseCode());
+    TEST_ASSERT_EQUAL_STRING("application/json", server->getLastResponseType().c_str());
+    String body = server->getLastResponseBody();
+    TEST_ASSERT_TRUE(body.length() > 0);
+    TEST_ASSERT_TRUE(strstr(body.c_str(), "success") != NULL);
+    TEST_ASSERT_TRUE(strstr(body.c_str(), "Delta scan triggered") != NULL);
+    TEST_ASSERT_EQUAL_STRING("*", server->getResponseHeader("Access-Control-Allow-Origin").c_str());
+    
+    // Reset
+    g_deltaScanFlag = false;
+}
+
+// Test: Deep scan endpoint
+void test_deep_scan_endpoint(void) {
+    testServer->begin();
+    
+    WebServer* server = testServer->getServer();
+    TEST_ASSERT_FALSE(g_deepScanFlag);
+    
+    // Simulate request
+    server->simulateRequest("/deep-scan");
+    
+    // Verify flag was set
+    TEST_ASSERT_TRUE(g_deepScanFlag);
+    
+    // Verify response
+    TEST_ASSERT_EQUAL(200, server->getLastResponseCode());
+    TEST_ASSERT_EQUAL_STRING("application/json", server->getLastResponseType().c_str());
+    String body = server->getLastResponseBody();
+    TEST_ASSERT_TRUE(body.length() > 0);
+    TEST_ASSERT_TRUE(strstr(body.c_str(), "success") != NULL);
+    TEST_ASSERT_TRUE(strstr(body.c_str(), "Deep scan triggered") != NULL);
+    TEST_ASSERT_EQUAL_STRING("*", server->getResponseHeader("Access-Control-Allow-Origin").c_str());
+    
+    // Reset
+    g_deepScanFlag = false;
+}
+
+// Test: CORS headers consistency
+void test_cors_headers_consistency(void) {
+    testServer->begin();
+    
+    WebServer* server = testServer->getServer();
+    
+    // Test all endpoints have consistent CORS headers
+    const char* endpoints[] = {"/trigger-upload", "/scan-now", "/delta-scan", "/deep-scan", "/status", "/reset-state", "/config"};
+    const int numEndpoints = sizeof(endpoints) / sizeof(endpoints[0]);
+    
+    for (int i = 0; i < numEndpoints; i++) {
+        server->simulateRequest(endpoints[i]);
+        TEST_ASSERT_EQUAL_STRING("*", server->getResponseHeader("Access-Control-Allow-Origin").c_str());
+        TEST_ASSERT_EQUAL_STRING("GET, OPTIONS", server->getResponseHeader("Access-Control-Allow-Methods").c_str());
+        TEST_ASSERT_EQUAL_STRING("Content-Type", server->getResponseHeader("Access-Control-Allow-Headers").c_str());
+    }
 }
 
 // Test: Helper methods
@@ -294,10 +413,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_endpoint_registration);
     RUN_TEST(test_trigger_upload_endpoint);
     RUN_TEST(test_reset_state_endpoint);
+    RUN_TEST(test_scan_now_endpoint);
+    RUN_TEST(test_delta_scan_endpoint);
+    RUN_TEST(test_deep_scan_endpoint);
     RUN_TEST(test_status_json_generation);
     RUN_TEST(test_config_endpoint);
     RUN_TEST(test_handle_client);
-    RUN_TEST(test_global_flags_volatile);
+    RUN_TEST(test_cors_headers_consistency);
     RUN_TEST(test_helper_methods);
     
     return UNITY_END();

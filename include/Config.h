@@ -40,7 +40,6 @@ private:
     int bootDelaySeconds;
     int sdReleaseIntervalSeconds;
     int sdReleaseWaitMs;
-    bool logRetainAfterRead;
     bool logToSdCard;
     bool isValid;
     
@@ -97,7 +96,6 @@ public:
     int getBootDelaySeconds() const;
     int getSdReleaseIntervalSeconds() const;
     int getSdReleaseWaitMs() const;
-    bool getLogRetainAfterRead() const;
     bool getLogToSdCard() const;
     bool valid() const;
     

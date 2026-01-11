@@ -78,25 +78,20 @@ public:
     void logf(const char* format, ...);
 
     /**
-     * Retrieve all logs from circular buffer with optional draining
+     * Retrieve all logs from circular buffer
      * Returns log content and count of bytes lost due to overflow
      * Thread-safe for concurrent access
      * 
-     * @param clearAfterRead If true (default), buffer is emptied after reading
-     *                       If false, logs are retained but only new logs returned on subsequent calls
+     * Always returns all available logs in the circular buffer from oldest to newest.
+     * The buffer is never cleared - logs are retained until overwritten by new data.
+     * This ensures consistent log retrieval and prevents out-of-order issues.
      * 
-     * When clearAfterRead is true:
-     * - Buffer is emptied (tail = head)
-     * - Returns all available logs from buffer
-     * - Future calls will only return new logs
-     * 
-     * When clearAfterRead is false:
-     * - Buffer remains unchanged for overflow protection
-     * - Returns all logs from last user read position to current head
-     * - First call returns all logs, subsequent calls return only new logs
-     * - Logs may still be lost on buffer overflow, but retention is attempted
+     * Returns:
+     * - All logs currently in the buffer (from tail to head)
+     * - Count of bytes lost due to overflow since buffer creation
+     * - Logs are always returned in chronological order (oldest first)
      */
-    LogData retrieveLogs(bool clearAfterRead = true);
+    LogData retrieveLogs();
 
     /**
      * Enable or disable SD card logging
@@ -114,10 +109,9 @@ public:
      * from any context. It creates a timestamped debug log file.
      * 
      * @param reason Description of why logs are being dumped (e.g., "wifi_connection_failed")
-     * @param clearAfterDump If true, clears the log buffer after dumping
      * @return true if logs were successfully dumped, false otherwise
      */
-    bool dumpLogsToSDCard(const String& reason, bool clearAfterDump = false);
+    bool dumpLogsToSDCard(const String& reason);
 
     /**
      * Check if logger is properly initialized
@@ -157,10 +151,10 @@ private:
     void writeToSdCard(const char* data, size_t len);
 
     /**
-     * Calculate number of bytes lost since last read
-     * Returns difference between lastReadIndex and tailIndex if data was overwritten
+     * Track bytes lost due to buffer overflow
+     * Called when data is overwritten in the circular buffer
      */
-    uint32_t calculateLostBytes();
+    void trackLostBytes(uint32_t bytesLost);
 
     // Circular buffer storage
     char* buffer;
@@ -170,8 +164,7 @@ private:
     // These wrap at 2^32 but use modulo arithmetic for physical position
     volatile uint32_t headIndex;      // Next write position (monotonic counter)
     volatile uint32_t tailIndex;      // Oldest valid data position (monotonic counter)
-    volatile uint32_t lastReadIndex;  // Last API read position (monotonic counter)
-    volatile uint32_t userReadIndex;  // Last position read by user (for retain mode)
+    volatile uint32_t totalBytesLost; // Total bytes lost due to overflow since creation
 
     // Thread safety for dual-core ESP32
     SemaphoreHandle_t mutex;

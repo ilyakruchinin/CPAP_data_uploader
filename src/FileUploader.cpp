@@ -344,7 +344,7 @@ bool FileUploader::scanPendingFolders(SDCardManager* sdManager) {
 }
 
 // Scan DATALOG folders and sort by date (newest first)
-std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd) {
+std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCompleted) {
     std::vector<String> folders;
     
     File root = sd.open("/DATALOG");
@@ -375,7 +375,13 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd) {
             
             // Check if folder is already completed
             if (stateManager->isFolderCompleted(folderName)) {
-                LOG_DEBUGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
+                if (includeCompleted) {
+                    // For delta/deep scans, include completed folders
+                    folders.push_back(folderName);
+                    LOG_INFOF("[FileUploader] Found completed DATALOG folder: %s", folderName.c_str());
+                } else {
+                    LOG_DEBUGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
+                }
             } else if (stateManager->isPendingFolder(folderName)) {
                 // Check if pending folder now has files (was empty but now has content)
                 String folderPath = "/DATALOG/" + folderName;
@@ -976,6 +982,305 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     }
     
     LOGF("[FileUploader] Successfully uploaded: %s (%lu bytes)", filePath.c_str(), bytesTransferred);
+    
+    return true;
+}
+// Perform delta scan - compare remote vs local file counts and re-upload if different
+bool FileUploader::performDeltaScan(SDCardManager* sdManager) {
+    LOG("[FileUploader] Starting delta scan - comparing remote vs local file counts");
+    
+    if (!wifiManager || !wifiManager->isConnected()) {
+        LOG_ERROR("[FileUploader] WiFi not connected - cannot perform delta scan");
+        return false;
+    }
+    
+    fs::FS &sd = sdManager->getFS();
+    
+    // Only support SMB for now (can be extended for other protocols)
+#ifdef ENABLE_SMB_UPLOAD
+    if (!smbUploader || config->getEndpointType() != "SMB") {
+        LOG_ERROR("[FileUploader] Delta scan only supported for SMB endpoints");
+        return false;
+    }
+    
+    // Ensure SMB connection is established
+    if (!smbUploader->isConnected()) {
+        LOG("[FileUploader] Connecting to SMB share for delta scan...");
+        if (!smbUploader->begin()) {
+            LOG_ERROR("[FileUploader] Failed to connect to SMB share for delta scan");
+            return false;
+        }
+    }
+#else
+    LOG_ERROR("[FileUploader] Delta scan requires SMB support (compile with -DENABLE_SMB_UPLOAD)");
+    return false;
+#endif
+    
+    // Scan all DATALOG folders
+    std::vector<String> datalogFolders = scanDatalogFolders(sd, true);
+    
+    int foldersChecked = 0;
+    int foldersWithDifferences = 0;
+    std::vector<String> foldersToReupload;
+    
+    LOG_INFOF("[FileUploader] Checking %d DATALOG folders for differences", datalogFolders.size());
+    
+    for (const String& folderName : datalogFolders) {
+        // Check for periodic SD card release
+        if (!checkAndReleaseSD(sdManager)) {
+            LOG_ERROR("[FileUploader] Failed to retake SD card control during delta scan");
+            return false;
+        }
+        
+        String localFolderPath = "/DATALOG/" + folderName;
+        String remoteFolderPath = "/DATALOG/" + folderName;
+        
+        // Count local files
+        std::vector<String> localFiles = scanFolderFiles(sd, localFolderPath);
+        int localFileCount = localFiles.size();
+        
+        // Count remote files
+#ifdef ENABLE_SMB_UPLOAD
+        int remoteFileCount = smbUploader->countRemoteFiles(remoteFolderPath);
+#else
+        int remoteFileCount = -1;
+#endif
+        
+        foldersChecked++;
+        
+        if (remoteFileCount < 0) {
+            LOG_INFOF("[FileUploader] Could not access remote folder: %s (may not exist)", remoteFolderPath.c_str());
+            // If remote folder doesn't exist, we need to upload
+            if (localFileCount > 0) {
+                LOG_INFOF("[FileUploader] Local folder has %d files, remote doesn't exist - marking for re-upload", localFileCount);
+                foldersWithDifferences++;
+                foldersToReupload.push_back(folderName);
+            }
+        } else if (localFileCount != remoteFileCount) {
+            LOG_INFOF("[FileUploader] File count mismatch in %s: local=%d, remote=%d - marking for re-upload", 
+                      folderName.c_str(), localFileCount, remoteFileCount);
+            foldersWithDifferences++;
+            foldersToReupload.push_back(folderName);
+        } else {
+            LOG_INFOF("[FileUploader] File count matches in %s: %d files", folderName.c_str(), localFileCount);
+        }
+        
+        // Yield to prevent watchdog timeout
+        yield();
+    }
+    
+    LOG_INFOF("[FileUploader] Delta scan complete: checked %d folders, found %d with differences", 
+              foldersChecked, foldersWithDifferences);
+    
+    if (foldersWithDifferences == 0) {
+        LOG("[FileUploader] No differences found - all folders match remote");
+        return true;
+    }
+    
+    // Mark folders for re-upload by removing them from completed state
+    LOG_INFOF("[FileUploader] Marking %d folders for re-upload", foldersWithDifferences);
+    
+    for (const String& folderName : foldersToReupload) {
+        LOG_INFOF("[FileUploader] Processing folder for re-upload: %s", folderName.c_str());
+        
+        if (stateManager->isFolderCompleted(folderName)) {
+            LOG_INFOF("[FileUploader] Removing completed status from folder: %s", folderName.c_str());
+            stateManager->removeFolderFromCompleted(folderName);
+        } else {
+            LOG_INFOF("[FileUploader] Folder %s was not in completed status", folderName.c_str());
+        }
+        
+        // Also remove from pending if it was there
+        if (stateManager->isPendingFolder(folderName)) {
+            LOG_INFOF("[FileUploader] Removing pending status from folder: %s", folderName.c_str());
+            stateManager->removeFolderFromPending(folderName);
+        }
+    }
+    
+    // Save state changes
+    if (!stateManager->save(sd)) {
+        LOG_WARN("[FileUploader] Failed to save state after delta scan");
+    }
+    
+    LOG_INFOF("[FileUploader] Delta scan complete: %d folders marked for re-upload", foldersWithDifferences);
+    LOG("[FileUploader] Folders will be re-uploaded in the next upload session");
+    
+    return true;
+}
+
+// Perform deep scan - compare remote vs local file sizes and re-upload if different
+bool FileUploader::performDeepScan(SDCardManager* sdManager) {
+    LOG("[FileUploader] Starting deep scan - comparing remote vs local file sizes");
+    
+    if (!wifiManager || !wifiManager->isConnected()) {
+        LOG_ERROR("[FileUploader] WiFi not connected - cannot perform deep scan");
+        return false;
+    }
+    
+    fs::FS &sd = sdManager->getFS();
+    
+    // Only support SMB for now (can be extended for other protocols)
+#ifdef ENABLE_SMB_UPLOAD
+    if (!smbUploader || config->getEndpointType() != "SMB") {
+        LOG_ERROR("[FileUploader] Deep scan only supported for SMB endpoints");
+        return false;
+    }
+    
+    // Ensure SMB connection is established
+    if (!smbUploader->isConnected()) {
+        LOG("[FileUploader] Connecting to SMB share for deep scan...");
+        if (!smbUploader->begin()) {
+            LOG_ERROR("[FileUploader] Failed to connect to SMB share for deep scan");
+            return false;
+        }
+    }
+#else
+    LOG_ERROR("[FileUploader] Deep scan requires SMB support (compile with -DENABLE_SMB_UPLOAD)");
+    return false;
+#endif
+    
+    // Scan all DATALOG folders (including completed ones for deep scan)
+    std::vector<String> datalogFolders = scanDatalogFolders(sd, true);
+    
+    int foldersChecked = 0;
+    int foldersWithDifferences = 0;
+    int filesWithSizeDifferences = 0;
+    std::vector<String> foldersToReupload;
+    
+    LOG_INFOF("[FileUploader] Checking %d DATALOG folders for file size differences", datalogFolders.size());
+    
+    for (const String& folderName : datalogFolders) {
+        // Check for periodic SD card release
+        if (!checkAndReleaseSD(sdManager)) {
+            LOG_ERROR("[FileUploader] Failed to retake SD card control during deep scan");
+            return false;
+        }
+        
+        String localFolderPath = "/DATALOG/" + folderName;
+        String remoteFolderPath = "/DATALOG/" + folderName;
+        
+        // Get local file information
+        std::vector<String> localFiles = scanFolderFiles(sd, localFolderPath);
+        std::map<String, size_t> localFileInfo;
+        
+        for (const String& fileName : localFiles) {
+            String fullLocalPath = localFolderPath + "/" + fileName;
+            File localFile = sd.open(fullLocalPath, "r");
+            if (localFile) {
+                localFileInfo[fileName] = localFile.size();
+                localFile.close();
+            } else {
+                LOG_WARN("[FileUploader] Could not open local file for size check: " + fullLocalPath);
+            }
+        }
+        
+        // Get remote file information
+#ifdef ENABLE_SMB_UPLOAD
+        std::map<String, size_t> remoteFileInfo;
+        bool remoteSuccess = smbUploader->getRemoteFileInfo(remoteFolderPath, remoteFileInfo);
+#else
+        bool remoteSuccess = false;
+        std::map<String, size_t> remoteFileInfo;
+#endif
+        
+        foldersChecked++;
+        bool folderHasDifferences = false;
+        int folderFileDifferences = 0;
+        
+        if (!remoteSuccess) {
+            LOG_DEBUGF("[FileUploader] Could not access remote folder: %s", remoteFolderPath.c_str());
+            // If we can't access remote folder, mark for re-upload if local has files
+            if (!localFileInfo.empty()) {
+                LOG_DEBUGF("[FileUploader] Local folder has %d files, remote inaccessible - marking for re-upload", localFileInfo.size());
+                folderHasDifferences = true;
+            }
+        } else {
+            // Compare file counts first
+            if (localFileInfo.size() != remoteFileInfo.size()) {
+                LOG_DEBUGF("[FileUploader] File count mismatch in %s: local=%d, remote=%d", 
+                          folderName.c_str(), localFileInfo.size(), remoteFileInfo.size());
+                folderHasDifferences = true;
+            } else {
+                // Compare individual file sizes
+                for (const auto& localFile : localFileInfo) {
+                    const String& fileName = localFile.first;
+                    size_t localSize = localFile.second;
+                    
+                    auto remoteIt = remoteFileInfo.find(fileName);
+                    if (remoteIt == remoteFileInfo.end()) {
+                        LOG_DEBUGF("[FileUploader] File missing on remote: %s/%s (%u bytes)", 
+                                  folderName.c_str(), fileName.c_str(), localSize);
+                        folderHasDifferences = true;
+                        folderFileDifferences++;
+                    } else {
+                        size_t remoteSize = remoteIt->second;
+                        if (localSize != remoteSize) {
+                            LOG_INFOF("[FileUploader] File size mismatch: %s/%s local=%u bytes, remote=%u bytes", 
+                                      folderName.c_str(), fileName.c_str(), localSize, remoteSize);
+                            folderHasDifferences = true;
+                            folderFileDifferences++;
+                        }
+                    }
+                }
+                
+                // Check for files that exist on remote but not local (shouldn't happen normally)
+                for (const auto& remoteFile : remoteFileInfo) {
+                    const String& fileName = remoteFile.first;
+                    if (localFileInfo.find(fileName) == localFileInfo.end()) {
+                        LOG_DEBUGF("[FileUploader] Extra file on remote: %s/%s (%u bytes)", 
+                                  folderName.c_str(), fileName.c_str(), remoteFile.second);
+                        // This is unusual but not necessarily an error - don't mark for re-upload
+                    }
+                }
+            }
+        }
+        
+        if (folderHasDifferences) {
+            foldersWithDifferences++;
+            filesWithSizeDifferences += folderFileDifferences;
+            foldersToReupload.push_back(folderName);
+            LOG_DEBUGF("[FileUploader] Folder %s has differences (%d files affected)", 
+                      folderName.c_str(), folderFileDifferences);
+        } else {
+            LOG_INFOF("[FileUploader] File sizes match in %s: %d files", folderName.c_str(), localFileInfo.size());
+        }
+        
+        // Yield to prevent watchdog timeout
+        yield();
+    }
+    
+    LOG_INFOF("[FileUploader] Deep scan complete: checked %d folders, found %d with differences (%d files affected)", 
+              foldersChecked, foldersWithDifferences, filesWithSizeDifferences);
+    
+    if (foldersWithDifferences == 0) {
+        LOG("[FileUploader] No differences found - all file sizes match remote");
+        return true;
+    }
+    
+    // Mark folders for re-upload by removing them from completed state
+    LOG_DEBUGF("[FileUploader] Marking %d folders for re-upload due to file size differences", foldersWithDifferences);
+    
+    for (const String& folderName : foldersToReupload) {
+        if (stateManager->isFolderCompleted(folderName)) {
+            LOG_INFOF("[FileUploader] Removing completed status from folder: %s", folderName.c_str());
+            stateManager->removeFolderFromCompleted(folderName);
+        }
+        
+        // Also remove from pending if it was there
+        if (stateManager->isPendingFolder(folderName)) {
+            LOG_INFOF("[FileUploader] Removing pending status from folder: %s", folderName.c_str());
+            stateManager->removeFolderFromPending(folderName);
+        }
+    }
+    
+    // Save state changes
+    if (!stateManager->save(sd)) {
+        LOG_WARN("[FileUploader] Failed to save state after deep scan");
+    }
+    
+    LOG_INFOF("[FileUploader] Deep scan complete: %d folders marked for re-upload (%d files with size differences)", 
+              foldersWithDifferences, filesWithSizeDifferences);
+    LOG("[FileUploader] Folders will be re-uploaded in the next upload session");
     
     return true;
 }

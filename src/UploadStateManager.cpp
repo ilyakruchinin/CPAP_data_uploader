@@ -140,6 +140,14 @@ void UploadStateManager::markFolderCompleted(const String& folderName) {
     }
 }
 
+void UploadStateManager::removeFolderFromCompleted(const String& folderName) {
+    auto it = completedDatalogFolders.find(folderName);
+    if (it != completedDatalogFolders.end()) {
+        completedDatalogFolders.erase(it);
+        LOG_DEBUGF("[UploadStateManager] Removed folder from completed state: %s", folderName.c_str());
+    }
+}
+
 int UploadStateManager::getCurrentRetryCount() {
     return currentRetryCount;
 }
