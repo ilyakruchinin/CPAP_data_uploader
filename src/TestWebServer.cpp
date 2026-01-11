@@ -671,9 +671,9 @@ void TestWebServer::handleLogs() {
     // Add CORS headers for cross-origin access
     addCorsHeaders(server);
     
-    // Retrieve logs from Logger with retention setting from config
-    bool retainLogs = config->getLogRetainAfterRead();
-    Logger::LogData logData = Logger::getInstance().retrieveLogs(!retainLogs);
+    // Retrieve logs from Logger
+    // All logs in the circular buffer are always returned
+    Logger::LogData logData = Logger::getInstance().retrieveLogs();
     
     // Build JSON response
     String json = "{";

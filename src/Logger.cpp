@@ -16,8 +16,7 @@ Logger::Logger()
     , bufferSize(LOG_BUFFER_SIZE)
     , headIndex(0)
     , tailIndex(0)
-    , lastReadIndex(0)
-    , userReadIndex(0)
+    , totalBytesLost(0)
     , mutex(nullptr)
     , initialized(false)
     , sdCardLoggingEnabled(false)
@@ -176,6 +175,11 @@ void Logger::writeToBuffer(const char* data, size_t len) {
         // Check if we've wrapped around and need to advance tail
         // This happens when we've written more than bufferSize bytes
         if (headIndex - tailIndex > bufferSize) {
+            // Calculate how many bytes we're about to lose
+            uint32_t bytesToLose = (headIndex - tailIndex) - bufferSize;
+            totalBytesLost += bytesToLose;
+            
+            // Move tail to maintain buffer size constraint
             tailIndex = headIndex - bufferSize;
         }
     }
@@ -187,6 +191,8 @@ void Logger::writeToBuffer(const char* data, size_t len) {
         headIndex++;
         
         if (headIndex - tailIndex > bufferSize) {
+            uint32_t bytesToLose = (headIndex - tailIndex) - bufferSize;
+            totalBytesLost += bytesToLose;
             tailIndex = headIndex - bufferSize;
         }
     }
@@ -195,17 +201,14 @@ void Logger::writeToBuffer(const char* data, size_t len) {
     xSemaphoreGive(mutex);
 }
 
-// Calculate number of bytes lost since last read
-uint32_t Logger::calculateLostBytes() {
-    // If lastReadIndex is behind tailIndex, data was overwritten
-    if (lastReadIndex < tailIndex) {
-        return tailIndex - lastReadIndex;
-    }
-    return 0;
+// Track bytes lost due to buffer overflow
+void Logger::trackLostBytes(uint32_t bytesLost) {
+    // This method is now handled directly in writeToBuffer
+    // Kept for interface compatibility if needed
 }
 
-// Retrieve all logs from buffer with optional draining
-Logger::LogData Logger::retrieveLogs(bool clearAfterRead) {
+// Retrieve all logs from buffer
+Logger::LogData Logger::retrieveLogs() {
     LogData result;
     result.bytesLost = 0;
 
@@ -220,46 +223,33 @@ Logger::LogData Logger::retrieveLogs(bool clearAfterRead) {
         return result;
     }
 
-    // Calculate lost bytes before reading
-    result.bytesLost = calculateLostBytes();
+    // Return total bytes lost since buffer creation
+    result.bytesLost = totalBytesLost;
 
-    // Determine read start position based on retention mode
-    uint32_t readStartIndex;
-    if (clearAfterRead) {
-        // Normal mode: read from tail (oldest available data)
-        readStartIndex = tailIndex;
-    } else {
-        // Retain mode: always read all available logs from tail to head
-        readStartIndex = tailIndex;
-    }
-
-    // Calculate available data to read
-    uint32_t availableBytes = headIndex - readStartIndex;
+    // Calculate available data to read (from tail to head)
+    uint32_t availableBytes = headIndex - tailIndex;
     
-    // Safety check - should never exceed buffer size
+    // Safety check - should never exceed buffer size due to our overflow handling
     if (availableBytes > bufferSize) {
+        // This should not happen with proper overflow handling, but be defensive
         availableBytes = bufferSize;
+        tailIndex = headIndex - bufferSize;
     }
 
     // Reserve space in String to avoid multiple reallocations
     result.content.reserve(availableBytes);
 
-    // Read data from readStartIndex to head
+    // Read data from tail to head (oldest to newest)
+    // This ensures chronological order even after buffer wraps
     for (uint32_t i = 0; i < availableBytes; i++) {
-        uint32_t logicalIndex = readStartIndex + i;
+        uint32_t logicalIndex = tailIndex + i;
         size_t physicalPos = logicalIndex % bufferSize;
         result.content += buffer[physicalPos];
     }
 
-    // Update tracking indices
-    lastReadIndex = headIndex;
-    
-    if (clearAfterRead) {
-        // Clear mode: drain buffer by moving tail to head (buffer is now empty)
-        tailIndex = headIndex;
-        userReadIndex = headIndex;
-    }
-    // In retain mode: don't update tail or userReadIndex, keep all logs available
+    // Never clear the buffer - logs are retained until overwritten
+    // This eliminates the complexity of tracking read positions and
+    // ensures consistent behavior regardless of call frequency
 
     // Release mutex
     xSemaphoreGive(mutex);
@@ -318,7 +308,7 @@ void Logger::writeToSdCard(const char* data, size_t len) {
 #endif
 }
 // Dump current logs to SD card for critical failures
-bool Logger::dumpLogsToSDCard(const String& reason, bool clearAfterDump) {
+bool Logger::dumpLogsToSDCard(const String& reason) {
 #ifdef UNIT_TEST
     return false; // Not supported in unit tests
 #else
@@ -346,7 +336,7 @@ bool Logger::dumpLogsToSDCard(const String& reason, bool clearAfterDump) {
     }
     
     // Get current logs from logger
-    LogData logData = retrieveLogs(clearAfterDump);
+    LogData logData = retrieveLogs();
     
     if (logData.content.isEmpty()) {
         String warnMsg = getTimestamp() + "[WARN] No logs available to dump\n";
@@ -385,7 +375,7 @@ bool Logger::dumpLogsToSDCard(const String& reason, bool clearAfterDump) {
     if (logData.bytesLost > 0) {
         logFile.println("WARNING: " + String(logData.bytesLost) + " bytes of logs were lost due to buffer overflow");
     }
-    logFile.println("Buffer cleared after dump: " + String(clearAfterDump ? "Yes" : "No"));
+    logFile.println("Buffer retention: Logs always retained in circular buffer");
     logFile.println("=== Log Content ===");
     
     // Write log content
@@ -400,7 +390,7 @@ bool Logger::dumpLogsToSDCard(const String& reason, bool clearAfterDump) {
     // Log success message
     String successMsg = getTimestamp() + "[INFO] Debug logs dumped to SD card: " + filename + " (reason: " + reason + ")\n";
     writeToSerial(successMsg.c_str(), successMsg.length());
-    if (initialized && buffer != nullptr && !clearAfterDump) {
+    if (initialized && buffer != nullptr) {
         writeToBuffer(successMsg.c_str(), successMsg.length());
     }
     

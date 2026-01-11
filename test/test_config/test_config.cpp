@@ -96,7 +96,6 @@ void test_config_load_with_defaults() {
     TEST_ASSERT_EQUAL(30, config.getBootDelaySeconds());  // Default 30 seconds
     TEST_ASSERT_EQUAL(2, config.getSdReleaseIntervalSeconds());  // Default 2 seconds
     TEST_ASSERT_EQUAL(500, config.getSdReleaseWaitMs());  // Default 500ms
-    TEST_ASSERT_FALSE(config.getLogRetainAfterRead());  // Default false (clear-on-read)
     TEST_ASSERT_FALSE(config.getLogToSdCard());  // Default false (no SD logging)
 }
 
@@ -300,7 +299,6 @@ void test_config_boot_delay_and_sd_release() {
         "BOOT_DELAY_SECONDS": 60,
         "SD_RELEASE_INTERVAL_SECONDS": 5,
         "SD_RELEASE_WAIT_MS": 1000,
-        "LOG_RETAIN_AFTER_READ": true,
         "LOG_TO_SD_CARD": true
     })";
     
@@ -313,7 +311,6 @@ void test_config_boot_delay_and_sd_release() {
     TEST_ASSERT_EQUAL(60, config.getBootDelaySeconds());
     TEST_ASSERT_EQUAL(5, config.getSdReleaseIntervalSeconds());
     TEST_ASSERT_EQUAL(1000, config.getSdReleaseWaitMs());
-    TEST_ASSERT_TRUE(config.getLogRetainAfterRead());
     TEST_ASSERT_TRUE(config.getLogToSdCard());
 }
 
@@ -327,7 +324,6 @@ void test_config_all_timing_fields() {
         "BOOT_DELAY_SECONDS": 45,
         "SD_RELEASE_INTERVAL_SECONDS": 3,
         "SD_RELEASE_WAIT_MS": 750,
-        "LOG_RETAIN_AFTER_READ": false,
         "LOG_TO_SD_CARD": false
     })";
     
@@ -342,7 +338,6 @@ void test_config_all_timing_fields() {
     TEST_ASSERT_EQUAL(45, config.getBootDelaySeconds());
     TEST_ASSERT_EQUAL(3, config.getSdReleaseIntervalSeconds());
     TEST_ASSERT_EQUAL(750, config.getSdReleaseWaitMs());
-    TEST_ASSERT_FALSE(config.getLogRetainAfterRead());
     TEST_ASSERT_FALSE(config.getLogToSdCard());
 }
 
