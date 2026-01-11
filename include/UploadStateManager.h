@@ -35,6 +35,7 @@ public:
     // Folder-based tracking for DATALOG
     bool isFolderCompleted(const String& folderName);
     void markFolderCompleted(const String& folderName);
+    void removeFolderFromCompleted(const String& folderName);  // For delta scan re-upload
     int getCompletedFoldersCount() const;
     int getIncompleteFoldersCount() const;
     void setTotalFoldersCount(int count);

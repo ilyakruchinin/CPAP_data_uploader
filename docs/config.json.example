@@ -13,7 +13,6 @@
   "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
   "GMT_OFFSET_HOURS": 0,
 
-  "LOG_RETAIN_AFTER_READ": false,
   "LOG_TO_SD_CARD": false,
 
   "CPU_SPEED_MHZ": 240,
