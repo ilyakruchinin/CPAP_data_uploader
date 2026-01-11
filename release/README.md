@@ -202,13 +202,6 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - May cause SD card access conflicts with CPAP machine
 - Automatically disabled if file operations fail
 - Example: `true` or `false`
-
-**LOG_RETAIN_AFTER_READ** (optional, default: false)
-- Keep logs in memory buffer after reading via web interface
-- When `false`: logs are cleared after each web request
-- When `true`: logs persist in buffer for multiple reads
-- Example: `true` or `false`
-
 ---
 
 ## Common Configuration Examples
