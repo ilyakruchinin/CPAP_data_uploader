@@ -493,4 +493,76 @@ int SMBUploader::countRemoteFiles(const String& remotePath) {
     return fileCount;
 }
 
+bool SMBUploader::getRemoteFileInfo(const String& remotePath, std::map<String, size_t>& fileInfo) {
+    if (!connected) {
+        LOG("[SMB] ERROR: Not connected - cannot scan remote directory");
+        return false;
+    }
+    
+    // Clear the output map
+    fileInfo.clear();
+    
+    // Prepend base path if configured
+    String fullRemotePath = remotePath;
+    if (!smbBasePath.isEmpty()) {
+        // Remove leading slash from remotePath if present
+        String cleanRemotePath = remotePath;
+        if (cleanRemotePath.startsWith("/")) {
+            cleanRemotePath = cleanRemotePath.substring(1);
+        }
+        fullRemotePath = smbBasePath + "/" + cleanRemotePath;
+    } else if (fullRemotePath.startsWith("/")) {
+        // Remove leading slash for libsmb2 compatibility
+        fullRemotePath = fullRemotePath.substring(1);
+    }
+    
+    LOG_DEBUGF("[SMB] Getting file info from remote directory: %s", fullRemotePath.c_str());
+    
+    // Check if directory exists
+    struct smb2_stat_64 st;
+    int stat_result = smb2_stat(smb2, fullRemotePath.c_str(), &st);
+    if (stat_result < 0) {
+        const char* error = smb2_get_error(smb2);
+        LOG_DEBUGF("[SMB] Directory does not exist or cannot access: %s (%s)", fullRemotePath.c_str(), error);
+        return true;  // Directory doesn't exist, return empty map (success)
+    }
+    
+    if (st.smb2_type != SMB2_TYPE_DIRECTORY) {
+        LOG_DEBUGF("[SMB] Path exists but is not a directory: %s", fullRemotePath.c_str());
+        return false;  // Error - path exists but is not a directory
+    }
+    
+    // Open directory for reading
+    struct smb2dir* dir = smb2_opendir(smb2, fullRemotePath.c_str());
+    if (dir == nullptr) {
+        const char* error = smb2_get_error(smb2);
+        LOG_DEBUGF("[SMB] Failed to open directory: %s (%s)", fullRemotePath.c_str(), error);
+        return false;
+    }
+    
+    // Collect file information
+    struct smb2dirent* entry;
+    
+    while ((entry = smb2_readdir(smb2, dir)) != nullptr) {
+        // Skip "." and ".." entries
+        if (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "..") == 0) {
+            continue;
+        }
+        
+        // Only process regular files, not directories
+        if (entry->st.smb2_type == SMB2_TYPE_FILE) {
+            String filename = String(entry->name);
+            size_t fileSize = (size_t)entry->st.smb2_size;
+            fileInfo[filename] = fileSize;
+            LOG_DEBUGF("[SMB] Remote file: %s (%u bytes)", filename.c_str(), fileSize);
+        }
+    }
+    
+    // Close directory
+    smb2_closedir(smb2, dir);
+    
+    LOG_DEBUGF("[SMB] Collected info for %d files in remote directory: %s", fileInfo.size(), fullRemotePath.c_str());
+    return true;
+}
+
 #endif // ENABLE_SMB_UPLOAD

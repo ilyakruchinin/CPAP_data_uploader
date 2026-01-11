@@ -19,6 +19,7 @@ extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
 extern volatile bool g_scanNowFlag;
 extern volatile bool g_deltaScanFlag;
+extern volatile bool g_deepScanFlag;
 
 class TestWebServer {
 private:
@@ -39,6 +40,7 @@ private:
     void handleTriggerUpload();
     void handleScanNow();
     void handleDeltaScan();
+    void handleDeepScan();
     void handleStatus();
     void handleResetState();
     void handleConfig();
@@ -60,6 +62,9 @@ private:
     int getPendingFoldersCount();
     String escapeJson(const String& str);
     bool handleScanInProgress(const String& scanType);
+    
+    // Static helper methods
+    static void addCorsHeaders(WebServer* server);
 
 public:
     TestWebServer(Config* cfg, UploadStateManager* state, 

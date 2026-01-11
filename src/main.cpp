@@ -53,6 +53,7 @@ extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
 extern volatile bool g_scanNowFlag;
 extern volatile bool g_deltaScanFlag;
+extern volatile bool g_deepScanFlag;
 
 // External scan status flag
 extern volatile bool g_scanInProgress;
@@ -347,6 +348,37 @@ void loop() {
             LOG("SD card control released");
         } else {
             LOG_ERROR("Cannot perform delta scan - SD card in use by CPAP");
+            LOG("Will retry on next loop iteration");
+        }
+    }
+    
+    // Check for deep scan trigger
+    if (g_deepScanFlag) {
+        LOG("=== Deep Scan Triggered via Web Interface ===");
+        g_deepScanFlag = false;
+        
+        // Try to take control of SD card
+        if (sdManager.takeControl()) {
+            LOG("SD card control acquired, performing deep scan...");
+            
+            // Set scan in progress flag
+            g_scanInProgress = true;
+            
+            // Perform deep scan (compare remote vs local file sizes)
+            if (uploader->performDeepScan(&sdManager)) {
+                LOG("Deep scan completed successfully");
+            } else {
+                LOG("Deep scan failed");
+            }
+            
+            // Clear scan in progress flag
+            g_scanInProgress = false;
+            
+            // Release SD card
+            sdManager.releaseControl();
+            LOG("SD card control released");
+        } else {
+            LOG_ERROR("Cannot perform deep scan - SD card in use by CPAP");
             LOG("Will retry on next loop iteration");
         }
     }

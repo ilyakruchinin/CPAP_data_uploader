@@ -59,7 +59,7 @@ private:
 #endif
     
     // File scanning
-    std::vector<String> scanDatalogFolders(fs::FS &sd);
+    std::vector<String> scanDatalogFolders(fs::FS &sd, bool includeCompleted = false);
     std::vector<String> scanFolderFiles(fs::FS &sd, const String& folderPath);
     std::vector<String> scanRootAndSettingsFiles(fs::FS &sd);
     
@@ -80,6 +80,7 @@ public:
     bool uploadNewFiles(class SDCardManager* sdManager, bool forceUpload = false);
     bool scanPendingFolders(class SDCardManager* sdManager);  // Scan SD card without uploading
     bool performDeltaScan(class SDCardManager* sdManager);    // Compare remote vs local file counts
+    bool performDeepScan(class SDCardManager* sdManager);     // Compare remote vs local file sizes
     
     // Getters for internal components (for web interface access)
     UploadStateManager* getStateManager() { return stateManager; }

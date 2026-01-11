@@ -229,8 +229,8 @@ Logger::LogData Logger::retrieveLogs(bool clearAfterRead) {
         // Normal mode: read from tail (oldest available data)
         readStartIndex = tailIndex;
     } else {
-        // Retain mode: read from last user read position, but not older than tail
-        readStartIndex = (userReadIndex < tailIndex) ? tailIndex : userReadIndex;
+        // Retain mode: always read all available logs from tail to head
+        readStartIndex = tailIndex;
     }
 
     // Calculate available data to read
@@ -253,13 +253,13 @@ Logger::LogData Logger::retrieveLogs(bool clearAfterRead) {
 
     // Update tracking indices
     lastReadIndex = headIndex;
-    userReadIndex = headIndex;
     
     if (clearAfterRead) {
-        // Drain buffer by moving tail to head (buffer is now empty)
+        // Clear mode: drain buffer by moving tail to head (buffer is now empty)
         tailIndex = headIndex;
+        userReadIndex = headIndex;
     }
-    // If clearAfterRead is false, buffer remains unchanged for future reads
+    // In retain mode: don't update tail or userReadIndex, keep all logs available
 
     // Release mutex
     xSemaphoreGive(mutex);

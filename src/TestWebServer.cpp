@@ -7,6 +7,7 @@ volatile bool g_triggerUploadFlag = false;
 volatile bool g_resetStateFlag = false;
 volatile bool g_scanNowFlag = false;
 volatile bool g_deltaScanFlag = false;
+volatile bool g_deepScanFlag = false;
 
 // Global scan status flag
 volatile bool g_scanInProgress = false;
@@ -51,6 +52,7 @@ bool TestWebServer::begin() {
     server->on("/trigger-upload", [this]() { this->handleTriggerUpload(); });
     server->on("/scan-now", [this]() { this->handleScanNow(); });
     server->on("/delta-scan", [this]() { this->handleDeltaScan(); });
+    server->on("/deep-scan", [this]() { this->handleDeepScan(); });
     server->on("/status", [this]() { this->handleStatus(); });
     server->on("/reset-state", [this]() { this->handleResetState(); });
     server->on("/config", [this]() { this->handleConfig(); });
@@ -82,6 +84,7 @@ bool TestWebServer::begin() {
     LOG("[TestWebServer]   GET /trigger-upload - Force immediate upload");
     LOG("[TestWebServer]   GET /scan-now      - Scan SD card for pending folders");
     LOG("[TestWebServer]   GET /delta-scan    - Compare remote vs local file counts");
+    LOG("[TestWebServer]   GET /deep-scan     - Compare remote vs local file sizes");
     LOG("[TestWebServer]   GET /status        - Status information (JSON)");
     LOG("[TestWebServer]   GET /reset-state   - Clear upload state");
     LOG("[TestWebServer]   GET /config        - Display configuration");
@@ -307,9 +310,11 @@ void TestWebServer::handleRoot() {
     if (g_scanInProgress) {
         html += "<span class='button disabled'>Scan SD Card (In Progress)</span>";
         html += "<span class='button disabled'>Delta Scan (In Progress)</span>";
+        html += "<span class='button disabled'>Deep Scan (In Progress)</span>";
     } else {
         html += "<a href='/scan-now' class='button'>Scan SD Card</a>";
         html += "<a href='/delta-scan' class='button'>Delta Scan (Compare Remote)</a>";
+        html += "<a href='/deep-scan' class='button'>Deep Scan (Compare File Sizes)</a>";
     }
     
     html += "<a href='/status' class='button'>View JSON Status</a>";
@@ -333,9 +338,7 @@ void TestWebServer::handleTriggerUpload() {
     g_triggerUploadFlag = true;
     
     // Add CORS headers
-    server->sendHeader("Access-Control-Allow-Origin", "*");
-    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    addCorsHeaders(server);
     
     String response = "{\"status\":\"success\",\"message\":\"Upload triggered. Check serial output for progress.\"}";
     server->send(200, "application/json", response);
@@ -354,9 +357,7 @@ void TestWebServer::handleScanNow() {
     g_scanNowFlag = true;
     
     // Add CORS headers
-    server->sendHeader("Access-Control-Allow-Origin", "*");
-    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    addCorsHeaders(server);
     
     String response = "{\"status\":\"success\",\"message\":\"SD card scan triggered. Refresh page to see updated folder counts.\"}";
     server->send(200, "application/json", response);
@@ -375,20 +376,35 @@ void TestWebServer::handleDeltaScan() {
     g_deltaScanFlag = true;
     
     // Add CORS headers
-    server->sendHeader("Access-Control-Allow-Origin", "*");
-    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    addCorsHeaders(server);
     
     String response = "{\"status\":\"success\",\"message\":\"Delta scan triggered. Comparing remote vs local file counts. Check logs for results.\"}";
+    server->send(200, "application/json", response);
+}
+
+// GET /deep-scan - Compare remote vs local file sizes and mark differences for re-upload
+void TestWebServer::handleDeepScan() {
+    LOG("[TestWebServer] Deep scan requested via web interface");
+    
+    // Check if scan is already in progress
+    if (handleScanInProgress("Deep scan")) {
+        return;
+    }
+    
+    // Set global deep scan flag
+    g_deepScanFlag = true;
+    
+    // Add CORS headers
+    addCorsHeaders(server);
+    
+    String response = "{\"status\":\"success\",\"message\":\"Deep scan triggered. Comparing remote vs local file sizes. Check logs for results.\"}";
     server->send(200, "application/json", response);
 }
 
 // GET /status - JSON status information
 void TestWebServer::handleStatus() {
     // Add CORS headers
-    server->sendHeader("Access-Control-Allow-Origin", "*");
-    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    addCorsHeaders(server);
     
     String json = "{";
     json += "\"uptime_seconds\":" + String(millis() / 1000) + ",";
@@ -501,9 +517,7 @@ void TestWebServer::handleResetState() {
     g_resetStateFlag = true;
     
     // Add CORS headers
-    server->sendHeader("Access-Control-Allow-Origin", "*");
-    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    addCorsHeaders(server);
     
     String response = "{\"status\":\"success\",\"message\":\"Upload state will be reset. Check serial output for confirmation.\"}";
     server->send(200, "application/json", response);
@@ -512,9 +526,7 @@ void TestWebServer::handleResetState() {
 // GET /config - Display current configuration
 void TestWebServer::handleConfig() {
     // Add CORS headers
-    server->sendHeader("Access-Control-Allow-Origin", "*");
-    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    addCorsHeaders(server);
     
     String json = "{";
     
@@ -580,15 +592,20 @@ bool TestWebServer::handleScanInProgress(const String& scanType) {
         LOGF("[TestWebServer] %s already in progress, ignoring request", scanType.c_str());
         
         // Add CORS headers
-        server->sendHeader("Access-Control-Allow-Origin", "*");
-        server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-        server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+        addCorsHeaders(server);
         
         String response = "{\"status\":\"warning\",\"message\":\"Scan already in progress. Please wait for current scan to complete.\"}";
         server->send(409, "application/json", response);
         return true;
     }
     return false;
+}
+
+// Static helper: Add CORS headers to response
+void TestWebServer::addCorsHeaders(WebServer* server) {
+    server->sendHeader("Access-Control-Allow-Origin", "*");
+    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
 // Helper: Get uptime as formatted string
@@ -652,9 +669,7 @@ int TestWebServer::getPendingFoldersCount() {
 // GET /logs - Retrieve system logs from circular buffer
 void TestWebServer::handleLogs() {
     // Add CORS headers for cross-origin access
-    server->sendHeader("Access-Control-Allow-Origin", "*");
-    server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    addCorsHeaders(server);
     
     // Retrieve logs from Logger with retention setting from config
     bool retainLogs = config->getLogRetainAfterRead();

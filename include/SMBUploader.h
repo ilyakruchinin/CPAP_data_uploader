@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <FS.h>
+#include <map>
 
 #ifdef ENABLE_SMB_UPLOAD
 
@@ -130,6 +131,16 @@ public:
      * @return Number of files in the directory, -1 on error
      */
     int countRemoteFiles(const String& remotePath);
+    
+    /**
+     * Get file information from remote directory (for deep scan functionality)
+     * Returns a map of filename to file size for comparison with local files
+     * 
+     * @param remotePath Path on SMB share to scan (e.g., "/DATALOG/20241101")
+     * @param fileInfo Output map of filename -> file size in bytes
+     * @return true if successful, false on error
+     */
+    bool getRemoteFileInfo(const String& remotePath, std::map<String, size_t>& fileInfo);
 };
 
 #endif // ENABLE_SMB_UPLOAD
