@@ -48,6 +48,10 @@ unsigned long lastWifiReconnectAttempt = 0;
 unsigned long lastUploadCheck = 0;
 unsigned long lastSdCardRetry = 0;
 
+// SD card logging periodic dump timing
+unsigned long lastLogDumpTime = 0;
+const unsigned long LOG_DUMP_INTERVAL_MS = 10 * 1000;  // 10 seconds
+
 #ifdef ENABLE_TEST_WEBSERVER
 // External trigger flags (defined in TestWebServer.cpp)
 extern volatile bool g_triggerUploadFlag;
@@ -173,7 +177,7 @@ void setup() {
 
     // Configure SD card logging if enabled (debugging only)
     if (config.getLogToSdCard()) {
-        LOG_WARN("Enabling SD card logging - DEBUGGING ONLY - May cause conflicts with CPAP data access");
+        LOG_WARN("Enabling SD card logging - DEBUGGING ONLY - Logs will be dumped every 10 seconds");
         Logger::getInstance().enableSdCardLogging(true, &sdManager.getFS());
     }
 
@@ -302,6 +306,19 @@ void setup() {
 // Loop Function
 // ============================================================================
 void loop() {
+    // Periodic SD card log dump (every 10 seconds when enabled)
+    if (config.getLogToSdCard()) {
+        unsigned long currentTime = millis();
+        if (currentTime - lastLogDumpTime >= LOG_DUMP_INTERVAL_MS) {
+            // Attempt to dump logs to SD card
+            // This is non-blocking and will skip if SD card is in use
+            if (Logger::getInstance().dumpLogsToSDCardPeriodic(&sdManager)) {
+                LOG_DEBUG("Periodic log dump to SD card completed");
+            }
+            lastLogDumpTime = currentTime;
+        }
+    }
+
 #ifdef ENABLE_TEST_WEBSERVER
     // Update CPAP monitor
 #ifdef ENABLE_CPAP_MONITOR

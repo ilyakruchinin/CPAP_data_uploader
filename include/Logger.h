@@ -12,6 +12,9 @@
 typedef void* SemaphoreHandle_t;
 #endif
 
+// Forward declaration for SDCardManager
+class SDCardManager;
+
 // Compile-time configuration for circular buffer size
 #ifndef LOG_BUFFER_SIZE
 #define LOG_BUFFER_SIZE 2048  // Default: 2KB
@@ -98,10 +101,23 @@ public:
      * WARNING: SD card logging is for debugging only and can cause conflicts
      * when accessing the SD card for CPAP data uploads. Use with caution.
      * 
+     * When enabled, logs are dumped to SD card periodically (every 10 seconds)
+     * by calling dumpLogsToSDCardPeriodic() from the main loop.
+     * 
      * @param enable True to enable SD card logging, false to disable
      * @param sdFS Pointer to SD card filesystem (required when enabling)
      */
     void enableSdCardLogging(bool enable, fs::FS* sdFS = nullptr);
+    
+    /**
+     * Periodic SD card log dump (call from main loop every 10 seconds)
+     * Only dumps if there are new logs since last dump.
+     * Safe to call when SD card is in use - will skip dump if unavailable.
+     * 
+     * @param sdManager Pointer to SDCardManager for safe SD card access
+     * @return true if logs were dumped, false if skipped or failed
+     */
+    bool dumpLogsToSDCardPeriodic(class SDCardManager* sdManager);
 
     /**
      * Dump current logs to SD card for critical failures
@@ -176,6 +192,9 @@ private:
     bool sdCardLoggingEnabled;
     fs::FS* sdFileSystem;
     String logFileName;
+    
+    // Periodic SD dump tracking
+    volatile uint32_t lastDumpedBytes;  // Track bytes already dumped to SD
 };
 
 // Convenience macros for logging
