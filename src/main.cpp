@@ -133,10 +133,9 @@ void setup() {
     int targetCpuMhz = config.getCpuSpeedMhz();
     setCpuFrequencyMhz(targetCpuMhz);
     LOGF("CPU frequency set to %dMHz", getCpuFrequencyMhz());
-    
-    // Apply WiFi power settings
-    wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
-    LOG("Power management settings applied");
+
+    // Setup WiFi event handlers for logging
+    wifiManager.setupEventHandlers();
 
     // Initialize WiFi in station mode
     if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
@@ -144,6 +143,10 @@ void setup() {
         // Note: WiFiManager already dumps logs to SD card on connection failures
         return;
     }
+    
+    // Apply WiFi power settings after connection is established
+    wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
+    LOG("WiFi power management settings applied");
 
     // Initialize uploader
     uploader = new FileUploader(&config, &wifiManager);
