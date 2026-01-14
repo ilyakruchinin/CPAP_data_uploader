@@ -1038,6 +1038,125 @@ void test_config_power_management_boundaries() {
     TEST_ASSERT_EQUAL(240, config.getCpuSpeedMhz());
 }
 
+// Test that the default config.json.example fits within JSON_FILE_MAX_SIZE
+void test_config_default_example_fits_in_buffer() {
+    // This is the default config from docs/config.json.example
+    std::string defaultConfig = R"({
+  "WIFI_SSID": "YourNetworkName",
+  "WIFI_PASS": "YourNetworkPassword",
+
+  "ENDPOINT": "//192.168.1.100/cpap_backups",
+  "ENDPOINT_TYPE": "SMB",
+  "ENDPOINT_USER": "username",
+  "ENDPOINT_PASS": "password",
+  "UPLOAD_HOUR": 12,
+
+  "SESSION_DURATION_SECONDS": 30,
+  "MAX_RETRY_ATTEMPTS": 3,
+  "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
+  "GMT_OFFSET_HOURS": 0,
+
+  "LOG_TO_SD_CARD": false,
+
+  "CPU_SPEED_MHZ": 240,
+  "WIFI_TX_PWR": "high",
+  "WIFI_PWR_SAVING": "none"
+})";
+    
+    // Verify the default config size is well within JSON_FILE_MAX_SIZE
+    size_t configSize = defaultConfig.length();
+    
+    TEST_ASSERT_LESS_THAN_MESSAGE(Config::JSON_FILE_MAX_SIZE, configSize, 
+        "Default config.json.example must fit within JSON_FILE_MAX_SIZE buffer");
+    
+    // Also verify it can be parsed successfully
+    mockSD.addFile("/config.json", defaultConfig);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE_MESSAGE(loaded, "Default config should load successfully");
+    TEST_ASSERT_TRUE_MESSAGE(config.valid(), "Default config should be valid");
+    
+    // Verify some key default values are parsed correctly
+    TEST_ASSERT_EQUAL_STRING("YourNetworkName", config.getWifiSSID().c_str());
+    TEST_ASSERT_EQUAL_STRING("//192.168.1.100/cpap_backups", config.getEndpoint().c_str());
+    TEST_ASSERT_EQUAL_STRING("SMB", config.getEndpointType().c_str());
+    TEST_ASSERT_EQUAL(12, config.getUploadHour());
+    TEST_ASSERT_EQUAL(30, config.getSessionDurationSeconds());
+    TEST_ASSERT_EQUAL(3, config.getMaxRetryAttempts());
+    TEST_ASSERT_EQUAL(0, config.getGmtOffsetHours());
+    TEST_ASSERT_FALSE(config.getLogToSdCard());
+    TEST_ASSERT_EQUAL(240, config.getCpuSpeedMhz());
+    TEST_ASSERT_EQUAL(WifiTxPower::POWER_HIGH, config.getWifiTxPower());
+    TEST_ASSERT_EQUAL(WifiPowerSaving::SAVE_NONE, config.getWifiPowerSaving());
+}
+
+// Test worst-case config with maximum-length strings (128 chars for endpoint and password)
+void test_config_worst_case_max_size() {
+    // Create maximum-length strings (128 characters each)
+    std::string maxEndpoint(128, 'E');  // 128 'E' characters
+    std::string maxEndpointPass(128, 'P');  // 128 'P' characters
+    std::string maxWifiSSID(32, 'W');  // WiFi SSID max is 32 chars
+    std::string maxWifiPass(128, 'X');  // 128 'X' characters
+    std::string maxEndpointUser(128, 'U');  // 128 'U' characters
+    std::string maxSchedule(128, 'S');  // 128 'S' characters
+    
+    // Build worst-case config with all fields at maximum length
+    std::string worstCaseConfig = 
+        "{\n"
+        "  \"WIFI_SSID\": \"" + maxWifiSSID + "\",\n"
+        "  \"WIFI_PASS\": \"" + maxWifiPass + "\",\n"
+        "  \"SCHEDULE\": \"" + maxSchedule + "\",\n"
+        "  \"ENDPOINT\": \"" + maxEndpoint + "\",\n"
+        "  \"ENDPOINT_TYPE\": \"WEBDAV\",\n"
+        "  \"ENDPOINT_USER\": \"" + maxEndpointUser + "\",\n"
+        "  \"ENDPOINT_PASS\": \"" + maxEndpointPass + "\",\n"
+        "  \"UPLOAD_HOUR\": 23,\n"
+        "  \"SESSION_DURATION_SECONDS\": 300,\n"
+        "  \"MAX_RETRY_ATTEMPTS\": 10,\n"
+        "  \"_comment_timezone_1\": \"GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9\",\n"
+        "  \"GMT_OFFSET_HOURS\": -12,\n"
+        "  \"BOOT_DELAY_SECONDS\": 120,\n"
+        "  \"SD_RELEASE_INTERVAL_SECONDS\": 10,\n"
+        "  \"SD_RELEASE_WAIT_MS\": 2000,\n"
+        "  \"LOG_TO_SD_CARD\": true,\n"
+        "  \"CPU_SPEED_MHZ\": 160,\n"
+        "  \"WIFI_TX_PWR\": \"low\",\n"
+        "  \"WIFI_PWR_SAVING\": \"max\",\n"
+        "  \"STORE_CREDENTIALS_PLAIN_TEXT\": true\n"
+        "}";
+    
+    size_t worstCaseSize = worstCaseConfig.length();
+    
+    // Verify worst-case config fits within JSON_FILE_MAX_SIZE
+    TEST_ASSERT_LESS_THAN_MESSAGE(Config::JSON_FILE_MAX_SIZE, worstCaseSize,
+        "Worst-case config with 128-char strings must fit within JSON_FILE_MAX_SIZE buffer");
+    
+    // Also verify it can be parsed and loaded successfully
+    mockSD.addFile("/config.json", worstCaseConfig);
+    
+    Config config;
+    bool loaded = config.loadFromSD(mockSD);
+    
+    TEST_ASSERT_TRUE_MESSAGE(loaded, "Worst-case config should load successfully");
+    TEST_ASSERT_TRUE_MESSAGE(config.valid(), "Worst-case config should be valid");
+    
+    // Verify the maximum-length values are preserved
+    TEST_ASSERT_EQUAL_STRING(maxWifiSSID.c_str(), config.getWifiSSID().c_str());
+    TEST_ASSERT_EQUAL_STRING(maxWifiPass.c_str(), config.getWifiPassword().c_str());
+    TEST_ASSERT_EQUAL_STRING(maxSchedule.c_str(), config.getSchedule().c_str());
+    TEST_ASSERT_EQUAL_STRING(maxEndpoint.c_str(), config.getEndpoint().c_str());
+    TEST_ASSERT_EQUAL_STRING(maxEndpointUser.c_str(), config.getEndpointUser().c_str());
+    TEST_ASSERT_EQUAL_STRING(maxEndpointPass.c_str(), config.getEndpointPassword().c_str());
+    
+    // Log the actual size for reference
+    char sizeMsg[128];
+    snprintf(sizeMsg, sizeof(sizeMsg), "Worst-case config size: %zu bytes (limit: %zu bytes, margin: %zu bytes)",
+             worstCaseSize, Config::JSON_FILE_MAX_SIZE, Config::JSON_FILE_MAX_SIZE - worstCaseSize);
+    TEST_MESSAGE(sizeMsg);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     
@@ -1090,6 +1209,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_config_power_management_case_insensitive);
     RUN_TEST(test_config_power_management_invalid_values);
     RUN_TEST(test_config_power_management_boundaries);
+    
+    // Config size validation tests
+    RUN_TEST(test_config_default_example_fits_in_buffer);
+    RUN_TEST(test_config_worst_case_max_size);
     
     return UNITY_END();
 }
