@@ -6,6 +6,151 @@
 
 WiFiManager::WiFiManager() : connected(false) {}
 
+void WiFiManager::setupEventHandlers() {
+    WiFi.onEvent(onWiFiEvent);
+    LOG_DEBUG("WiFi event handlers registered");
+}
+
+void WiFiManager::onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_READY:
+            LOG_DEBUG("WiFi Event: WiFi interface ready");
+            break;
+            
+        case ARDUINO_EVENT_WIFI_SCAN_DONE:
+            LOG_DEBUG("WiFi Event: Scan completed");
+            break;
+            
+        case ARDUINO_EVENT_WIFI_STA_START:
+            LOG_INFO("WiFi Event: Station mode started");
+            break;
+            
+        case ARDUINO_EVENT_WIFI_STA_STOP:
+            LOG_INFO("WiFi Event: Station mode stopped");
+            break;
+            
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+            LOG_INFO("WiFi Event: Connected to AP");
+            break;
+            
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+            uint8_t reason = info.wifi_sta_disconnected.reason;
+            LOG_WARNF("WiFi Event: Disconnected from AP (reason: %d)", reason);
+            
+            // Log human-readable disconnect reasons
+            switch (reason) {
+                case WIFI_REASON_UNSPECIFIED:
+                    LOG_WARN("Disconnect reason: Unspecified");
+                    break;
+                case WIFI_REASON_AUTH_EXPIRE:
+                    LOG_WARN("Disconnect reason: Authentication expired");
+                    break;
+                case WIFI_REASON_AUTH_LEAVE:
+                    LOG_WARN("Disconnect reason: Deauthenticated (left network)");
+                    break;
+                case WIFI_REASON_ASSOC_EXPIRE:
+                    LOG_WARN("Disconnect reason: Association expired");
+                    break;
+                case WIFI_REASON_ASSOC_TOOMANY:
+                    LOG_WARN("Disconnect reason: Too many associations");
+                    break;
+                case WIFI_REASON_NOT_AUTHED:
+                    LOG_WARN("Disconnect reason: Not authenticated");
+                    break;
+                case WIFI_REASON_NOT_ASSOCED:
+                    LOG_WARN("Disconnect reason: Not associated");
+                    break;
+                case WIFI_REASON_ASSOC_LEAVE:
+                    LOG_WARN("Disconnect reason: Disassociated (left network)");
+                    break;
+                case WIFI_REASON_ASSOC_NOT_AUTHED:
+                    LOG_WARN("Disconnect reason: Association not authenticated");
+                    break;
+                case WIFI_REASON_DISASSOC_PWRCAP_BAD:
+                    LOG_WARN("Disconnect reason: Bad power capability");
+                    break;
+                case WIFI_REASON_DISASSOC_SUPCHAN_BAD:
+                    LOG_WARN("Disconnect reason: Bad supported channels");
+                    break;
+                case WIFI_REASON_IE_INVALID:
+                    LOG_WARN("Disconnect reason: Invalid information element");
+                    break;
+                case WIFI_REASON_MIC_FAILURE:
+                    LOG_WARN("Disconnect reason: MIC failure");
+                    break;
+                case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+                    LOG_WARN("Disconnect reason: 4-way handshake timeout");
+                    break;
+                case WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT:
+                    LOG_WARN("Disconnect reason: Group key update timeout");
+                    break;
+                case WIFI_REASON_IE_IN_4WAY_DIFFERS:
+                    LOG_WARN("Disconnect reason: IE in 4-way handshake differs");
+                    break;
+                case WIFI_REASON_GROUP_CIPHER_INVALID:
+                    LOG_WARN("Disconnect reason: Invalid group cipher");
+                    break;
+                case WIFI_REASON_PAIRWISE_CIPHER_INVALID:
+                    LOG_WARN("Disconnect reason: Invalid pairwise cipher");
+                    break;
+                case WIFI_REASON_AKMP_INVALID:
+                    LOG_WARN("Disconnect reason: Invalid AKMP");
+                    break;
+                case WIFI_REASON_UNSUPP_RSN_IE_VERSION:
+                    LOG_WARN("Disconnect reason: Unsupported RSN IE version");
+                    break;
+                case WIFI_REASON_INVALID_RSN_IE_CAP:
+                    LOG_WARN("Disconnect reason: Invalid RSN IE capability");
+                    break;
+                case WIFI_REASON_802_1X_AUTH_FAILED:
+                    LOG_WARN("Disconnect reason: 802.1X authentication failed");
+                    break;
+                case WIFI_REASON_CIPHER_SUITE_REJECTED:
+                    LOG_WARN("Disconnect reason: Cipher suite rejected");
+                    break;
+                case WIFI_REASON_BEACON_TIMEOUT:
+                    LOG_WARN("Disconnect reason: Beacon timeout (AP lost)");
+                    break;
+                case WIFI_REASON_NO_AP_FOUND:
+                    LOG_WARN("Disconnect reason: No AP found");
+                    break;
+                case WIFI_REASON_AUTH_FAIL:
+                    LOG_WARN("Disconnect reason: Authentication failed");
+                    break;
+                case WIFI_REASON_ASSOC_FAIL:
+                    LOG_WARN("Disconnect reason: Association failed");
+                    break;
+                case WIFI_REASON_HANDSHAKE_TIMEOUT:
+                    LOG_WARN("Disconnect reason: Handshake timeout");
+                    break;
+                case WIFI_REASON_CONNECTION_FAIL:
+                    LOG_WARN("Disconnect reason: Connection failed");
+                    break;
+                default:
+                    LOG_WARNF("Disconnect reason: Unknown (%d)", reason);
+                    break;
+            }
+            break;
+        }
+            
+        case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE:
+            LOG_DEBUG("WiFi Event: Authentication mode changed");
+            break;
+            
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            LOG_INFOF("WiFi Event: Got IP address: %s", WiFi.localIP().toString().c_str());
+            break;
+            
+        case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+            LOG_WARN("WiFi Event: Lost IP address");
+            break;
+            
+        default:
+            LOG_DEBUGF("WiFi Event: Unhandled event %d", event);
+            break;
+    }
+}
+
 bool WiFiManager::connectStation(const String& ssid, const String& password) {
     // Validate SSID before attempting connection
     if (ssid.isEmpty()) {

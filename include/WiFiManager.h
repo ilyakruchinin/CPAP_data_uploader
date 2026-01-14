@@ -2,6 +2,7 @@
 #define WIFI_MANAGER_H
 
 #include <Arduino.h>
+#include <WiFi.h>
 
 // Forward declarations for power management enums
 enum class WifiTxPower;
@@ -10,10 +11,12 @@ enum class WifiPowerSaving;
 class WiFiManager {
 private:
     bool connected;
+    static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info);
 
 public:
     WiFiManager();
     
+    void setupEventHandlers();
     bool connectStation(const String& ssid, const String& password);
     bool isConnected() const;
     void disconnect();
