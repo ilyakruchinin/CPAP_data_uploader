@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_system.h>
 #include "Config.h"
 #include "SDCardManager.h"
 #include "WiFiManager.h"
@@ -60,6 +61,43 @@ extern volatile bool g_scanInProgress;
 #endif
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Convert ESP32 reset reason to human-readable string
+ * Useful for diagnosing power issues, crashes, and unexpected resets
+ */
+const char* getResetReasonString(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_UNKNOWN:
+            return "Unknown";
+        case ESP_RST_POWERON:
+            return "Power-on reset (normal startup)";
+        case ESP_RST_EXT:
+            return "External reset via EN pin";
+        case ESP_RST_SW:
+            return "Software reset via esp_restart()";
+        case ESP_RST_PANIC:
+            return "Software panic/exception";
+        case ESP_RST_INT_WDT:
+            return "Interrupt watchdog timeout";
+        case ESP_RST_TASK_WDT:
+            return "Task watchdog timeout";
+        case ESP_RST_WDT:
+            return "Other watchdog timeout";
+        case ESP_RST_DEEPSLEEP:
+            return "Wake from deep sleep";
+        case ESP_RST_BROWNOUT:
+            return "Brown-out reset (low voltage)";
+        case ESP_RST_SDIO:
+            return "SDIO reset";
+        default:
+            return "Unrecognized reset reason";
+    }
+}
+
+// ============================================================================
 // Setup Function
 // ============================================================================
 void setup() {
@@ -78,6 +116,22 @@ void setup() {
     LOGF("Firmware Version: %s", FIRMWARE_VERSION);
     LOGF("Build Info: %s", BUILD_INFO);
     LOGF("Build Time: %s", FIRMWARE_BUILD_TIME);
+    
+    // Log reset reason for power/stability diagnostics
+    esp_reset_reason_t resetReason = esp_reset_reason();
+    LOG_INFOF("Reset reason: %s", getResetReasonString(resetReason));
+    
+    // Check for power-related issues
+    if (resetReason == ESP_RST_BROWNOUT) {
+        LOG_ERROR("WARNING: System reset due to brown-out (insufficient power supply), this could be caused by:");
+        LOG_ERROR(" - the CPAP was disconnected from the power supply");
+        LOG_ERROR(" - the card was removed");
+        LOG_ERROR(" - the CPAP machine cannot provide enough power");
+    } else if (resetReason == ESP_RST_PANIC) {
+        LOG_WARN("System reset due to software panic - check for stability issues");
+    } else if (resetReason == ESP_RST_WDT || resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT) {
+        LOG_WARN("System reset due to watchdog timeout - possible hang or power issue");
+    }
 
     // Initialize SD card control
     if (!sdManager.begin()) {
