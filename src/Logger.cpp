@@ -22,6 +22,7 @@ Logger::Logger()
     , sdCardLoggingEnabled(false)
     , sdFileSystem(nullptr)
     , logFileName("/debug_log.txt")
+    , lastDumpedBytes(0)
 {
     // Allocate circular buffer
     buffer = (char*)malloc(bufferSize);
@@ -103,10 +104,8 @@ void Logger::log(const char* message) {
         writeToBuffer(finalMsg, len);
     }
     
-    // Write to SD card if enabled (debugging only)
-    if (sdCardLoggingEnabled && sdFileSystem != nullptr) {
-        writeToSdCard(finalMsg, len);
-    }
+    // Note: SD card logging is now handled by periodic dump task
+    // See dumpLogsToSDCardPeriodic() which should be called from main loop
 }
 
 // Log an Arduino String message
@@ -267,8 +266,11 @@ void Logger::enableSdCardLogging(bool enable, fs::FS* sdFS) {
     sdFileSystem = enable ? sdFS : nullptr;
     
     if (enable) {
+        // Reset dump tracking when enabling
+        lastDumpedBytes = 0;
+        
         // Log a warning message about debugging use
-        String warningMsg = getTimestamp() + "[WARN] SD card logging enabled - DEBUGGING ONLY - May cause SD access conflicts\n";
+        String warningMsg = getTimestamp() + "[WARN] SD card logging enabled - DEBUGGING ONLY - Logs will be dumped periodically\n";
         writeToSerial(warningMsg.c_str(), warningMsg.length());
         if (initialized && buffer != nullptr) {
             writeToBuffer(warningMsg.c_str(), warningMsg.length());
@@ -276,36 +278,116 @@ void Logger::enableSdCardLogging(bool enable, fs::FS* sdFS) {
     }
 }
 
-// Write data to SD card log file (debugging only)
-void Logger::writeToSdCard(const char* data, size_t len) {
-#ifndef UNIT_TEST
-    if (!sdCardLoggingEnabled || sdFileSystem == nullptr) {
-        return;
+// Periodic SD card log dump (call from main loop every 10 seconds)
+bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
+#ifdef UNIT_TEST
+    return false; // Not supported in unit tests
+#else
+    if (!sdCardLoggingEnabled || sdFileSystem == nullptr || sdManager == nullptr) {
+        return false;
     }
     
-    // Try to open/create log file in append mode
+    if (!initialized || buffer == nullptr || mutex == nullptr) {
+        return false;
+    }
+    
+    // Acquire mutex to safely read headIndex
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        // Failed to acquire mutex quickly - skip this dump
+        return false;
+    }
+    
+    // Check if there are new logs to dump
+    uint32_t currentBytes = headIndex;
+    uint32_t newBytes = currentBytes - lastDumpedBytes;
+    
+    // Release mutex immediately after reading
+    xSemaphoreGive(mutex);
+    
+    // Skip if no new logs
+    if (newBytes == 0) {
+        return false;
+    }
+    
+    // Try to take control of SD card (non-blocking)
+    if (!sdManager->takeControl()) {
+        // SD card in use by CPAP - skip this dump
+        return false;
+    }
+    
+    // Calculate how much data to dump
+    // We need to read from lastDumpedBytes to currentBytes
+    // But we need to be careful about buffer wrapping
+    
+    // Acquire mutex again for reading buffer content
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        sdManager->releaseControl();
+        return false;
+    }
+    
+    // Calculate available data in buffer
+    uint32_t availableBytes = headIndex - tailIndex;
+    
+    // Check if we've lost data since last dump
+    if (lastDumpedBytes < tailIndex) {
+        // Some logs were overwritten before we could dump them
+        // Start from tail (oldest available data)
+        lastDumpedBytes = tailIndex;
+    }
+    
+    // Calculate how much we can actually dump
+    uint32_t bytesToDump = headIndex - lastDumpedBytes;
+    
+    // Safety check
+    if (bytesToDump > bufferSize) {
+        bytesToDump = bufferSize;
+        lastDumpedBytes = headIndex - bufferSize;
+    }
+    
+    // Build string with new log data
+    String logContent;
+    logContent.reserve(bytesToDump);
+    
+    for (uint32_t i = 0; i < bytesToDump; i++) {
+        uint32_t logicalIndex = lastDumpedBytes + i;
+        size_t physicalPos = logicalIndex % bufferSize;
+        logContent += buffer[physicalPos];
+    }
+    
+    // Update lastDumpedBytes before releasing mutex
+    lastDumpedBytes = headIndex;
+    
+    // Release mutex
+    xSemaphoreGive(mutex);
+    
+    // Write to SD card
     File logFile = sdFileSystem->open(logFileName, FILE_APPEND);
     if (!logFile) {
-        // If file doesn't exist, try to create it
+        // Try to create file if it doesn't exist
         logFile = sdFileSystem->open(logFileName, FILE_WRITE);
         if (!logFile) {
-            // Failed to create/open file - disable SD logging to prevent spam
-            sdCardLoggingEnabled = false;
-            return;
+            sdManager->releaseControl();
+            return false;
         }
     }
     
-    // Write data to file
-    logFile.write((const uint8_t*)data, len);
-    
-    // Ensure newline is present
-    if (len > 0 && data[len - 1] != '\n') {
-        logFile.write('\n');
-    }
-    
-    // Close file to ensure data is written
+    // Write log content
+    logFile.print(logContent);
     logFile.close();
+    
+    // Release SD card
+    sdManager->releaseControl();
+    
+    return true;
 #endif
+}
+
+// Write data to SD card log file (debugging only) - DEPRECATED
+// This method is no longer used - SD logging is now handled by dumpLogsToSDCardPeriodic()
+void Logger::writeToSdCard(const char* data, size_t len) {
+    // This method is deprecated and no longer used
+    // SD card logging is now handled by periodic dump task
+    // Kept for interface compatibility
 }
 // Dump current logs to SD card for critical failures
 bool Logger::dumpLogsToSDCard(const String& reason) {
