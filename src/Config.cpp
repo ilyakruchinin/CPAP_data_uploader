@@ -7,7 +7,7 @@ const char* Config::PREFS_NAMESPACE = "cpap_creds";
 const char* Config::PREFS_KEY_WIFI_PASS = "wifi_pass";
 const char* Config::PREFS_KEY_ENDPOINT_PASS = "endpoint_pass";
 const char* Config::CENSORED_VALUE = "***STORED_IN_FLASH***";
-const size_t JSON_FILE_MAX_SIZE = 4096;
+const size_t Config::JSON_FILE_MAX_SIZE;
 
 Config::Config() : 
     uploadHour(12),  // Default: noon
@@ -108,7 +108,7 @@ bool Config::censorConfigFile(fs::FS &sd) {
     }
     
     // Parse JSON document
-    StaticJsonDocument<JSON_FILE_MAX_SIZE> doc;
+    StaticJsonDocument<Config::JSON_FILE_MAX_SIZE> doc;
     DeserializationError error = deserializeJson(doc, configFile);
     configFile.close();
     
@@ -262,7 +262,7 @@ bool Config::loadFromSD(fs::FS &sd) {
         return false;
     }
 
-    StaticJsonDocument<JSON_FILE_MAX_SIZE> doc;
+    StaticJsonDocument<Config::JSON_FILE_MAX_SIZE> doc;
     DeserializationError error = deserializeJson(doc, configFile);
     configFile.close();
 

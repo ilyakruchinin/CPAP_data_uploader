@@ -25,6 +25,10 @@ enum class WifiPowerSaving {
 #endif
 
 class Config {
+public:
+    // JSON buffer size constant (public for testing)
+    static const size_t JSON_FILE_MAX_SIZE = 4096;
+
 private:
     String wifiSSID;
     String wifiPassword;
