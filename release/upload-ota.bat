@@ -1,31 +1,19 @@
 @echo off
-REM ESP32 Firmware Upload Script for Windows using PlatformIO
+REM ESP32 OTA Firmware Upload Script for Windows using PlatformIO
 
 setlocal enabledelayedexpansion
-
-REM Parse arguments - use quotes to prevent environment variable expansion
-set "PORT=%~1"
-set "FIRMWARE_TYPE=%~2"
 
 REM Check if port is provided
 if "%~1"=="" (
     echo ========================================
-    echo ESP32 Firmware Upload Tool
+    echo ESP32 OTA Firmware Upload Tool
     echo ========================================
     echo.
     echo Error: Serial port not specified
     echo.
-    echo Usage: %~nx0 ^<COM_PORT^> [firmware_type]
+    echo Usage: %~nx0 ^<COM_PORT^>
     echo.
-    echo Examples: 
-    echo   %~nx0 COM3
-    echo   %~nx0 COM3 ota
-    echo   %~nx0 COM3 standard
-    echo.
-    echo Firmware options:
-    echo   ^(default^)  - OTA firmware with web update capability
-    echo   ota        - OTA firmware with web update capability  
-    echo   standard   - Standard firmware ^(3MB app space, no OTA^)
+    echo Example: %~nx0 COM3
     echo.
     echo ========================================
     echo How to find your COM port:
@@ -53,47 +41,18 @@ if "%~1"=="" (
     exit /b 1
 )
 
-REM Debug: Show what was received
-echo Received arguments:
-echo   Port: !PORT!
-echo   Firmware type: !FIRMWARE_TYPE!
-echo   Raw %%1: %~1
-echo   Raw %%2: %~2
-echo   All args: %*
+set "PORT=%~1"
+set "PIO_ENV=pico32-ota"
+set "FIRMWARE_DESC=OTA-enabled (web updates supported)"
+
 echo.
-
-REM Default to OTA firmware if no type specified
-if "!FIRMWARE_TYPE!"=="" (
-    set "FIRMWARE_TYPE=ota"
-    echo No firmware type specified, defaulting to: ota
-    echo.
-)
-
-REM Map firmware type to PlatformIO environment (case insensitive)
-if /i "!FIRMWARE_TYPE!"=="ota" (
-    set "PIO_ENV=pico32-ota"
-    set "FIRMWARE_DESC=OTA-enabled (web updates supported)"
-) else if /i "!FIRMWARE_TYPE!"=="standard" (
-    set "PIO_ENV=pico32"
-    set "FIRMWARE_DESC=Standard (3MB app space, no OTA)"
-) else (
-    echo ========================================
-    echo ERROR: Invalid firmware type
-    echo ========================================
-    echo.
-    echo You specified: '!FIRMWARE_TYPE!'
-    echo Valid options are: 'ota' or 'standard'
-    echo.
-    echo Usage: %~nx0 ^<COM_PORT^> [firmware_type]
-    echo.
-    echo Examples:
-    echo   %~nx0 COM3           ^(defaults to ota^)
-    echo   %~nx0 COM3 ota
-    echo   %~nx0 COM3 standard
-    echo.
-    pause
-    exit /b 1
-)
+echo ========================================
+echo ESP32 OTA Firmware Upload
+echo ========================================
+echo Port: !PORT!
+echo Environment: !PIO_ENV!
+echo Type: !FIRMWARE_DESC!
+echo.
 
 REM Check if Python is installed
 python --version >nul 2>&1
@@ -141,12 +100,7 @@ if errorlevel 1 (
 
 REM Upload firmware using PlatformIO
 echo.
-echo ========================================
-echo Uploading firmware to ESP32...
-echo ========================================
-echo Port: !PORT!
-echo Environment: !PIO_ENV!
-echo Type: !FIRMWARE_DESC!
+echo Uploading firmware...
 echo.
 
 pio run -e !PIO_ENV! -t upload --upload-port !PORT!
