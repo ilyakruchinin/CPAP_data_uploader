@@ -20,27 +20,21 @@ This package contains precompiled firmware for automatically uploading CPAP data
 This package includes two firmware versions:
 
 ### **OTA Firmware** (Recommended)
-- **File:** `firmware-ota.bin`
+- **File:** `firmware-ota.bin` (complete firmware with bootloader)
+- **Upgrade file:** `firmware-ota-upgrade.bin` (for web OTA updates)
 - **Features:** Web-based firmware updates via `/ota` interface
 - **Partition:** 1.5MB app space (dual OTA partitions)
 - **Best for:** Production use, remote deployments
-- **Update method:** Upload new firmware via web browser
+- **Update method:** 
+  - Initial flash: Use `firmware-ota.bin` with upload scripts
+  - Upgrades: Upload `firmware-ota-upgrade.bin` via web browser
 
 ### **Standard Firmware**
-- **File:** `firmware-standard.bin`
+- **File:** `firmware-standard.bin` (complete firmware with bootloader)
 - **Features:** Maximum app space, no OTA capability
 - **Partition:** 3MB app space
-- **Best for:** Development, maximum feature space
-- **Update method:** USB/Serial upload only
-
-**Default:** The upload scripts use OTA firmware by default. To use standard firmware:
-```bash
-# Windows
-upload.bat COM3 standard
-
-# macOS/Linux
-./upload.sh /dev/ttyUSB0 standard
-```
+- **Best for:** Development, maximum feature space, users who prefer manual updates
+- **Update method:** USB/Serial upload using `firmware-standard.bin` (can be re-flashed anytime)
 
 ---
 
@@ -71,22 +65,28 @@ upload-standard.bat COM3
 
 The script will automatically:
 - Create a virtual environment
-- Install PlatformIO
-- Flash the firmware with bootloader and partitions
+- Install esptool
+- Flash the complete firmware (bootloader + partitions + app)
 
 **macOS/Linux:**
 ```bash
+# For OTA firmware (default)
 ./upload.sh /dev/ttyUSB0
+
+# For standard firmware
+./upload.sh /dev/ttyUSB0 standard
 ```
 
 Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
 
-#### When upgrading from an OTA version
+#### When upgrading OTA firmware via web interface
 
-Go to the CPAP Data uploader website and click on `Firmware Update`
+1. Go to the CPAP Data uploader web interface: `http://<device-ip>/ota`
+2. Use **Method 1** to upload `firmware-ota-upgrade.bin` from your computer
+3. Or use **Method 2** to download firmware directly from GitHub
+4. Device will restart automatically after update
 
-Use either Method 1 or Method 2 to pick the firmware you want to upgrade/downgrade
-Method 2 can use the firmware directly from github.
+**Note:** For standard firmware, you must re-flash via USB/Serial using the upload scripts.
 
 ### 2. Create Configuration File
 
@@ -538,11 +538,14 @@ If the upload scripts don't work, you can use esptool directly:
 
 ### Windows
 ```cmd
-REM OTA firmware (default)
-esptool.exe --chip esp32 --port COM3 --baud 460800 write_flash 0x10000 firmware.bin
+REM Install esptool
+pip install esptool
+
+REM OTA firmware
+python -m esptool --chip esp32 --port COM3 --baud 460800 write_flash 0x0 firmware-ota.bin
 
 REM Standard firmware
-esptool.exe --chip esp32 --port COM3 --baud 460800 write_flash 0x10000 firmware-standard.bin
+python -m esptool --chip esp32 --port COM3 --baud 460800 write_flash 0x0 firmware-standard.bin
 ```
 
 ### macOS/Linux
@@ -550,12 +553,28 @@ esptool.exe --chip esp32 --port COM3 --baud 460800 write_flash 0x10000 firmware-
 # Install esptool
 pip install esptool
 
-# OTA firmware (default)
-esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x10000 firmware.bin
+# OTA firmware
+python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0 firmware-ota.bin
 
 # Standard firmware
-esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x10000 firmware-standard.bin
+python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0 firmware-standard.bin
 ```
+
+**Note:** The firmware files are complete images (bootloader + partitions + app) and must be flashed at address `0x0`.
+
+---
+
+## Package Contents
+
+- `firmware-ota.bin` - Complete OTA firmware for initial flashing (1.3MB)
+- `firmware-ota-upgrade.bin` - App-only binary for web OTA updates (1.2MB)
+- `firmware-standard.bin` - Complete standard firmware, can be re-flashed (1.2MB)
+- `upload-ota.bat` - Windows OTA firmware upload script
+- `upload-standard.bat` - Windows standard firmware upload script
+- `upload.sh` - macOS/Linux upload script (supports both firmware types)
+- `requirements.txt` - Python dependencies (esptool)
+- `config.json.example` - Configuration template
+- `README.md` - This file
 
 ---
 
@@ -565,4 +584,9 @@ For issues, questions, or contributions, visit the project repository.
 
 **Hardware:** ESP32-PICO-D4 (SD WIFI PRO)  
 **Firmware Version:** v0.3.3
+
+**Requirements:**
+- Python 3.7+ (https://python.org)
+- USB cable (data cable, not charge-only)
+- SD WIFI PRO development board for initial flashing
 
