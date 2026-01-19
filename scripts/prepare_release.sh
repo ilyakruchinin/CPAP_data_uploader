@@ -41,7 +41,6 @@ fi
 
 RELEASE_NAME="cpap_uploader_${VERSION}"
 RELEASE_PACKAGE="$RELEASE_NAME.zip"
-ESPTOOL_WIN="$RELEASE_DIR/esptool.exe"
 
 echo -e "${GREEN}Preparing release package...${NC}"
 
@@ -84,17 +83,7 @@ if [ ! -f "$FIRMWARE_BIN_OTA" ]; then
 fi
 
 # Check if esptool.exe exists for Windows package
-if [ ! -f "$ESPTOOL_WIN" ]; then
-    echo -e "${RED}Warning: esptool.exe not found at $ESPTOOL_WIN${NC}"
-    echo "Please download esptool.exe and place it in the release/ directory"
-    echo "Download from: https://github.com/espressif/esptool/releases"
-    echo ""
-    read -p "Continue without esptool.exe? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
+# Note: No longer needed as we use PlatformIO for Windows uploads
 
 # Create temporary release directory
 TEMP_DIR="$RELEASE_DIR/$RELEASE_NAME"
@@ -113,19 +102,14 @@ cp "$FIRMWARE_BIN_STANDARD" "$RELEASE_DIR/firmware-standard-${VERSION}.bin"
 # Copy upload scripts
 echo "Copying upload tools..."
 cp "$RELEASE_DIR/upload.sh" "$TEMP_DIR/"
-cp "$RELEASE_DIR/upload.bat" "$TEMP_DIR/"
+cp "$RELEASE_DIR/upload-ota.bat" "$TEMP_DIR/"
+cp "$RELEASE_DIR/upload-standard.bat" "$TEMP_DIR/"
 cp "$RELEASE_DIR/README.md" "$TEMP_DIR/"
 cp "$RELEASE_DIR/requirements.txt" "$TEMP_DIR/"
 
 # Copy config example
 echo "Copying config.json.example..."
 cp "docs/config.json.example" "$TEMP_DIR/"
-
-# Copy esptool.exe if it exists
-if [ -f "$ESPTOOL_WIN" ]; then
-    echo "Copying esptool.exe for Windows..."
-    cp "$ESPTOOL_WIN" "$TEMP_DIR/"
-fi
 
 # Make scripts executable
 chmod +x "$TEMP_DIR/upload.sh"
@@ -148,12 +132,10 @@ echo "Package contents:"
 echo "  - firmware-ota.bin (OTA-enabled firmware with web updates)"
 echo "  - firmware-standard.bin (standard firmware, 3MB app space)"
 echo "  - upload.sh (macOS/Linux upload script)"
-echo "  - upload.bat (Windows upload script)"
-if [ -f "$ESPTOOL_WIN" ]; then
-    echo "  - esptool.exe (Windows upload tool)"
-fi
+echo "  - upload-ota.bat (Windows OTA firmware upload script)"
+echo "  - upload-standard.bat (Windows standard firmware upload script)"
 echo "  - README.md (usage instructions)"
-echo "  - requirements.txt (Python dependencies for macOS/Linux)"
+echo "  - requirements.txt (Python dependencies)"
 echo "  - config.json.example (configuration template)"
 echo ""
 echo -e "${GREEN}Firmware sizes:${NC}"
