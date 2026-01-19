@@ -52,10 +52,20 @@ if "%~1"=="" (
 set PORT=%~1
 set FIRMWARE_TYPE=%~2
 
-REM Default to OTA firmware if no type specified
-if "%FIRMWARE_TYPE%"=="" set FIRMWARE_TYPE=ota
+REM Debug: Show what was received
+echo Received arguments:
+echo   Port: %PORT%
+echo   Firmware type: %FIRMWARE_TYPE%
+echo.
 
-REM Map firmware type to PlatformIO environment
+REM Default to OTA firmware if no type specified
+if "%FIRMWARE_TYPE%"=="" (
+    set FIRMWARE_TYPE=ota
+    echo No firmware type specified, defaulting to: ota
+    echo.
+)
+
+REM Map firmware type to PlatformIO environment (case insensitive)
 if /i "%FIRMWARE_TYPE%"=="ota" (
     set PIO_ENV=pico32-ota
     set FIRMWARE_DESC=OTA-enabled ^(web updates supported^)
@@ -63,8 +73,20 @@ if /i "%FIRMWARE_TYPE%"=="ota" (
     set PIO_ENV=pico32
     set FIRMWARE_DESC=Standard ^(3MB app space, no OTA^)
 ) else (
-    echo Error: Invalid firmware type '%FIRMWARE_TYPE%'
-    echo Valid options: ota, standard
+    echo ========================================
+    echo ERROR: Invalid firmware type
+    echo ========================================
+    echo.
+    echo You specified: '%FIRMWARE_TYPE%'
+    echo Valid options are: 'ota' or 'standard'
+    echo.
+    echo Usage: %~nx0 ^<COM_PORT^> [firmware_type]
+    echo.
+    echo Examples:
+    echo   %~nx0 COM3           ^(defaults to ota^)
+    echo   %~nx0 COM3 ota
+    echo   %~nx0 COM3 standard
+    echo.
     pause
     exit /b 1
 )
