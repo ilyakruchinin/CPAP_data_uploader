@@ -3,12 +3,9 @@ REM ESP32 Firmware Upload Script for Windows using PlatformIO
 
 setlocal enabledelayedexpansion
 
-REM Parse arguments first before any variable expansion
-set "ARG1=%~1"
-set "ARG2=%~2"
-
-set "PORT=!ARG1!"
-set "FIRMWARE_TYPE=!ARG2!"
+REM Parse arguments - use quotes to prevent environment variable expansion
+set "PORT=%~1"
+set "FIRMWARE_TYPE=%~2"
 
 REM Check if port is provided
 if "%~1"=="" (
@@ -60,25 +57,25 @@ REM Debug: Show what was received
 echo Received arguments:
 echo   Port: !PORT!
 echo   Firmware type: !FIRMWARE_TYPE!
-echo   Raw %%1: %1
-echo   Raw %%2: %2
+echo   Raw %%1: %~1
+echo   Raw %%2: %~2
 echo   All args: %*
 echo.
 
 REM Default to OTA firmware if no type specified
 if "!FIRMWARE_TYPE!"=="" (
-    set FIRMWARE_TYPE=ota
+    set "FIRMWARE_TYPE=ota"
     echo No firmware type specified, defaulting to: ota
     echo.
 )
 
 REM Map firmware type to PlatformIO environment (case insensitive)
 if /i "!FIRMWARE_TYPE!"=="ota" (
-    set PIO_ENV=pico32-ota
-    set FIRMWARE_DESC=OTA-enabled ^(web updates supported^)
+    set "PIO_ENV=pico32-ota"
+    set "FIRMWARE_DESC=OTA-enabled (web updates supported)"
 ) else if /i "!FIRMWARE_TYPE!"=="standard" (
-    set PIO_ENV=pico32
-    set FIRMWARE_DESC=Standard ^(3MB app space, no OTA^)
+    set "PIO_ENV=pico32"
+    set "FIRMWARE_DESC=Standard (3MB app space, no OTA)"
 ) else (
     echo ========================================
     echo ERROR: Invalid firmware type
