@@ -105,7 +105,7 @@ REM Check if PlatformIO is installed, install if not
 python -m pip show platformio >nul 2>&1
 if errorlevel 1 (
     echo Installing PlatformIO...
-    python -m pip install -r requirements.txt
+    python -m pip install platformio
     if errorlevel 1 (
         echo Error: Failed to install PlatformIO
         pause
