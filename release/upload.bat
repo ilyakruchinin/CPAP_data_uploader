@@ -3,6 +3,13 @@ REM ESP32 Firmware Upload Script for Windows using PlatformIO
 
 setlocal enabledelayedexpansion
 
+REM Parse arguments first before any variable expansion
+set "ARG1=%~1"
+set "ARG2=%~2"
+
+set PORT=!ARG1!
+set FIRMWARE_TYPE=!ARG2!
+
 REM Check if port is provided
 if "%~1"=="" (
     echo ========================================
@@ -49,27 +56,27 @@ if "%~1"=="" (
     exit /b 1
 )
 
-set PORT=%~1
-set FIRMWARE_TYPE=%~2
-
 REM Debug: Show what was received
 echo Received arguments:
-echo   Port: %PORT%
-echo   Firmware type: %FIRMWARE_TYPE%
+echo   Port: !PORT!
+echo   Firmware type: !FIRMWARE_TYPE!
+echo   Raw %%1: %1
+echo   Raw %%2: %2
+echo   All args: %*
 echo.
 
 REM Default to OTA firmware if no type specified
-if "%FIRMWARE_TYPE%"=="" (
+if "!FIRMWARE_TYPE!"=="" (
     set FIRMWARE_TYPE=ota
     echo No firmware type specified, defaulting to: ota
     echo.
 )
 
 REM Map firmware type to PlatformIO environment (case insensitive)
-if /i "%FIRMWARE_TYPE%"=="ota" (
+if /i "!FIRMWARE_TYPE!"=="ota" (
     set PIO_ENV=pico32-ota
     set FIRMWARE_DESC=OTA-enabled ^(web updates supported^)
-) else if /i "%FIRMWARE_TYPE%"=="standard" (
+) else if /i "!FIRMWARE_TYPE!"=="standard" (
     set PIO_ENV=pico32
     set FIRMWARE_DESC=Standard ^(3MB app space, no OTA^)
 ) else (
@@ -77,7 +84,7 @@ if /i "%FIRMWARE_TYPE%"=="ota" (
     echo ERROR: Invalid firmware type
     echo ========================================
     echo.
-    echo You specified: '%FIRMWARE_TYPE%'
+    echo You specified: '!FIRMWARE_TYPE!'
     echo Valid options are: 'ota' or 'standard'
     echo.
     echo Usage: %~nx0 ^<COM_PORT^> [firmware_type]
@@ -140,12 +147,12 @@ echo.
 echo ========================================
 echo Uploading firmware to ESP32...
 echo ========================================
-echo Port: %PORT%
-echo Environment: %PIO_ENV%
-echo Type: %FIRMWARE_DESC%
+echo Port: !PORT!
+echo Environment: !PIO_ENV!
+echo Type: !FIRMWARE_DESC!
 echo.
 
-pio run -e %PIO_ENV% -t upload --upload-port %PORT%
+pio run -e !PIO_ENV! -t upload --upload-port !PORT!
 
 if errorlevel 1 (
     echo.
