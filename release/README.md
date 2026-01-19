@@ -60,9 +60,13 @@ Insert the SD card in your CPAP machine and allow for the CPAP machine to format
 **Windows:**
 1. Ensure Python 3.7+ is installed (download from https://python.org)
 2. Find your COM port (see "Finding Your Serial Port" below)
-3. Run the upload script with your COM port:
+3. Run the appropriate upload script:
 ```cmd
-upload.bat COM3
+REM For OTA firmware (recommended)
+upload-ota.bat COM3
+
+REM For standard firmware
+upload-standard.bat COM3
 ```
 
 The script will automatically:
