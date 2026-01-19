@@ -1,15 +1,7 @@
 @echo off
-REM ESP32 Firmware Upload Script for Windows
+REM ESP32 Firmware Upload Script for Windows using PlatformIO
 
 setlocal enabledelayedexpansion
-
-REM Configuration
-set CHIP=esp32
-set BAUD_RATE=460800
-set FIRMWARE_OTA=firmware-ota.bin
-set FIRMWARE_STANDARD=firmware-standard.bin
-set FLASH_OFFSET=0x10000
-set ESPTOOL=esptool.exe
 
 REM Check if port is provided
 if "%~1"=="" (
@@ -63,20 +55,12 @@ set FIRMWARE_TYPE=%~2
 REM Default to OTA firmware if no type specified
 if "%FIRMWARE_TYPE%"=="" set FIRMWARE_TYPE=ota
 
-REM Select firmware file based on type
+REM Map firmware type to PlatformIO environment
 if /i "%FIRMWARE_TYPE%"=="ota" (
-    if exist "%FIRMWARE_OTA%" (
-        set FIRMWARE_FILE=%FIRMWARE_OTA%
-    )
+    set PIO_ENV=pico32-ota
     set FIRMWARE_DESC=OTA-enabled ^(web updates supported^)
 ) else if /i "%FIRMWARE_TYPE%"=="standard" (
-    if exist "%FIRMWARE_STANDARD%" (
-        set FIRMWARE_FILE=%FIRMWARE_STANDARD%
-    ) else (
-        echo Error: Standard firmware file '%FIRMWARE_STANDARD%' not found
-        pause
-        exit /b 1
-    )
+    set PIO_ENV=pico32
     set FIRMWARE_DESC=Standard ^(3MB app space, no OTA^)
 ) else (
     echo Error: Invalid firmware type '%FIRMWARE_TYPE%'
@@ -85,31 +69,61 @@ if /i "%FIRMWARE_TYPE%"=="ota" (
     exit /b 1
 )
 
-REM Check if firmware file exists
-if not exist "%FIRMWARE_FILE%" (
-    echo Error: Firmware file '%FIRMWARE_FILE%' not found
-    exit /b 1
-)
-
-REM Check if esptool.exe exists
-if not exist "%ESPTOOL%" (
-    echo Error: %ESPTOOL% not found in current directory
+REM Check if Python is installed
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo Error: Python is not installed or not in PATH
+    echo.
+    echo Please install Python 3.7 or later from:
+    echo https://www.python.org/downloads/
+    echo.
+    echo Make sure to check "Add Python to PATH" during installation
     pause
     exit /b 1
 )
 
-REM Upload firmware
+REM Check if virtual environment exists, create if not
+if not exist ".venv\" (
+    echo Creating virtual environment...
+    python -m venv .venv
+    if errorlevel 1 (
+        echo Error: Failed to create virtual environment
+        pause
+        exit /b 1
+    )
+)
+
+REM Activate virtual environment
+call .venv\Scripts\activate.bat
+if errorlevel 1 (
+    echo Error: Failed to activate virtual environment
+    pause
+    exit /b 1
+)
+
+REM Check if PlatformIO is installed, install if not
+python -m pip show platformio >nul 2>&1
+if errorlevel 1 (
+    echo Installing PlatformIO...
+    python -m pip install -r requirements.txt
+    if errorlevel 1 (
+        echo Error: Failed to install PlatformIO
+        pause
+        exit /b 1
+    )
+)
+
+REM Upload firmware using PlatformIO
 echo.
 echo ========================================
 echo Uploading firmware to ESP32...
 echo ========================================
 echo Port: %PORT%
-echo Firmware: %FIRMWARE_FILE%
+echo Environment: %PIO_ENV%
 echo Type: %FIRMWARE_DESC%
-echo Baud rate: %BAUD_RATE%
 echo.
 
-%ESPTOOL% --chip %CHIP% --port %PORT% --baud %BAUD_RATE% write-flash %FLASH_OFFSET% %FIRMWARE_FILE%
+pio run -e %PIO_ENV% -t upload --upload-port %PORT%
 
 if errorlevel 1 (
     echo.
@@ -122,6 +136,7 @@ if errorlevel 1 (
     echo   2. Try holding the BOOT button during upload
     echo   3. Check Device Manager to verify the correct COM port
     echo   4. Close any programs using the serial port
+    echo   5. Make sure firmware was built first
     echo.
     pause
     exit /b 1

@@ -58,11 +58,17 @@ Insert the SD card in your CPAP machine and allow for the CPAP machine to format
 - Switch 2: ON
 
 **Windows:**
-1. Find your COM port (see "Finding Your Serial Port" below)
-2. Run the upload script with your COM port:
+1. Ensure Python 3.7+ is installed (download from https://python.org)
+2. Find your COM port (see "Finding Your Serial Port" below)
+3. Run the upload script with your COM port:
 ```cmd
 upload.bat COM3
 ```
+
+The script will automatically:
+- Create a virtual environment
+- Install PlatformIO
+- Flash the firmware with bootloader and partitions
 
 **macOS/Linux:**
 ```bash
@@ -73,7 +79,7 @@ Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
 
 #### When upgrading from an OTA version
 
-Go to the CPAP Data uploader website and clik on `Firmware Update`
+Go to the CPAP Data uploader website and click on `Firmware Update`
 
 Use either Method 1 or Method 2 to pick the firmware you want to upgrade/downgrade
 Method 2 can use the firmware directly from github.
@@ -366,12 +372,18 @@ The firmware includes an optional test web server for development and troublesho
 
 ### Firmware Upload Issues
 
+**"Python is not installed" (Windows)**
+- Download Python from https://python.org
+- During installation, check "Add Python to PATH"
+- Restart command prompt after installation
+
 **"Failed to connect to ESP32"**
 - Verify SD WIFI PRO is connected to development board
 - Check switches: Switch 1 OFF, Switch 2 ON
 - Check USB cable (must be data cable, not charge-only)
 - Try different USB port
 - Verify correct serial port selected
+- Try holding the BOOT button during upload
 
 **"Permission denied" (Linux/Mac)**
 - Run with sudo: `sudo ./upload.sh /dev/ttyUSB0`
