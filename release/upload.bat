@@ -7,8 +7,8 @@ REM Parse arguments first before any variable expansion
 set "ARG1=%~1"
 set "ARG2=%~2"
 
-set PORT=!ARG1!
-set FIRMWARE_TYPE=!ARG2!
+set "PORT=!ARG1!"
+set "FIRMWARE_TYPE=!ARG2!"
 
 REM Check if port is provided
 if "%~1"=="" (
