@@ -1,5 +1,5 @@
 @echo off
-REM ESP32 Standard Firmware Upload Script for Windows using PlatformIO
+REM ESP32 Standard Firmware Initial Flash Script for Windows using esptool
 
 setlocal enabledelayedexpansion
 
@@ -42,16 +42,17 @@ if "%~1"=="" (
 )
 
 set "PORT=%~1"
-set "PIO_ENV=pico32"
-set "FIRMWARE_DESC=Standard (3MB app space, no OTA)"
+set "CHIP=esp32"
+set "BAUD_RATE=460800"
+set "FIRMWARE_FILE=firmware-standard.bin"
 
 echo.
 echo ========================================
 echo ESP32 Standard Firmware Upload
 echo ========================================
 echo Port: !PORT!
-echo Environment: !PIO_ENV!
-echo Type: !FIRMWARE_DESC!
+echo Firmware: Standard (3MB app space, no OTA)
+echo Baud rate: !BAUD_RATE!
 echo.
 
 REM Check if Python is installed
@@ -63,6 +64,15 @@ if errorlevel 1 (
     echo https://www.python.org/downloads/
     echo.
     echo Make sure to check "Add Python to PATH" during installation
+    pause
+    exit /b 1
+)
+
+REM Check if firmware file exists
+if not exist "!FIRMWARE_FILE!" (
+    echo Error: !FIRMWARE_FILE! not found
+    echo.
+    echo Make sure you are running this script from the release package directory
     pause
     exit /b 1
 )
@@ -86,24 +96,25 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Check if PlatformIO is installed, install if not
-python -m pip show platformio >nul 2>&1
+REM Check if esptool is installed, install if not
+python -m esptool version >nul 2>&1
 if errorlevel 1 (
-    echo Installing PlatformIO...
-    python -m pip install platformio
+    echo Installing esptool...
+    python -m pip install esptool
     if errorlevel 1 (
-        echo Error: Failed to install PlatformIO
+        echo Error: Failed to install esptool
         pause
         exit /b 1
     )
 )
 
-REM Upload firmware using PlatformIO
-echo.
+REM Upload firmware using esptool
 echo Uploading firmware...
 echo.
 
-pio run -e !PIO_ENV! -t upload --upload-port !PORT!
+python -m esptool --chip !CHIP! --port !PORT! --baud !BAUD_RATE! ^
+    --before default_reset --after hard_reset write_flash -z ^
+    0x0 !FIRMWARE_FILE!
 
 if errorlevel 1 (
     echo.
@@ -116,7 +127,6 @@ if errorlevel 1 (
     echo   2. Try holding the BOOT button during upload
     echo   3. Check Device Manager to verify the correct COM port
     echo   4. Close any programs using the serial port
-    echo   5. Make sure firmware was built first
     echo.
     pause
     exit /b 1
