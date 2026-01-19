@@ -822,7 +822,7 @@ void TestWebServer::handleOTAPage() {
         html += "<form id='urlForm'>";
         html += "<div class='form-group'>";
         html += "<label for='firmwareURL'>Firmware URL:</label>";
-        html += "<input type='url' id='firmwareURL' name='url' placeholder='https://github.com/amanuense/CPAP_data_uploader/releases/download/latest/firmware-ota.bin' required>";
+        html += "<input type='url' id='firmwareURL' name='url' placeholder='https://github.com/amanuense/CPAP_data_uploader/releases/download/latest/firmware-ota-upgrade.bin' required>";
         html += "</div>";
         html += "<button type='submit' class='button'>Download & Install</button>";
         html += "<span id='downloadStatus' style='margin-left: 10px; color: #0066cc;'></span>";
