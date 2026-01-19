@@ -91,13 +91,31 @@ mkdir -p "$TEMP_DIR"
 
 # Copy firmware files with descriptive names
 echo "Copying firmware files..."
-cp "$FIRMWARE_BIN_OTA" "$TEMP_DIR/firmware-ota.bin"
-cp "$FIRMWARE_BIN_STANDARD" "$TEMP_DIR/firmware-standard.bin"
+
+# Create merged binaries for flashing
+echo "Creating merged binaries..."
+python -m esptool --chip esp32 merge-bin \
+    -o "$TEMP_DIR/firmware-ota.bin" \
+    --flash-mode dio --flash-freq 40m --flash-size 4MB \
+    0x1000 "$BUILD_DIR_OTA/bootloader.bin" \
+    0x8000 "$BUILD_DIR_OTA/partitions.bin" \
+    0x10000 "$FIRMWARE_BIN_OTA"
+
+python -m esptool --chip esp32 merge-bin \
+    -o "$TEMP_DIR/firmware-standard.bin" \
+    --flash-mode dio --flash-freq 40m --flash-size 4MB \
+    0x1000 "$BUILD_DIR_STANDARD/bootloader.bin" \
+    0x8000 "$BUILD_DIR_STANDARD/partitions.bin" \
+    0x10000 "$FIRMWARE_BIN_STANDARD"
+
+# Copy app-only OTA upgrade binary
+cp "$FIRMWARE_BIN_OTA" "$TEMP_DIR/firmware-ota-upgrade.bin"
 
 # Keep copies in release folder for GitHub releases
 echo "Keeping firmware copies in release folder..."
-cp "$FIRMWARE_BIN_OTA" "$RELEASE_DIR/firmware-ota-${VERSION}.bin"
-cp "$FIRMWARE_BIN_STANDARD" "$RELEASE_DIR/firmware-standard-${VERSION}.bin"
+cp "$TEMP_DIR/firmware-ota.bin" "$RELEASE_DIR/firmware-ota-${VERSION}.bin"
+cp "$TEMP_DIR/firmware-standard.bin" "$RELEASE_DIR/firmware-standard-${VERSION}.bin"
+cp "$TEMP_DIR/firmware-ota-upgrade.bin" "$RELEASE_DIR/firmware-ota-upgrade-${VERSION}.bin"
 
 # Copy upload scripts
 echo "Copying upload tools..."
@@ -129,8 +147,9 @@ echo "  - firmware-ota-${VERSION}.bin (OTA-enabled with web updates)"
 echo "  - firmware-standard-${VERSION}.bin (standard firmware, 3MB app space)"
 echo ""
 echo "Package contents:"
-echo "  - firmware-ota.bin (OTA-enabled firmware with web updates)"
-echo "  - firmware-standard.bin (standard firmware, 3MB app space)"
+echo "  - firmware-ota.bin (complete OTA firmware for initial flashing)"
+echo "  - firmware-ota-upgrade.bin (app-only for OTA web updates)"
+echo "  - firmware-standard.bin (complete standard firmware, can be re-flashed)"
 echo "  - upload.sh (macOS/Linux upload script)"
 echo "  - upload-ota.bat (Windows OTA firmware upload script)"
 echo "  - upload-standard.bat (Windows standard firmware upload script)"
@@ -139,11 +158,13 @@ echo "  - requirements.txt (Python dependencies)"
 echo "  - config.json.example (configuration template)"
 echo ""
 echo -e "${GREEN}Firmware sizes:${NC}"
-echo "  Standard: $(du -h "$FIRMWARE_BIN_STANDARD" | cut -f1) (3MB partition)"
-echo "  OTA:      $(du -h "$FIRMWARE_BIN_OTA" | cut -f1) (1.5MB partition)"
+echo "  OTA merged:       $(du -h "$RELEASE_DIR/firmware-ota-${VERSION}.bin" | cut -f1) (complete, for initial flash)"
+echo "  OTA upgrade:      $(du -h "$RELEASE_DIR/firmware-ota-upgrade-${VERSION}.bin" | cut -f1) (app-only, for web updates)"
+echo "  Standard merged:  $(du -h "$RELEASE_DIR/firmware-standard-${VERSION}.bin" | cut -f1) (complete, can be re-flashed)"
 echo ""
 echo -e "${YELLOW}Next steps for GitHub release:${NC}"
 echo "1. Upload the release package: $RELEASE_DIR/$RELEASE_PACKAGE"
 echo "2. Upload individual firmware files from release/ folder:"
-echo "   - firmware-ota-${VERSION}.bin" 
-echo "   - firmware-standard-${VERSION}.bin"
+echo "   - firmware-ota-${VERSION}.bin (for initial flashing)" 
+echo "   - firmware-ota-upgrade-${VERSION}.bin (for OTA web updates)"
+echo "   - firmware-standard-${VERSION}.bin (for initial/re-flashing)"
