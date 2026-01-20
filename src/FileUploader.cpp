@@ -713,6 +713,9 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         if (fileSize == 0) {
             LOG_WARNF("[FileUploader] File is empty: %s", localPath.c_str());
             file.close();
+            // Mark empty file as processed to avoid re-scanning
+            // Use a special checksum marker for empty files
+            stateManager->markFileUploaded(localPath, "empty_file");
             continue;  // Skip empty files
         }
         
