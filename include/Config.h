@@ -74,10 +74,14 @@ private:
     String loadCredential(const char* key, const String& defaultValue);
     bool isCensored(const String& value);
     
-    // Config file censoring method
+    // Config file censoring method (forward declaration for JsonDocument)
+    template<typename T>
+    bool censorConfigFileWithDoc(fs::FS &sd, T& doc);
     bool censorConfigFile(fs::FS &sd);
     
-    // Credential migration method
+    // Credential migration method (takes existing JSON doc to avoid double allocation)
+    template<typename T>
+    bool migrateToSecureStorageWithDoc(fs::FS &sd, T& doc);
     bool migrateToSecureStorage(fs::FS &sd);
 
 public:
