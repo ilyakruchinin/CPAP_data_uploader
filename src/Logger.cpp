@@ -1,8 +1,12 @@
 #include "Logger.h"
+
+#ifndef UNIT_TEST
 #include "SDCardManager.h"
+#include <WiFi.h>
+#endif
+
 #include <stdarg.h>
 #include <time.h>
-#include <WiFi.h>
 
 // Singleton instance getter
 Logger& Logger::getInstance() {
@@ -162,6 +166,14 @@ void Logger::writeToBuffer(const char* data, size_t len) {
 
     // Write each byte to the circular buffer
     for (size_t i = 0; i < len; i++) {
+        // Check if buffer is full BEFORE writing
+        // This ensures tail is advanced before head overwrites it
+        if (headIndex - tailIndex >= bufferSize) {
+            // Buffer is full - advance tail to make room
+            tailIndex++;
+            totalBytesLost++;
+        }
+        
         // Calculate physical position in buffer
         size_t physicalPos = headIndex % bufferSize;
         
@@ -170,30 +182,19 @@ void Logger::writeToBuffer(const char* data, size_t len) {
         
         // Advance head index (monotonic counter)
         headIndex++;
-        
-        // Check if we've wrapped around and need to advance tail
-        // This happens when we've written more than bufferSize bytes
-        if (headIndex - tailIndex > bufferSize) {
-            // Calculate how many bytes we're about to lose
-            uint32_t bytesToLose = (headIndex - tailIndex) - bufferSize;
-            totalBytesLost += bytesToLose;
-            
-            // Move tail to maintain buffer size constraint
-            tailIndex = headIndex - bufferSize;
-        }
     }
 
     // Add newline if not already present
     if (len > 0 && data[len - 1] != '\n') {
+        // Check if buffer is full BEFORE writing newline
+        if (headIndex - tailIndex >= bufferSize) {
+            tailIndex++;
+            totalBytesLost++;
+        }
+        
         size_t physicalPos = headIndex % bufferSize;
         buffer[physicalPos] = '\n';
         headIndex++;
-        
-        if (headIndex - tailIndex > bufferSize) {
-            uint32_t bytesToLose = (headIndex - tailIndex) - bufferSize;
-            totalBytesLost += bytesToLose;
-            tailIndex = headIndex - bufferSize;
-        }
     }
 
     // Release mutex
@@ -238,9 +239,37 @@ Logger::LogData Logger::retrieveLogs() {
     // Reserve space in String to avoid multiple reallocations
     result.content.reserve(availableBytes);
 
+    // Find the start of the first complete log line
+    // After buffer overflow, tailIndex might point to the middle of a line
+    // Scan forward to find the first '[' character (start of timestamp)
+    uint32_t startOffset = 0;
+    bool foundStart = false;
+    
+    // Only scan if we've lost bytes (indicating buffer overflow occurred)
+    if (totalBytesLost > 0 && availableBytes > 0) {
+        // Scan up to 100 bytes to find start of line
+        for (uint32_t i = 0; i < availableBytes && i < 100; i++) {
+            uint32_t logicalIndex = tailIndex + i;
+            size_t physicalPos = logicalIndex % bufferSize;
+            
+            if (buffer[physicalPos] == '[') {
+                // Found start of a log line
+                startOffset = i;
+                foundStart = true;
+                break;
+            }
+        }
+        
+        // If we found a start, skip the corrupted partial line
+        if (foundStart && startOffset > 0) {
+            // Update bytes lost to include the skipped partial line
+            result.bytesLost += startOffset;
+        }
+    }
+
     // Read data from tail to head (oldest to newest)
     // This ensures chronological order even after buffer wraps
-    for (uint32_t i = 0; i < availableBytes; i++) {
+    for (uint32_t i = startOffset; i < availableBytes; i++) {
         uint32_t logicalIndex = tailIndex + i;
         size_t physicalPos = logicalIndex % bufferSize;
         result.content += buffer[physicalPos];

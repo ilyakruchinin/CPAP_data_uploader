@@ -1,7 +1,9 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
+#ifndef ARDUINO_H
 #include <Arduino.h>
+#endif
 
 #ifndef UNIT_TEST
 #include <freertos/FreeRTOS.h>
@@ -135,42 +137,49 @@ public:
      */
     bool isInitialized() const { return initialized; }
 
-private:
-    // Singleton pattern - private constructor/destructor
+protected:
+    // Protected constructor for testing - allows inheritance in test code
     Logger();
-    ~Logger();
+    
+    // Virtual destructor for proper cleanup in derived classes
+    virtual ~Logger();
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
     /**
      * Get current timestamp as formatted string
      * Returns [HH:MM:SS] format or [--:--:--] if time not synced
+     * Virtual to allow mocking in tests
      */
-    String getTimestamp();
+    virtual String getTimestamp();
 
     /**
      * Write data to serial interface
      * Called outside critical section for optimal performance
+     * Virtual to allow mocking in tests
      */
-    void writeToSerial(const char* data, size_t len);
+    virtual void writeToSerial(const char* data, size_t len);
 
     /**
      * Write data to circular buffer with overflow handling
      * Must be called within mutex protection
+     * NOT virtual - this is what we're testing!
      */
     void writeToBuffer(const char* data, size_t len);
 
     /**
      * Write data to SD card log file (debugging only)
      * WARNING: Can cause conflicts with CPAP data access
+     * Virtual to allow mocking in tests
      */
-    void writeToSdCard(const char* data, size_t len);
+    virtual void writeToSdCard(const char* data, size_t len);
 
     /**
      * Track bytes lost due to buffer overflow
      * Called when data is overwritten in the circular buffer
+     * Virtual to allow mocking in tests
      */
-    void trackLostBytes(uint32_t bytesLost);
+    virtual void trackLostBytes(uint32_t bytesLost);
 
     // Circular buffer storage
     char* buffer;
