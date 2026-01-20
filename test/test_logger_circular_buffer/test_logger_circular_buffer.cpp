@@ -276,14 +276,14 @@ void test_logger_overflow_by_one_message() {
     printf("Bytes lost: %u\n", logData.bytesLost);
     printf("Content (first 30 chars): %.30s...\n", logData.content.c_str());
     
-    // Expected: Should lose 1 byte (buffer overflow by 1)
-    // The circular buffer works at byte-level, not message-level
-    TEST_ASSERT_EQUAL_MESSAGE(1, logData.bytesLost, 
-        "Should lose exactly 1 byte (overflow amount)");
+    // Expected: Should lose 1 byte (buffer overflow by 1) + partial line at start
+    // After overflow, we skip the corrupted partial line at the start
+    TEST_ASSERT_EQUAL_MESSAGE(13, logData.bytesLost, 
+        "Should lose 1 byte overflow + 12 bytes partial line");
     
-    // Buffer should contain exactly 64 bytes
-    TEST_ASSERT_EQUAL_MESSAGE(64, logData.content.length(), 
-        "Buffer should contain exactly 64 bytes");
+    // Buffer should contain less than 64 bytes (partial line skipped)
+    TEST_ASSERT_TRUE_MESSAGE(logData.content.length() < 64 && logData.content.length() > 50, 
+        "Buffer should contain ~52 bytes (64 - partial line)");
     
     // The newest message "E" should be present
     TEST_ASSERT_TRUE_MESSAGE(content.find("E") != std::string::npos, 
@@ -351,9 +351,9 @@ void test_logger_continuous_overflow() {
     TEST_ASSERT_TRUE_MESSAGE(logData.bytesLost > 100, 
         "Should have lost many bytes due to overflow");
     
-    // Buffer should contain exactly 64 bytes
-    TEST_ASSERT_EQUAL_MESSAGE(64, logData.content.length(), 
-        "Buffer should contain exactly 64 bytes");
+    // Buffer should contain less than 64 bytes (partial line skipped at start)
+    TEST_ASSERT_TRUE_MESSAGE(logData.content.length() < 64 && logData.content.length() > 50, 
+        "Buffer should contain ~51-63 bytes (partial line skipped)");
     
     // Most recent messages should be present
     TEST_ASSERT_TRUE_MESSAGE(content.find("MSG19") != std::string::npos, 
@@ -405,8 +405,8 @@ void test_logger_buffer_wrapping() {
     uint32_t head = logger->getHeadIndexPublic();
     uint32_t tail = logger->getTailIndexPublic();
     
-    printf("Head index: %u (physical: %u)\n", head, head % logger->getBufferSizePublic());
-    printf("Tail index: %u (physical: %u)\n", tail, tail % logger->getBufferSizePublic());
+    printf("Head index: %u (physical: %zu)\n", head, head % logger->getBufferSizePublic());
+    printf("Tail index: %u (physical: %zu)\n", tail, tail % logger->getBufferSizePublic());
     
     // Head should have wrapped around multiple times
     TEST_ASSERT_TRUE_MESSAGE(head > logger->getBufferSizePublic() * 5, 
@@ -417,7 +417,9 @@ void test_logger_buffer_wrapping() {
         "Buffer usage should be exactly bufferSize");
     
     Logger::LogData logData = logger->retrieveLogs();
-    TEST_ASSERT_EQUAL(64, logData.content.length());
+    // After overflow, partial line at start is skipped
+    TEST_ASSERT_TRUE_MESSAGE(logData.content.length() < 64 && logData.content.length() > 50,
+        "Buffer should contain ~51-63 bytes (partial line skipped)");
 }
 
 // Test 8: Bytes lost calculation accuracy
@@ -440,10 +442,10 @@ void test_logger_bytes_lost_accuracy() {
     Logger::LogData logData2 = logger->retrieveLogs();
     printf("After 65 bytes: lost=%u\n", logData2.bytesLost);
     
-    // Should have lost exactly 1 byte (overflow by 1)
-    // The circular buffer works at byte-level granularity
-    TEST_ASSERT_EQUAL_MESSAGE(1, logData2.bytesLost, 
-        "Should have lost exactly 1 byte");
+    // Should have lost 1 byte (overflow) + partial line at start (12 bytes)
+    // After overflow, we skip the corrupted partial line
+    TEST_ASSERT_EQUAL_MESSAGE(13, logData2.bytesLost, 
+        "Should have lost 1 byte overflow + 12 bytes partial line");
 }
 
 // Test 9: Multiple retrieve calls return same data
