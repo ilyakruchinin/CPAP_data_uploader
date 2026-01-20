@@ -117,6 +117,11 @@ bool Config::censorConfigFile(fs::FS &sd) {
         return false;
     }
     
+    return censorConfigFileWithDoc(sd, doc);
+}
+
+template<typename T>
+bool Config::censorConfigFileWithDoc(fs::FS &sd, T& doc) {
     // Update credential fields with censored values
     doc["WIFI_PASS"] = CENSORED_VALUE;
     doc["ENDPOINT_PASS"] = CENSORED_VALUE;
@@ -124,7 +129,7 @@ bool Config::censorConfigFile(fs::FS &sd) {
     LOG_DEBUG("Credential fields updated with censored values");
     
     // Write updated JSON back to SD card
-    configFile = sd.open("/config.json", FILE_WRITE);
+    File configFile = sd.open("/config.json", FILE_WRITE);
     if (!configFile) {
         LOG_ERROR("Cannot open config.json for writing during censoring");
         return false;
@@ -234,6 +239,108 @@ bool Config::migrateToSecureStorage(fs::FS &sd) {
     // Step 5: Censor config.json after successful Preferences storage
     LOG_DEBUG("Censoring config.json file...");
     if (!censorConfigFile(sd)) {
+        LOG_ERROR("Failed to censor config.json");
+        LOG_WARN("Credentials are stored in Preferences but config.json still contains plain text");
+        LOG("Manual intervention may be required");
+        return false;
+    }
+    
+    // Step 6: Log success
+    LOG("========================================");
+    LOG("Credential migration completed successfully");
+    LOG("Credentials are now stored securely in flash memory");
+    LOG("config.json has been updated with censored values");
+    LOG("========================================");
+    
+    return true;
+}
+
+template<typename T>
+bool Config::migrateToSecureStorageWithDoc(fs::FS &sd, T& doc) {
+    LOG("========================================");
+    LOG("Starting credential migration to secure storage");
+    LOG("========================================");
+    
+    // Step 1: Validate that credentials are not empty
+    if (wifiPassword.isEmpty() && endpointPassword.isEmpty()) {
+        LOG_WARN("Both credentials are empty, skipping migration");
+        return false;
+    }
+    
+    if (wifiPassword.isEmpty()) {
+        LOG_WARN("WiFi password is empty, will not migrate WIFI_PASS");
+    }
+    
+    if (endpointPassword.isEmpty()) {
+        LOG_WARN("Endpoint password is empty, will not migrate ENDPOINT_PASS");
+    }
+    
+    // Step 2: Store WIFI_PASS in Preferences
+    bool wifiStored = false;
+    if (!wifiPassword.isEmpty()) {
+        LOG_DEBUG("Storing WiFi password in Preferences...");
+        wifiStored = storeCredential(PREFS_KEY_WIFI_PASS, wifiPassword);
+        
+        if (!wifiStored) {
+            LOG_ERROR("Failed to store WiFi password in Preferences");
+            LOG("Migration aborted - keeping plain text credentials");
+            return false;
+        }
+    } else {
+        wifiStored = true;  // Skip if empty
+    }
+    
+    // Step 3: Store ENDPOINT_PASS in Preferences
+    bool endpointStored = false;
+    if (!endpointPassword.isEmpty()) {
+        LOG_DEBUG("Storing endpoint password in Preferences...");
+        endpointStored = storeCredential(PREFS_KEY_ENDPOINT_PASS, endpointPassword);
+        
+        if (!endpointStored) {
+            LOG_ERROR("Failed to store endpoint password in Preferences");
+            LOG("Migration aborted - keeping plain text credentials");
+            return false;
+        }
+    } else {
+        endpointStored = true;  // Skip if empty
+    }
+    
+    // Step 4: Verify credentials were stored correctly by reading back
+    LOG_DEBUG("Verifying stored credentials...");
+    bool verificationPassed = true;
+    
+    if (!wifiPassword.isEmpty()) {
+        String verifyWifi = loadCredential(PREFS_KEY_WIFI_PASS, "");
+        if (verifyWifi != wifiPassword) {
+            LOG_ERROR("WiFi password verification failed - stored value does not match");
+            verificationPassed = false;
+        } else {
+            LOG_DEBUG("WiFi password verification: PASSED");
+        }
+    }
+    
+    if (!endpointPassword.isEmpty()) {
+        String verifyEndpoint = loadCredential(PREFS_KEY_ENDPOINT_PASS, "");
+        if (verifyEndpoint != endpointPassword) {
+            LOG_ERROR("Endpoint password verification failed - stored value does not match");
+            verificationPassed = false;
+        } else {
+            LOG_DEBUG("Endpoint password verification: PASSED");
+        }
+    }
+    
+    if (!verificationPassed) {
+        LOG_ERROR("Credential verification failed");
+        LOG("Migration aborted - keeping plain text credentials");
+        return false;
+    }
+    
+    LOG_DEBUG("All credentials verified successfully");
+    
+    // Step 5: Censor config.json after successful Preferences storage
+    // Reuse the existing JSON document to avoid double allocation
+    LOG_DEBUG("Censoring config.json file...");
+    if (!censorConfigFileWithDoc(sd, doc)) {
         LOG_ERROR("Failed to censor config.json");
         LOG_WARN("Credentials are stored in Preferences but config.json still contains plain text");
         LOG("Manual intervention may be required");
@@ -398,8 +505,8 @@ bool Config::loadFromSD(fs::FS &sd) {
             bool hasNewEndpointCred = (!endpointCensored && !configEndpointPass.isEmpty());
             
             if (hasNewWifiCred || hasNewEndpointCred) {
-                // Attempt migration of new credentials
-                if (migrateToSecureStorage(sd)) {
+                // Attempt migration of new credentials using existing doc to avoid double allocation
+                if (migrateToSecureStorageWithDoc(sd, doc)) {
                     LOG("New credentials migrated to secure storage successfully");
                     credentialsInFlash = true;
                 } else {
