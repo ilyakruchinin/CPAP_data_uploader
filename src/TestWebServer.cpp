@@ -134,7 +134,7 @@ void TestWebServer::handleRoot() {
     // Show scan warning if scan is in progress
     if (g_scanInProgress) {
         html += "<div class='scan-warning'>";
-        html += "<h3>⏳ Scan in Progress</h3>";
+        html += "<h3>&#x23F3; Scan in Progress</h3>";
         html += "<p><strong>A scan operation is currently running.</strong></p>";
         html += "<p>This page will automatically refresh every 5 seconds until the scan completes.</p>";
         html += "<p>Please wait for the scan to finish before triggering another scan.</p>";
@@ -675,16 +675,13 @@ void TestWebServer::handleLogs() {
     // All logs in the circular buffer are always returned
     Logger::LogData logData = Logger::getInstance().retrieveLogs();
     
-    // Build JSON response
-    String json = "{";
-    json += "\"status\":\"success\",";
-    json += "\"logs\":\"" + escapeJson(logData.content) + "\",";
-    json += "\"bytes_lost\":" + String(logData.bytesLost) + ",";
-    json += "\"bytes_returned\":" + String(logData.content.length()) + ",";
-    json += "\"timestamp\":\"" + getCurrentTimeString() + "\"";
-    json += "}";
+    // Return plain text with metadata in headers
+    // This avoids memory issues with large JSON strings and escaping
+    server->sendHeader("X-Bytes-Lost", String(logData.bytesLost));
+    server->sendHeader("X-Bytes-Returned", String(logData.content.length()));
+    server->sendHeader("X-Timestamp", getCurrentTimeString());
     
-    server->send(200, "application/json", json);
+    server->send(200, "text/plain", logData.content);
 }
 
 // Update manager references (needed after uploader recreation)
