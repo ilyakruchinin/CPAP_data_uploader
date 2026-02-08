@@ -71,22 +71,23 @@ bool FileUploader::begin(fs::FS &sd) {
     // Restore last upload timestamp from state
     scheduleManager->setLastUploadTimestamp(stateManager->getLastUploadTimestamp());
     
-    // Initialize appropriate uploader based on endpoint type and build flags
+    // Initialize uploaders based on endpoint type and build flags
+    // Supports comma-separated types (e.g., "SMB,CLOUD")
     String endpointType = config->getEndpointType();
     LOGF("[FileUploader] Endpoint type: %s", endpointType.c_str());
     
+    bool anyBackendCreated = false;
+    
 #ifdef ENABLE_SMB_UPLOAD
-    if (endpointType == "SMB") {
+    if (config->hasSmbEndpoint()) {
         smbUploader = new SMBUploader(
             config->getEndpoint(),
             config->getEndpointUser(),
             config->getEndpointPassword()
         );
-        
-        // Note: We don't call begin() here because we may not have WiFi yet
-        // Connection will be established when needed during upload
         LOG("[FileUploader] SMBUploader created (will connect during upload)");
-    } else
+        anyBackendCreated = true;
+    }
 #endif
 #ifdef ENABLE_WEBDAV_UPLOAD
     if (endpointType == "WEBDAV") {
@@ -95,23 +96,20 @@ bool FileUploader::begin(fs::FS &sd) {
             config->getEndpointUser(),
             config->getEndpointPassword()
         );
-        
         LOG("[FileUploader] WebDAVUploader created (will connect during upload)");
-    } else
+        anyBackendCreated = true;
+    }
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (endpointType == "SLEEPHQ") {
-        sleephqUploader = new SleepHQUploader(
-            config->getEndpoint(),
-            config->getEndpointUser(),
-            config->getEndpointPassword()
-        );
-        
+    if (config->hasCloudEndpoint()) {
+        sleephqUploader = new SleepHQUploader(config);
         LOG("[FileUploader] SleepHQUploader created (will connect during upload)");
-    } else
+        anyBackendCreated = true;
+    }
 #endif
-    {
-        LOGF("[FileUploader] ERROR: Unsupported or disabled endpoint type: %s", endpointType.c_str());
+    
+    if (!anyBackendCreated) {
+        LOGF("[FileUploader] ERROR: No uploader created for endpoint type: %s", endpointType.c_str());
         LOG("[FileUploader] Supported types (based on build flags):");
 #ifdef ENABLE_SMB_UPLOAD
         LOG("[FileUploader]   - SMB (enabled)");
@@ -124,9 +122,9 @@ bool FileUploader::begin(fs::FS &sd) {
         LOG("[FileUploader]   - WEBDAV (disabled - compile with -DENABLE_WEBDAV_UPLOAD)");
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-        LOG("[FileUploader]   - SLEEPHQ (enabled)");
+        LOG("[FileUploader]   - CLOUD/SLEEPHQ (enabled)");
 #else
-        LOG("[FileUploader]   - SLEEPHQ (disabled - compile with -DENABLE_SLEEPHQ_UPLOAD)");
+        LOG("[FileUploader]   - CLOUD/SLEEPHQ (disabled - compile with -DENABLE_SLEEPHQ_UPLOAD)");
 #endif
         return false;
     }
@@ -361,6 +359,25 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
         return folders;
     }
     
+    // Calculate MAX_DAYS cutoff date if configured
+    String maxDaysCutoff = "";
+    int maxDays = config->getMaxDays();
+    if (maxDays > 0) {
+        time_t now = time(nullptr);
+        if (now > 24 * 3600) {  // Valid NTP time
+            time_t cutoff = now - (maxDays * 86400L);
+            struct tm cutoffTm;
+            localtime_r(&cutoff, &cutoffTm);
+            char cutoffStr[9];
+            snprintf(cutoffStr, sizeof(cutoffStr), "%04d%02d%02d",
+                     cutoffTm.tm_year + 1900, cutoffTm.tm_mon + 1, cutoffTm.tm_mday);
+            maxDaysCutoff = String(cutoffStr);
+            LOGF("[FileUploader] MAX_DAYS=%d: only processing folders >= %s", maxDays, cutoffStr);
+        } else {
+            LOG_WARN("[FileUploader] MAX_DAYS configured but NTP time not available, processing all folders");
+        }
+    }
+    
     // Scan for folders
     File file = root.openNextFile();
     while (file) {
@@ -371,6 +388,14 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
             int lastSlash = folderName.lastIndexOf('/');
             if (lastSlash >= 0) {
                 folderName = folderName.substring(lastSlash + 1);
+            }
+            
+            // Apply MAX_DAYS filter (folder names are in YYYYMMDD format)
+            if (!maxDaysCutoff.isEmpty() && folderName < maxDaysCutoff) {
+                LOG_DEBUGF("[FileUploader] Skipping old folder (MAX_DAYS): %s", folderName.c_str());
+                file.close();
+                file = root.openNextFile();
+                continue;
             }
             
             // Check if folder is already completed
@@ -499,20 +524,31 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
         }
     }
     
-    // SETTINGS files to track
-    std::vector<String> settingsFiles = {
-        "/SETTINGS/CurrentSettings.json",
-        "/SETTINGS/CurrentSettings.crc"
-    };
-    
-    for (const String& file : settingsFiles) {
-        if (sd.exists(file)) {
-            // Check if file has changed
-            if (stateManager->hasFileChanged(sd, file)) {
-                files.push_back(file);
-                LOG_DEBUGF("[FileUploader] SETTINGS file changed: %s", file.c_str());
+    // SETTINGS files: scan entire /SETTINGS/ directory (supports legacy and modern formats)
+    File settingsDir = sd.open("/SETTINGS");
+    if (settingsDir && settingsDir.isDirectory()) {
+        File settingsFile = settingsDir.openNextFile();
+        while (settingsFile) {
+            if (!settingsFile.isDirectory()) {
+                String settingsFileName = String(settingsFile.name());
+                // Extract just the filename
+                int lastSlash = settingsFileName.lastIndexOf('/');
+                if (lastSlash >= 0) {
+                    settingsFileName = settingsFileName.substring(lastSlash + 1);
+                }
+                String settingsPath = "/SETTINGS/" + settingsFileName;
+                
+                if (stateManager->hasFileChanged(sd, settingsPath)) {
+                    files.push_back(settingsPath);
+                    LOG_DEBUGF("[FileUploader] SETTINGS file changed: %s", settingsPath.c_str());
+                }
             }
+            settingsFile.close();
+            settingsFile = settingsDir.openNextFile();
         }
+        settingsDir.close();
+    } else {
+        LOG_DEBUG("[FileUploader] /SETTINGS directory not found or not accessible");
     }
     
     LOG_DEBUGF("[FileUploader] Found %d changed root/SETTINGS files", files.size());
@@ -545,12 +581,42 @@ bool FileUploader::startUploadSession(fs::FS &sd) {
     // Initialize periodic release timer
     lastSdReleaseTime = millis();
     
+    // Create cloud import session if cloud backend is active
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (sleephqUploader && config->hasCloudEndpoint()) {
+        if (!sleephqUploader->isConnected()) {
+            LOG("[FileUploader] Connecting cloud uploader for import session...");
+            if (!sleephqUploader->begin()) {
+                LOG_ERROR("[FileUploader] Failed to initialize cloud uploader");
+                LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
+            }
+        }
+        if (sleephqUploader->isConnected()) {
+            if (!sleephqUploader->createImport()) {
+                LOG_ERROR("[FileUploader] Failed to create cloud import");
+                LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
+            }
+        }
+    }
+#endif
+    
     return true;
 }
 
 // End upload session and save state
 void FileUploader::endUploadSession(fs::FS &sd) {
     LOG("[FileUploader] Ending upload session");
+    
+    // Process cloud import if active
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (sleephqUploader && config->hasCloudEndpoint()) {
+        if (!sleephqUploader->getCurrentImportId().isEmpty()) {
+            if (!sleephqUploader->processImport()) {
+                LOG_WARN("[FileUploader] Failed to process cloud import");
+            }
+        }
+    }
+#endif
     
     // Save upload state
     if (!stateManager->save(sd)) {
@@ -749,63 +815,76 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
             LOGF("[FileUploader] Uploading file: %s (%lu bytes)", fileName.c_str(), fileSize);
         }
         
-        bool uploadSuccess = false;
+        bool uploadSuccess = true;
+        bool anyBackendConfigured = false;
         
-        // Use the appropriate uploader based on configuration
+        // Upload to all active backends
 #ifdef ENABLE_SMB_UPLOAD
-        if (smbUploader && config->getEndpointType() == "SMB") {
-            // Ensure SMB connection is established
+        if (smbUploader && config->hasSmbEndpoint()) {
+            anyBackendConfigured = true;
             if (!smbUploader->isConnected()) {
                 LOG_DEBUG("[FileUploader] SMB not connected, attempting to connect...");
                 if (!smbUploader->begin()) {
                     LOG_ERROR("[FileUploader] Failed to connect to SMB share");
-                    LOG_ERROR("[FileUploader] Check network connectivity and SMB credentials");
                     stateManager->incrementCurrentRetryCount();
                     stateManager->save(sd);
                     return false;
                 }
             }
-            
-            uploadSuccess = smbUploader->upload(localPath, remotePath, sd, bytesTransferred);
-        } else
+            unsigned long smbBytes = 0;
+            if (!smbUploader->upload(localPath, remotePath, sd, smbBytes)) {
+                LOG_ERRORF("[FileUploader] SMB upload failed for: %s", localPath.c_str());
+                uploadSuccess = false;
+            } else {
+                bytesTransferred = smbBytes;
+            }
+        }
 #endif
 #ifdef ENABLE_WEBDAV_UPLOAD
         if (webdavUploader && config->getEndpointType() == "WEBDAV") {
-            // Ensure WebDAV connection is established
+            anyBackendConfigured = true;
             if (!webdavUploader->isConnected()) {
                 LOG_DEBUG("[FileUploader] WebDAV not connected, attempting to connect...");
                 if (!webdavUploader->begin()) {
                     LOG_ERROR("[FileUploader] Failed to connect to WebDAV server");
-                    LOG_ERROR("[FileUploader] Check network connectivity and WebDAV credentials");
                     stateManager->incrementCurrentRetryCount();
                     stateManager->save(sd);
                     return false;
                 }
             }
-            
-            uploadSuccess = webdavUploader->upload(localPath, remotePath, sd, bytesTransferred);
-        } else
+            unsigned long davBytes = 0;
+            if (!webdavUploader->upload(localPath, remotePath, sd, davBytes)) {
+                LOG_ERRORF("[FileUploader] WebDAV upload failed for: %s", localPath.c_str());
+                uploadSuccess = false;
+            } else if (bytesTransferred == 0) {
+                bytesTransferred = davBytes;
+            }
+        }
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-        if (sleephqUploader && config->getEndpointType() == "SLEEPHQ") {
-            // Ensure SleepHQ connection is established
+        if (sleephqUploader && config->hasCloudEndpoint()) {
+            anyBackendConfigured = true;
             if (!sleephqUploader->isConnected()) {
-                LOG_DEBUG("[FileUploader] SleepHQ not connected, attempting to connect...");
+                LOG_DEBUG("[FileUploader] Cloud not connected, attempting to connect...");
                 if (!sleephqUploader->begin()) {
-                    LOG_ERROR("[FileUploader] Failed to connect to SleepHQ service");
-                    LOG_ERROR("[FileUploader] Check network connectivity and API credentials");
+                    LOG_ERROR("[FileUploader] Failed to connect to cloud service");
                     stateManager->incrementCurrentRetryCount();
                     stateManager->save(sd);
                     return false;
                 }
             }
-            
-            uploadSuccess = sleephqUploader->upload(localPath, remotePath, sd, bytesTransferred);
-        } else
+            unsigned long cloudBytes = 0;
+            if (!sleephqUploader->upload(localPath, remotePath, sd, cloudBytes)) {
+                LOG_ERRORF("[FileUploader] Cloud upload failed for: %s", localPath.c_str());
+                uploadSuccess = false;
+            } else if (bytesTransferred == 0) {
+                bytesTransferred = cloudBytes;
+            }
+        }
 #endif
-        {
+        
+        if (!anyBackendConfigured) {
             LOG_ERROR("[FileUploader] No uploader available for configured endpoint type");
-            LOG_ERROR("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
             stateManager->incrementCurrentRetryCount();
             stateManager->save(sd);
             return false;
@@ -813,11 +892,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         
         if (!uploadSuccess) {
             LOG_ERRORF("[FileUploader] Failed to upload file: %s", localPath.c_str());
-            LOG_ERROR("[FileUploader] This may be due to:");
-            LOG_ERROR("[FileUploader]   - Network connectivity issues");
-            LOG_ERROR("[FileUploader]   - SMB server unavailable or overloaded");
-            LOG_ERROR("[FileUploader]   - Insufficient permissions on remote share");
-            LOG_ERROR("[FileUploader]   - Disk space issues on remote server");
             LOG_WARNF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
             
             // Don't mark folder as completed, will retry
@@ -902,63 +976,73 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     unsigned long bytesTransferred = 0;
     unsigned long uploadStartTime = millis();
     
-    bool uploadSuccess = false;
+    bool uploadSuccess = true;
+    bool anyBackendConfigured = false;
     
-    // Use the appropriate uploader based on configuration
+    // Upload to all active backends
 #ifdef ENABLE_SMB_UPLOAD
-    if (smbUploader && config->getEndpointType() == "SMB") {
-        // Ensure SMB connection is established
+    if (smbUploader && config->hasSmbEndpoint()) {
+        anyBackendConfigured = true;
         if (!smbUploader->isConnected()) {
             LOG_DEBUG("[FileUploader] SMB not connected, attempting to connect...");
             if (!smbUploader->begin()) {
                 LOG_ERROR("[FileUploader] Failed to connect to SMB share");
-                LOG_ERROR("[FileUploader] Check network connectivity and SMB credentials");
                 return false;
             }
         }
-        
-        uploadSuccess = smbUploader->upload(filePath, filePath, sd, bytesTransferred);
-    } else
+        unsigned long smbBytes = 0;
+        if (!smbUploader->upload(filePath, filePath, sd, smbBytes)) {
+            LOG_ERRORF("[FileUploader] SMB upload failed for: %s", filePath.c_str());
+            uploadSuccess = false;
+        } else {
+            bytesTransferred = smbBytes;
+        }
+    }
 #endif
 #ifdef ENABLE_WEBDAV_UPLOAD
     if (webdavUploader && config->getEndpointType() == "WEBDAV") {
-        // Ensure WebDAV connection is established
+        anyBackendConfigured = true;
         if (!webdavUploader->isConnected()) {
-            LOG_DEBUG("[FileUploader] WebDAV not connected, attempting to connect...");
             if (!webdavUploader->begin()) {
                 LOG_ERROR("[FileUploader] Failed to connect to WebDAV server");
-                LOG_ERROR("[FileUploader] Check network connectivity and WebDAV credentials");
                 return false;
             }
         }
-        
-        uploadSuccess = webdavUploader->upload(filePath, filePath, sd, bytesTransferred);
-    } else
+        unsigned long davBytes = 0;
+        if (!webdavUploader->upload(filePath, filePath, sd, davBytes)) {
+            uploadSuccess = false;
+        } else if (bytesTransferred == 0) {
+            bytesTransferred = davBytes;
+        }
+    }
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (sleephqUploader && config->getEndpointType() == "SLEEPHQ") {
-        // Ensure SleepHQ connection is established
+    if (sleephqUploader && config->hasCloudEndpoint()) {
+        anyBackendConfigured = true;
         if (!sleephqUploader->isConnected()) {
-            LOG_DEBUG("[FileUploader] SleepHQ not connected, attempting to connect...");
+            LOG_DEBUG("[FileUploader] Cloud not connected, attempting to connect...");
             if (!sleephqUploader->begin()) {
-                LOG_ERROR("[FileUploader] Failed to connect to SleepHQ service");
-                LOG_ERROR("[FileUploader] Check network connectivity and API credentials");
+                LOG_ERROR("[FileUploader] Failed to connect to cloud service");
                 return false;
             }
         }
-        
-        uploadSuccess = sleephqUploader->upload(filePath, filePath, sd, bytesTransferred);
-    } else
+        unsigned long cloudBytes = 0;
+        if (!sleephqUploader->upload(filePath, filePath, sd, cloudBytes)) {
+            LOG_ERRORF("[FileUploader] Cloud upload failed for: %s", filePath.c_str());
+            uploadSuccess = false;
+        } else if (bytesTransferred == 0) {
+            bytesTransferred = cloudBytes;
+        }
+    }
 #endif
-    {
+    
+    if (!anyBackendConfigured) {
         LOG_ERROR("[FileUploader] No uploader available for configured endpoint type");
-        LOG_ERROR("[FileUploader] Check ENDPOINT_TYPE in config.json and build flags");
         return false;
     }
     
     if (!uploadSuccess) {
-        LOG_ERROR("[FileUploader] Failed to upload file");
-        LOG_ERROR("[FileUploader] This may be due to network issues or SMB server problems");
+        LOG_ERROR("[FileUploader] Failed to upload file to one or more backends");
         return false;
     }
     
@@ -1001,7 +1085,7 @@ bool FileUploader::performDeltaScan(SDCardManager* sdManager) {
     
     // Only support SMB for now (can be extended for other protocols)
 #ifdef ENABLE_SMB_UPLOAD
-    if (!smbUploader || config->getEndpointType() != "SMB") {
+    if (!smbUploader || !config->hasSmbEndpoint()) {
         LOG_ERROR("[FileUploader] Delta scan only supported for SMB endpoints");
         return false;
     }
@@ -1124,7 +1208,7 @@ bool FileUploader::performDeepScan(SDCardManager* sdManager) {
     
     // Only support SMB for now (can be extended for other protocols)
 #ifdef ENABLE_SMB_UPLOAD
-    if (!smbUploader || config->getEndpointType() != "SMB") {
+    if (!smbUploader || !config->hasSmbEndpoint()) {
         LOG_ERROR("[FileUploader] Deep scan only supported for SMB endpoints");
         return false;
     }

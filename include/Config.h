@@ -34,7 +34,7 @@ private:
     String wifiPassword;
     String schedule;
     String endpoint;
-    String endpointType;  // SMB, WEBDAV, SLEEPHQ
+    String endpointType;  // SMB, CLOUD, SMB,CLOUD
     String endpointUser;
     String endpointPassword;
     int uploadHour;
@@ -46,6 +46,16 @@ private:
     int sdReleaseWaitMs;
     bool logToSdCard;
     bool isValid;
+    
+    // Cloud upload settings
+    String cloudClientId;
+    String cloudClientSecret;
+    String cloudTeamId;
+    String cloudBaseUrl;
+    int cloudDeviceId;
+    int maxDays;
+    int uploadIntervalMinutes;
+    bool cloudInsecureTls;
     
     // Power management settings
     int cpuSpeedMhz;
@@ -63,6 +73,7 @@ private:
     static const char* PREFS_NAMESPACE;
     static const char* PREFS_KEY_WIFI_PASS;
     static const char* PREFS_KEY_ENDPOINT_PASS;
+    static const char* PREFS_KEY_CLOUD_SECRET;
     static const char* CENSORED_VALUE;
     
     // Preferences initialization and cleanup methods
@@ -106,6 +117,18 @@ public:
     int getSdReleaseWaitMs() const;
     bool getLogToSdCard() const;
     bool valid() const;
+    
+    // Cloud upload getters
+    const String& getCloudClientId() const;
+    const String& getCloudClientSecret() const;
+    const String& getCloudTeamId() const;
+    const String& getCloudBaseUrl() const;
+    int getCloudDeviceId() const;
+    int getMaxDays() const;
+    int getUploadIntervalMinutes() const;
+    bool getCloudInsecureTls() const;
+    bool hasCloudEndpoint() const;
+    bool hasSmbEndpoint() const;
     
     // Power management getters
     int getCpuSpeedMhz() const;
