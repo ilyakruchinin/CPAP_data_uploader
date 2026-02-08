@@ -467,6 +467,20 @@ void TestWebServer::handleStatus() {
         json += ",\"max_retry_attempts\":" + String(config->getMaxRetryAttempts());
         json += ",\"boot_delay_seconds\":" + String(config->getBootDelaySeconds());
         json += ",\"sd_release_interval_seconds\":" + String(config->getSdReleaseIntervalSeconds());
+        
+        // Cloud upload status
+        if (config->hasCloudEndpoint()) {
+            json += ",\"cloud_configured\":true";
+            if (config->getMaxDays() > 0) {
+                json += ",\"max_days\":" + String(config->getMaxDays());
+            }
+            if (config->getUploadIntervalMinutes() > 0) {
+                json += ",\"upload_interval_minutes\":" + String(config->getUploadIntervalMinutes());
+            }
+            json += ",\"cloud_insecure_tls\":" + String(config->getCloudInsecureTls() ? "true" : "false");
+        } else {
+            json += ",\"cloud_configured\":false";
+        }
     }
     
     // Add retry timing information
@@ -558,6 +572,28 @@ void TestWebServer::handleConfig() {
         json += "\"session_duration_seconds\":" + String(config->getSessionDurationSeconds()) + ",";
         json += "\"max_retry_attempts\":" + String(config->getMaxRetryAttempts()) + ",";
         json += "\"gmt_offset_hours\":" + String(config->getGmtOffsetHours()) + ",";
+        
+        // Cloud upload config
+        if (config->hasCloudEndpoint()) {
+            json += "\"cloud_client_id\":\"" + config->getCloudClientId() + "\",";
+            if (credentialsSecured) {
+                json += "\"cloud_client_secret\":\"***STORED_IN_FLASH***\",";
+            } else {
+                json += "\"cloud_client_secret\":\"***HIDDEN***\",";
+            }
+            json += "\"cloud_device_id\":" + String(config->getCloudDeviceId()) + ",";
+            json += "\"cloud_base_url\":\"" + config->getCloudBaseUrl() + "\",";
+            if (!config->getCloudTeamId().isEmpty()) {
+                json += "\"cloud_team_id\":\"" + config->getCloudTeamId() + "\",";
+            }
+            json += "\"cloud_insecure_tls\":" + String(config->getCloudInsecureTls() ? "true" : "false") + ",";
+        }
+        if (config->getMaxDays() > 0) {
+            json += "\"max_days\":" + String(config->getMaxDays()) + ",";
+        }
+        if (config->getUploadIntervalMinutes() > 0) {
+            json += "\"upload_interval_minutes\":" + String(config->getUploadIntervalMinutes()) + ",";
+        }
         
         // Add credentials_secured field to indicate storage mode
         json += "\"credentials_secured\":" + String(credentialsSecured ? "true" : "false");

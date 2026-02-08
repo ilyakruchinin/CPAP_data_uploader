@@ -6,37 +6,60 @@
 
 #ifdef ENABLE_SLEEPHQ_UPLOAD
 
+#include <WiFiClientSecure.h>
+#include "Config.h"
+
 /**
- * SleepHQUploader - Handles direct file uploads to SleepHQ service
+ * SleepHQUploader - Uploads CPAP data to SleepHQ cloud service via REST API
  * 
- * TODO: Implementation pending
+ * Uses OAuth password grant for authentication (client_id + client_secret).
+ * Upload flow: authenticate -> get team_id -> create import -> upload files -> process import.
+ * Content dedup via MD5(file_content + filename) hash sent with each file.
  * 
- * This uploader will support direct upload to the SleepHQ cloud service
- * for CPAP data analysis and tracking.
- * 
- * Planned features:
- * - HTTPS API integration
- * - OAuth or API key authentication
- * - Automatic file format detection
- * - Metadata extraction and submission
- * - Upload progress tracking
- * - Retry logic for failed uploads
- * 
- * Requirements: 10.7
+ * TLS: Uses embedded ISRG Root X1 CA certificate by default.
+ *       Set CLOUD_INSECURE_TLS=true to skip certificate validation.
  */
 class SleepHQUploader {
 private:
-    String apiEndpoint;    // SleepHQ API endpoint
-    String apiKey;         // API key or OAuth token
-    String userId;         // User ID for SleepHQ account
-    bool authenticated;
+    Config* config;
     
-    bool parseEndpoint(const String& endpoint);
+    // OAuth state
+    String accessToken;
+    unsigned long tokenObtainedAt;  // millis() when token was obtained
+    unsigned long tokenExpiresIn;   // seconds until token expires
+    
+    // API state
+    String teamId;
+    String currentImportId;
+    bool connected;
+    
+    // TLS client
+    WiFiClientSecure* tlsClient;
+    
+    // HTTP helpers
+    bool httpRequest(const String& method, const String& path, 
+                     const String& body, const String& contentType,
+                     String& responseBody, int& httpCode);
+    bool httpMultipartUpload(const String& path, const String& fileName,
+                             const String& filePath, const String& contentHash,
+                             fs::FS &sd, unsigned long& bytesTransferred,
+                             String& responseBody, int& httpCode);
+    
+    // Content hash: MD5(file_content + filename)
+    String computeContentHash(fs::FS &sd, const String& localPath, const String& fileName);
+    
+    // OAuth
     bool authenticate();
-    void disconnect();
+    bool ensureAccessToken();
+    
+    // API operations
+    bool discoverTeamId();
+    
+    // TLS setup
+    void setupTLS();
 
 public:
-    SleepHQUploader(const String& endpoint, const String& user, const String& apiKey);
+    SleepHQUploader(Config* cfg);
     ~SleepHQUploader();
     
     bool begin();
@@ -45,7 +68,14 @@ public:
     void end();
     bool isConnected() const;
     
-    // Note: SleepHQ may not need createDirectory as it manages its own structure
+    // Import session management (called by FileUploader)
+    bool createImport();
+    bool processImport();
+    
+    // Status getters
+    const String& getTeamId() const;
+    const String& getCurrentImportId() const;
+    unsigned long getTokenRemainingSeconds() const;
 };
 
 #endif // ENABLE_SLEEPHQ_UPLOAD

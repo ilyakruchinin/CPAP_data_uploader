@@ -47,6 +47,7 @@ bool budgetExhaustedRetry = false;  // True if waiting due to budget exhaustion
 unsigned long lastWifiReconnectAttempt = 0;
 unsigned long lastUploadCheck = 0;
 unsigned long lastSdCardRetry = 0;
+unsigned long lastIntervalUploadTime = 0;  // For UPLOAD_INTERVAL_MINUTES scheduling
 
 // SD card logging periodic dump timing
 unsigned long lastLogDumpTime = 0;
@@ -579,9 +580,22 @@ void loop() {
         }
         lastUploadCheck = currentTime;
         
-        if (!uploader || !uploader->shouldUpload()) {
-            // Not upload time yet
-            return;
+        // Check upload schedule: interval-based or daily
+        int intervalMinutes = config.getUploadIntervalMinutes();
+        if (intervalMinutes > 0) {
+            // Interval-based scheduling: upload every N minutes
+            unsigned long intervalMs = (unsigned long)intervalMinutes * 60000UL;
+            if (lastIntervalUploadTime > 0 && (currentTime - lastIntervalUploadTime) < intervalMs) {
+                return;  // Not time yet
+            }
+            // Time for interval upload
+            LOG_DEBUGF("Interval upload triggered (every %d minutes)", intervalMinutes);
+        } else {
+            // Daily scheduling: use ScheduleManager
+            if (!uploader || !uploader->shouldUpload()) {
+                // Not upload time yet
+                return;
+            }
         }
     }
 
@@ -619,10 +633,17 @@ void loop() {
     // 1. Budget exhausted (partial upload) - need to wait 2x session duration
     // 2. All files uploaded or scheduled upload complete - wait until next day
     
+    // Update interval upload timer regardless of success/failure
+    lastIntervalUploadTime = millis();
+    
     if (uploadSuccess) {
         LOG("=== Upload Session Completed Successfully ===");
         LOG_DEBUG("All pending files have been uploaded");
-        LOG_DEBUG("Next upload will occur at scheduled time tomorrow");
+        if (config.getUploadIntervalMinutes() > 0) {
+            LOGF("Next upload in %d minutes (interval mode)", config.getUploadIntervalMinutes());
+        } else {
+            LOG_DEBUG("Next upload will occur at scheduled time tomorrow");
+        }
         // The ScheduleManager has already marked upload as completed
         // No need to set retry timer - will wait for next scheduled time
     } else {

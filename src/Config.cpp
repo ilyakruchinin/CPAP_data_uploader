@@ -6,6 +6,7 @@
 const char* Config::PREFS_NAMESPACE = "cpap_creds";
 const char* Config::PREFS_KEY_WIFI_PASS = "wifi_pass";
 const char* Config::PREFS_KEY_ENDPOINT_PASS = "endpoint_pass";
+const char* Config::PREFS_KEY_CLOUD_SECRET = "cloud_secret";
 const char* Config::CENSORED_VALUE = "***STORED_IN_FLASH***";
 const size_t Config::JSON_FILE_MAX_SIZE;
 
@@ -19,6 +20,14 @@ Config::Config() :
     sdReleaseWaitMs(500),  // Default: 500ms
     logToSdCard(false),  // Default: do not log to SD card (debugging only)
     isValid(false),
+    
+    // Cloud upload defaults
+    cloudBaseUrl("https://sleephq.com"),
+    cloudDeviceId(0),
+    maxDays(0),  // Default: all days
+    uploadIntervalMinutes(0),  // Default: use daily schedule
+    cloudInsecureTls(false),  // Default: use root CA validation
+    
     storePlainText(false),  // Default: secure mode
     credentialsInFlash(false),  // Will be set during loadFromSD
     
@@ -125,6 +134,9 @@ bool Config::censorConfigFileWithDoc(fs::FS &sd, T& doc) {
     // Update credential fields with censored values
     doc["WIFI_PASS"] = CENSORED_VALUE;
     doc["ENDPOINT_PASS"] = CENSORED_VALUE;
+    if (doc.containsKey("CLOUD_CLIENT_SECRET")) {
+        doc["CLOUD_CLIENT_SECRET"] = CENSORED_VALUE;
+    }
     
     LOG_DEBUG("Credential fields updated with censored values");
     
@@ -161,8 +173,8 @@ bool Config::migrateToSecureStorage(fs::FS &sd) {
     LOG("========================================");
     
     // Step 1: Validate that credentials are not empty
-    if (wifiPassword.isEmpty() && endpointPassword.isEmpty()) {
-        LOG_WARN("Both credentials are empty, skipping migration");
+    if (wifiPassword.isEmpty() && endpointPassword.isEmpty() && cloudClientSecret.isEmpty()) {
+        LOG_WARN("All credentials are empty, skipping migration");
         return false;
     }
     
@@ -172,6 +184,10 @@ bool Config::migrateToSecureStorage(fs::FS &sd) {
     
     if (endpointPassword.isEmpty()) {
         LOG_WARN("Endpoint password is empty, will not migrate ENDPOINT_PASS");
+    }
+    
+    if (cloudClientSecret.isEmpty()) {
+        LOG_DEBUG("Cloud client secret is empty, will not migrate CLOUD_CLIENT_SECRET");
     }
     
     // Step 2: Store WIFI_PASS in Preferences
@@ -204,6 +220,21 @@ bool Config::migrateToSecureStorage(fs::FS &sd) {
         endpointStored = true;  // Skip if empty
     }
     
+    // Step 3b: Store CLOUD_CLIENT_SECRET in Preferences
+    bool cloudSecretStored = false;
+    if (!cloudClientSecret.isEmpty()) {
+        LOG_DEBUG("Storing cloud client secret in Preferences...");
+        cloudSecretStored = storeCredential(PREFS_KEY_CLOUD_SECRET, cloudClientSecret);
+        
+        if (!cloudSecretStored) {
+            LOG_ERROR("Failed to store cloud client secret in Preferences");
+            LOG("Migration aborted - keeping plain text credentials");
+            return false;
+        }
+    } else {
+        cloudSecretStored = true;  // Skip if empty
+    }
+    
     // Step 4: Verify credentials were stored correctly by reading back
     LOG_DEBUG("Verifying stored credentials...");
     bool verificationPassed = true;
@@ -225,6 +256,16 @@ bool Config::migrateToSecureStorage(fs::FS &sd) {
             verificationPassed = false;
         } else {
             LOG_DEBUG("Endpoint password verification: PASSED");
+        }
+    }
+    
+    if (!cloudClientSecret.isEmpty()) {
+        String verifyCloud = loadCredential(PREFS_KEY_CLOUD_SECRET, "");
+        if (verifyCloud != cloudClientSecret) {
+            LOG_ERROR("Cloud client secret verification failed - stored value does not match");
+            verificationPassed = false;
+        } else {
+            LOG_DEBUG("Cloud client secret verification: PASSED");
         }
     }
     
@@ -262,8 +303,8 @@ bool Config::migrateToSecureStorageWithDoc(fs::FS &sd, T& doc) {
     LOG("========================================");
     
     // Step 1: Validate that credentials are not empty
-    if (wifiPassword.isEmpty() && endpointPassword.isEmpty()) {
-        LOG_WARN("Both credentials are empty, skipping migration");
+    if (wifiPassword.isEmpty() && endpointPassword.isEmpty() && cloudClientSecret.isEmpty()) {
+        LOG_WARN("All credentials are empty, skipping migration");
         return false;
     }
     
@@ -273,6 +314,10 @@ bool Config::migrateToSecureStorageWithDoc(fs::FS &sd, T& doc) {
     
     if (endpointPassword.isEmpty()) {
         LOG_WARN("Endpoint password is empty, will not migrate ENDPOINT_PASS");
+    }
+    
+    if (cloudClientSecret.isEmpty()) {
+        LOG_DEBUG("Cloud client secret is empty, will not migrate CLOUD_CLIENT_SECRET");
     }
     
     // Step 2: Store WIFI_PASS in Preferences
@@ -305,6 +350,21 @@ bool Config::migrateToSecureStorageWithDoc(fs::FS &sd, T& doc) {
         endpointStored = true;  // Skip if empty
     }
     
+    // Step 3b: Store CLOUD_CLIENT_SECRET in Preferences
+    bool cloudSecretStored = false;
+    if (!cloudClientSecret.isEmpty()) {
+        LOG_DEBUG("Storing cloud client secret in Preferences...");
+        cloudSecretStored = storeCredential(PREFS_KEY_CLOUD_SECRET, cloudClientSecret);
+        
+        if (!cloudSecretStored) {
+            LOG_ERROR("Failed to store cloud client secret in Preferences");
+            LOG("Migration aborted - keeping plain text credentials");
+            return false;
+        }
+    } else {
+        cloudSecretStored = true;  // Skip if empty
+    }
+    
     // Step 4: Verify credentials were stored correctly by reading back
     LOG_DEBUG("Verifying stored credentials...");
     bool verificationPassed = true;
@@ -326,6 +386,16 @@ bool Config::migrateToSecureStorageWithDoc(fs::FS &sd, T& doc) {
             verificationPassed = false;
         } else {
             LOG_DEBUG("Endpoint password verification: PASSED");
+        }
+    }
+    
+    if (!cloudClientSecret.isEmpty()) {
+        String verifyCloud = loadCredential(PREFS_KEY_CLOUD_SECRET, "");
+        if (verifyCloud != cloudClientSecret) {
+            LOG_ERROR("Cloud client secret verification failed - stored value does not match");
+            verificationPassed = false;
+        } else {
+            LOG_DEBUG("Cloud client secret verification: PASSED");
         }
     }
     
@@ -419,6 +489,27 @@ bool Config::loadFromSD(fs::FS &sd) {
     sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 500;
     logToSdCard = doc["LOG_TO_SD_CARD"] | false;
     
+    // Cloud upload settings
+    cloudClientId = doc["CLOUD_CLIENT_ID"] | "";
+    cloudTeamId = doc["CLOUD_TEAM_ID"] | "";
+    cloudBaseUrl = doc["CLOUD_BASE_URL"] | "https://sleephq.com";
+    cloudDeviceId = doc["CLOUD_DEVICE_ID"] | 0;
+    maxDays = doc["MAX_DAYS"] | 0;
+    uploadIntervalMinutes = doc["UPLOAD_INTERVAL_MINUTES"] | 0;
+    cloudInsecureTls = doc["CLOUD_INSECURE_TLS"] | false;
+    
+    // Validate MAX_DAYS
+    if (maxDays < 0) {
+        LOG_WARN("MAX_DAYS cannot be negative, setting to 0 (all days)");
+        maxDays = 0;
+    }
+    
+    // Validate UPLOAD_INTERVAL_MINUTES
+    if (uploadIntervalMinutes < 0) {
+        LOG_WARN("UPLOAD_INTERVAL_MINUTES cannot be negative, setting to 0 (daily schedule)");
+        uploadIntervalMinutes = 0;
+    }
+    
     // Power management settings with validation
     cpuSpeedMhz = doc["CPU_SPEED_MHZ"] | 240;
     if (cpuSpeedMhz < 80) {
@@ -441,6 +532,7 @@ bool Config::loadFromSD(fs::FS &sd) {
         LOG_DEBUG("Loading credentials from config.json (plain text mode)");
         wifiPassword = doc["WIFI_PASS"] | "";
         endpointPassword = doc["ENDPOINT_PASS"] | "";
+        cloudClientSecret = doc["CLOUD_CLIENT_SECRET"] | "";
         credentialsInFlash = false;
         
         LOG_DEBUG("Credentials loaded from config.json");
@@ -455,16 +547,19 @@ bool Config::loadFromSD(fs::FS &sd) {
             LOG("Falling back to plain text mode for this session");
             wifiPassword = doc["WIFI_PASS"] | "";
             endpointPassword = doc["ENDPOINT_PASS"] | "";
+            cloudClientSecret = doc["CLOUD_CLIENT_SECRET"] | "";
             credentialsInFlash = false;
             storePlainText = true;  // Force plain text mode due to Preferences failure
         } else {
             // Read credential values from config.json
             String configWifiPass = doc["WIFI_PASS"] | "";
             String configEndpointPass = doc["ENDPOINT_PASS"] | "";
+            String configCloudSecret = doc["CLOUD_CLIENT_SECRET"] | "";
             
             // Check if credentials are censored
             bool wifiCensored = isCensored(configWifiPass);
             bool endpointCensored = isCensored(configEndpointPass);
+            bool cloudSecretCensored = isCensored(configCloudSecret);
             
             // PRIORITY: Always use config file credentials if they are not censored
             // Handle each credential individually - users can update one or both
@@ -472,6 +567,9 @@ bool Config::loadFromSD(fs::FS &sd) {
             LOG_DEBUG("Processing credentials individually...");
             LOGF("WiFi password censored: %s", wifiCensored ? "YES" : "NO");
             LOGF("Endpoint password censored: %s", endpointCensored ? "YES" : "NO");
+            if (!configCloudSecret.isEmpty() || cloudSecretCensored) {
+                LOGF("Cloud client secret censored: %s", cloudSecretCensored ? "YES" : "NO");
+            }
             
             // Handle WiFi password
             if (!wifiCensored && !configWifiPass.isEmpty()) {
@@ -497,14 +595,26 @@ bool Config::loadFromSD(fs::FS &sd) {
                 endpointPassword = "";
             }
             
+            // Handle cloud client secret
+            if (!cloudSecretCensored && !configCloudSecret.isEmpty()) {
+                LOG("Using cloud client secret from config.json (user provided new credential)");
+                cloudClientSecret = configCloudSecret;
+            } else if (cloudSecretCensored) {
+                LOG("Loading cloud client secret from flash memory (censored in config)");
+                cloudClientSecret = loadCredential(PREFS_KEY_CLOUD_SECRET, "");
+            } else {
+                cloudClientSecret = "";
+            }
+            
             // Determine if we have any credentials in flash
-            credentialsInFlash = (wifiCensored || endpointCensored);
+            credentialsInFlash = (wifiCensored || endpointCensored || cloudSecretCensored);
             
             // Check if user provided any new credentials that need migration
             bool hasNewWifiCred = (!wifiCensored && !configWifiPass.isEmpty());
             bool hasNewEndpointCred = (!endpointCensored && !configEndpointPass.isEmpty());
+            bool hasNewCloudSecret = (!cloudSecretCensored && !configCloudSecret.isEmpty());
             
-            if (hasNewWifiCred || hasNewEndpointCred) {
+            if (hasNewWifiCred || hasNewEndpointCred || hasNewCloudSecret) {
                 // Attempt migration of new credentials using existing doc to avoid double allocation
                 if (migrateToSecureStorageWithDoc(sd, doc)) {
                     LOG("New credentials migrated to secure storage successfully");
@@ -512,7 +622,7 @@ bool Config::loadFromSD(fs::FS &sd) {
                 } else {
                     LOG_WARN("Migration failed - new credentials will remain in plain text");
                 }
-            } else if (wifiCensored && endpointCensored) {
+            } else if (wifiCensored || endpointCensored || cloudSecretCensored) {
                 LOG("All credentials loaded from secure flash memory");
                 LOG("Credential storage: SECURE (flash memory)");
             }
@@ -520,17 +630,57 @@ bool Config::loadFromSD(fs::FS &sd) {
     }
     
     // Step 5: Validate configuration
-    isValid = !wifiSSID.isEmpty() && !endpoint.isEmpty();
+    // WIFI_SSID is always required
+    // ENDPOINT is required for SMB; for CLOUD, CLOUD_CLIENT_ID is required instead
+    bool hasValidEndpoint = false;
+    if (hasSmbEndpoint()) {
+        hasValidEndpoint = !endpoint.isEmpty();
+        if (!hasValidEndpoint) {
+            LOG_ERROR("SMB endpoint configured but ENDPOINT is empty");
+        }
+    }
+    if (hasCloudEndpoint()) {
+        bool cloudValid = !cloudClientId.isEmpty();
+        if (!cloudValid) {
+            LOG_ERROR("CLOUD endpoint configured but CLOUD_CLIENT_ID is empty");
+        }
+        hasValidEndpoint = hasValidEndpoint || cloudValid;
+    }
+    if (!hasSmbEndpoint() && !hasCloudEndpoint()) {
+        // Legacy: require ENDPOINT for backward compatibility
+        hasValidEndpoint = !endpoint.isEmpty();
+    }
+    
+    isValid = !wifiSSID.isEmpty() && hasValidEndpoint;
     
     if (isValid) {
         LOG("========================================");
         LOG("Configuration loaded successfully");
+        LOGF("Endpoint type: %s", endpointType.c_str());
         LOG_DEBUGF("Storage mode: %s", storePlainText ? "PLAIN TEXT" : "SECURE");
         LOG_DEBUGF("Credentials in flash: %s", credentialsInFlash ? "YES" : "NO");
+        if (hasCloudEndpoint()) {
+            LOGF("Cloud base URL: %s", cloudBaseUrl.c_str());
+            LOGF("Cloud device ID: %d", cloudDeviceId);
+            if (!cloudTeamId.isEmpty()) {
+                LOGF("Cloud team ID: %s", cloudTeamId.c_str());
+            } else {
+                LOG("Cloud team ID: auto-discover");
+            }
+            if (cloudInsecureTls) {
+                LOG_WARN("Cloud TLS: INSECURE (certificate validation disabled)");
+            }
+        }
+        if (maxDays > 0) {
+            LOGF("MAX_DAYS: %d (only upload last %d days of data)", maxDays, maxDays);
+        }
+        if (uploadIntervalMinutes > 0) {
+            LOGF("Upload interval: every %d minutes", uploadIntervalMinutes);
+        }
         LOG("========================================");
     } else {
         LOG_ERROR("Configuration validation failed");
-        LOG("Missing required fields: WIFI_SSID or ENDPOINT");
+        LOG("Check WIFI_SSID and ENDPOINT/CLOUD_CLIENT_ID settings");
     }
     
     return isValid;
@@ -556,6 +706,29 @@ bool Config::valid() const { return isValid; }
 // Credential storage mode getters
 bool Config::isStoringPlainText() const { return storePlainText; }
 bool Config::areCredentialsInFlash() const { return credentialsInFlash; }
+
+// Cloud upload getters
+const String& Config::getCloudClientId() const { return cloudClientId; }
+const String& Config::getCloudClientSecret() const { return cloudClientSecret; }
+const String& Config::getCloudTeamId() const { return cloudTeamId; }
+const String& Config::getCloudBaseUrl() const { return cloudBaseUrl; }
+int Config::getCloudDeviceId() const { return cloudDeviceId; }
+int Config::getMaxDays() const { return maxDays; }
+int Config::getUploadIntervalMinutes() const { return uploadIntervalMinutes; }
+bool Config::getCloudInsecureTls() const { return cloudInsecureTls; }
+
+bool Config::hasCloudEndpoint() const {
+    String upper = endpointType;
+    upper.toUpperCase();
+    return (upper.indexOf("CLOUD") >= 0 || upper.indexOf("SLEEPHQ") >= 0);
+}
+
+bool Config::hasSmbEndpoint() const {
+    String upper = endpointType;
+    upper.toUpperCase();
+    return (upper.indexOf("SMB") >= 0);
+}
+
 // Power management getters
 int Config::getCpuSpeedMhz() const { return cpuSpeedMhz; }
 WifiTxPower Config::getWifiTxPower() const { return wifiTxPower; }

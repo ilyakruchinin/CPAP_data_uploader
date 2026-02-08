@@ -32,7 +32,7 @@ This document is for developers who want to build, modify, or contribute to the 
 
 - **SMBUploader** - Uploads files to SMB/CIFS shares (Windows, NAS, Samba)
 - **WebDAVUploader** - Uploads to WebDAV servers (TODO: placeholder)
-- **SleepHQUploader** - Direct upload to SleepHQ service (TODO: placeholder)
+- **SleepHQUploader** - Direct upload to SleepHQ cloud service via REST API with OAuth authentication
 
 ### Supporting Components
 
@@ -76,7 +76,7 @@ Power settings are applied automatically during startup and maintain full web se
 │   ├── TestWebServer.cpp      # Test web server (optional)
 │   ├── Logger.cpp             # Circular buffer logging
 │   ├── WebDAVUploader.cpp     # WebDAV upload (placeholder)
-│   └── SleepHQUploader.cpp    # SleepHQ upload (placeholder)
+│   └── SleepHQUploader.cpp    # SleepHQ cloud upload (OAuth, multipart, TLS)
 ├── include/                  # Header files
 │   ├── pins_config.h        # Pin definitions for SD WIFI PRO
 │   └── *.h                  # Component headers
@@ -199,6 +199,134 @@ The system supports configurable power management through `config.json`:
 - Helper methods convert between string config and enum values
 - WiFiManager provides methods for dynamic power mode switching
 
+### Cloud Upload (SleepHQ)
+
+The system supports direct upload to SleepHQ cloud service via REST API. This can be used standalone or alongside SMB upload for dual-backend operation.
+
+#### Enabling Cloud Upload
+
+1. **Build flag:** Uncomment `-DENABLE_SLEEPHQ_UPLOAD` in `platformio.ini`
+2. **Configuration:** Add cloud fields to `config.json` on the SD card
+
+#### Cloud-Only Configuration
+
+```json
+{
+  "WIFI_SSID": "MyNetwork",
+  "WIFI_PASS": "wifi_password",
+  "ENDPOINT_TYPE": "CLOUD",
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+  "UPLOAD_HOUR": 14,
+  "GMT_OFFSET_HOURS": -8
+}
+```
+
+#### Dual-Backend Configuration (SMB + Cloud)
+
+Upload to both a local NAS and SleepHQ simultaneously:
+
+```json
+{
+  "WIFI_SSID": "MyNetwork",
+  "WIFI_PASS": "wifi_password",
+  "ENDPOINT": "//192.168.1.100/share/cpap",
+  "ENDPOINT_TYPE": "SMB,CLOUD",
+  "ENDPOINT_USER": "smbuser",
+  "ENDPOINT_PASS": "smbpass",
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+  "UPLOAD_HOUR": 14,
+  "GMT_OFFSET_HOURS": -8
+}
+```
+
+#### Cloud Configuration Fields
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `CLOUD_CLIENT_ID` | Yes (for cloud) | — | SleepHQ OAuth client ID |
+| `CLOUD_CLIENT_SECRET` | Yes (for cloud) | — | SleepHQ OAuth client secret (auto-migrated to flash) |
+| `CLOUD_TEAM_ID` | No | auto-discovered | SleepHQ team ID (discovered via `/api/v1/me` if omitted) |
+| `CLOUD_DEVICE_ID` | No | `0` | SleepHQ device ID (sent with import creation) |
+| `CLOUD_BASE_URL` | No | `https://sleephq.com` | API base URL |
+| `CLOUD_INSECURE_TLS` | No | `false` | Skip TLS certificate validation (not recommended) |
+| `MAX_DAYS` | No | `0` (all) | Only upload DATALOG folders from the last N days |
+| `UPLOAD_INTERVAL_MINUTES` | No | `0` (daily) | Upload every N minutes instead of once daily |
+
+#### Upload Flow
+
+The cloud upload follows the SleepHQ import lifecycle:
+
+```
+Session Start
+  ├─ OAuth authenticate (client_id + client_secret)
+  ├─ Discover team_id (if not configured)
+  ├─ Create import session
+  │
+  ├─ For each file:
+  │   ├─ Compute content_hash = MD5(file_content + filename)
+  │   ├─ Multipart POST: name, path, content_hash, file
+  │   └─ Track bytes transferred
+  │
+  └─ Process import (triggers SleepHQ server-side processing)
+```
+
+#### TLS Security
+
+- **Default:** ISRG Root X1 (Let's Encrypt) root CA certificate is embedded in firmware for TLS validation of `sleephq.com`
+- **Insecure fallback:** Set `CLOUD_INSECURE_TLS: true` to disable certificate validation (useful for testing with proxies, not recommended for production)
+- The embedded certificate expires June 4, 2035
+
+#### Content Hash
+
+SleepHQ uses `content_hash` for server-side deduplication. The hash is computed as:
+
+```
+content_hash = MD5(file_content + filename)
+```
+
+Where `filename` is the bare filename without path (e.g., `BRP.edf`).
+
+#### Interval-Based Scheduling
+
+By default, uploads occur once daily at `UPLOAD_HOUR`. For more frequent uploads (e.g., when testing or when near-real-time data is desired):
+
+```json
+{
+  "UPLOAD_INTERVAL_MINUTES": 60
+}
+```
+
+This overrides the daily schedule and uploads every 60 minutes regardless of `UPLOAD_HOUR`.
+
+#### MAX_DAYS Filtering
+
+To limit uploads to recent data only (useful for initial setup with large historical data):
+
+```json
+{
+  "MAX_DAYS": 30
+}
+```
+
+This skips DATALOG folders older than 30 days. The filter compares the folder name (YYYYMMDD format) against the current date minus `MAX_DAYS`. Requires NTP time sync; if time is unavailable, all folders are processed. This setting affects **all backends** (SMB and Cloud).
+
+#### Credential Security
+
+`CLOUD_CLIENT_SECRET` follows the same secure storage pattern as other credentials:
+- Automatically migrated from `config.json` to ESP32 flash (NVS) on first boot
+- Replaced with `***STORED_IN_FLASH***` in `config.json`
+- Loaded from NVS on subsequent boots
+- Protected from SD card physical access
+
+#### Memory Impact
+
+Cloud upload adds approximately:
+- **Flash:** +110KB over base (with ISRG Root X1 CA cert)
+- **RAM:** +264 bytes static; upload buffers (4KB) allocated during file transfer
+- **Dual-backend (SMB + Cloud):** Flash ~40%, RAM ~14.9% of available
+
 ---
 
 ## Building
@@ -285,9 +413,11 @@ Edit `platformio.ini` to configure:
 build_flags = 
     -DENABLE_SMB_UPLOAD          ; Enable SMB/CIFS upload
     ; -DENABLE_WEBDAV_UPLOAD     ; Enable WebDAV (TODO)
-    ; -DENABLE_SLEEPHQ_UPLOAD    ; Enable SleepHQ (TODO)
+    ; -DENABLE_SLEEPHQ_UPLOAD    ; Enable Cloud/SleepHQ upload (HTTPS + OAuth)
     -DENABLE_TEST_WEBSERVER      ; Enable test web server
 ```
+
+Multiple upload backends can be enabled simultaneously. Use `ENDPOINT_TYPE` in `config.json` to select active backends at runtime (e.g., `"SMB"`, `"CLOUD"`, or `"SMB,CLOUD"`).
 
 **Logging:**
 ```ini
@@ -399,8 +529,9 @@ git push origin v0.3.0
 - [ ] SD WIFI PRO dev board connected with SD WIFI PRO inserted
 - [ ] `config.json` created on SD card
 - [ ] WiFi network available
-- [ ] SMB share accessible and writable
-- [ ] internet access (required for NTP server)
+- [ ] SMB share accessible and writable (if using SMB)
+- [ ] SleepHQ API credentials (if using Cloud upload)
+- [ ] Internet access (required for NTP server and Cloud upload)
 
 ### Test Procedure
 
@@ -418,10 +549,13 @@ git push origin v0.3.0
    - [ ] Config loaded successfully
    - [ ] WiFi connected
    - [ ] NTP time synchronized
-   - [ ] SMB connection established
+   - [ ] SMB connection established (if SMB enabled)
+   - [ ] Cloud OAuth authentication successful (if Cloud enabled)
+   - [ ] Team ID discovered or loaded from config (if Cloud enabled)
 
 4. **Test Upload**
-   - [ ] Files uploaded to SMB share
+   - [ ] Files uploaded to SMB share (if SMB enabled)
+   - [ ] Files uploaded to SleepHQ (if Cloud enabled)
    - [ ] `.upload_state.json` created on SD card
    - [ ] No errors in serial output
 
@@ -429,7 +563,15 @@ git push origin v0.3.0
    - [ ] Access `http://<device-ip>/`, you can get the device IP from the serial port after a reset.
    - [ ] Trigger manual upload
    - [ ] View logs
-   - [ ] Check status
+   - [ ] Check status — verify `cloud_configured` field
+   - [ ] Check config — verify cloud fields (secret should show `***STORED_IN_FLASH***`)
+
+6. **Test Cloud Upload** (if Cloud enabled)
+   - [ ] Verify import created in serial log (`[SleepHQ] Import created: <id>`)
+   - [ ] Verify files uploaded with content hash
+   - [ ] Verify import processed (`[SleepHQ] Import <id> submitted for processing`)
+   - [ ] Check SleepHQ web interface for imported data
+   - [ ] Verify `CLOUD_CLIENT_SECRET` censored in `config.json` after first boot
 
 ### Common Issues
 
@@ -525,6 +667,7 @@ The system uses the ESP32 Preferences library (a high-level wrapper around NVS) 
 **Stored Credentials:**
 - `wifi_pass` - WiFi password
 - `endpoint_pass` - Endpoint (SMB/WebDAV) password
+- `cloud_secret` - Cloud (SleepHQ) OAuth client secret
 
 **Key Methods:**
 
@@ -726,6 +869,24 @@ CPAP machines need regular SD card access. Time budgeting ensures:
 - Faster compilation
 - Cleaner code separation
 
+### Why Embedded Root CA Certificate?
+
+The SleepHQ cloud uploader embeds the ISRG Root X1 (Let's Encrypt) root CA certificate directly in firmware:
+- Avoids dependency on external certificate stores
+- ESP32 has no system CA bundle by default
+- ISRG Root X1 covers `sleephq.com` and most modern HTTPS sites
+- Certificate expires 2035 — well beyond expected device lifetime
+- Optional `CLOUD_INSECURE_TLS` fallback for development/testing
+
+### Why Import Lifecycle?
+
+SleepHQ requires an import session workflow (create → upload files → process):
+- Server-side deduplication via `content_hash` per file
+- Batch processing after all files are uploaded
+- `content_hash = MD5(file_content + filename)` matches SleepHQ's expected format
+- Import is created at session start and processed at session end
+- If the session ends abnormally, partial uploads are still valid on the server
+
 ---
 
 ## Performance Considerations
@@ -734,7 +895,9 @@ CPAP machines need regular SD card access. Time budgeting ensures:
 
 - Base firmware: ~800KB
 - SMB backend: +220-270KB
+- Cloud/SleepHQ backend: +110KB (includes ISRG Root X1 CA cert)
 - WebDAV backend: +50-80KB (estimated)
+- Dual-backend (SMB + Cloud): ~1,258KB total
 - **Standard build**: 3MB available (huge_app partition)
 - **OTA build**: 1.5MB available per partition
 
