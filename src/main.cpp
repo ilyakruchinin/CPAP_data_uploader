@@ -490,8 +490,12 @@ void loop() {
             sdManager.releaseControl();
             LOG("SD card control released");
             
+            // Update interval timer after any forced upload attempt
+            lastIntervalUploadTime = millis();
+            
             if (uploadSuccess) {
                 LOG("Forced upload completed successfully");
+                budgetExhaustedRetry = false;  // Clear any pending retry from previous sessions
             } else {
                 LOG("Forced upload incomplete (budget exhausted or errors)");
                 
@@ -639,6 +643,7 @@ void loop() {
     if (uploadSuccess) {
         LOG("=== Upload Session Completed Successfully ===");
         LOG_DEBUG("All pending files have been uploaded");
+        budgetExhaustedRetry = false;  // Clear retry state on success
         if (config.getUploadIntervalMinutes() > 0) {
             LOGF("Next upload in %d minutes (interval mode)", config.getUploadIntervalMinutes());
         } else {
@@ -646,7 +651,7 @@ void loop() {
         }
         // The ScheduleManager has already marked upload as completed
         // No need to set retry timer - will wait for next scheduled time
-    } else {
+    } else if (uploader && uploader->hasIncompleteFolders()) {
         LOG("=== Upload Session Incomplete ===");
         LOG("Session ended due to time budget exhaustion or errors");
         
