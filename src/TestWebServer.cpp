@@ -15,6 +15,7 @@ volatile bool g_scanInProgress = false;
 // External retry timing variables (defined in main.cpp)
 extern unsigned long nextUploadRetryTime;
 extern bool budgetExhaustedRetry;
+extern unsigned long lastIntervalUploadTime;
 
 // Constructor
 TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
@@ -172,7 +173,20 @@ void TestWebServer::handleRoot() {
     
     // Upload status
     html += "<h2>Upload Status</h2>";
-    if (scheduleManager) {
+    if (config && config->getUploadIntervalMinutes() > 0) {
+        unsigned long intervalMs = (unsigned long)config->getUploadIntervalMinutes() * 60000UL;
+        unsigned long elapsed = millis() - lastIntervalUploadTime;
+        unsigned long secondsUntilNext = (lastIntervalUploadTime == 0 || elapsed >= intervalMs) ? 0 : (intervalMs - elapsed) / 1000;
+        html += "<div class='info'><span class='label'>Next Upload In:</span><span class='value'>";
+        if (secondsUntilNext == 0) {
+            html += "Upload window active";
+        } else {
+            html += String(secondsUntilNext / 60) + " minutes, ";
+            html += String(secondsUntilNext % 60) + " seconds";
+        }
+        html += " (every " + String(config->getUploadIntervalMinutes()) + " min)";
+        html += "</span></div>";
+    } else if (scheduleManager) {
         unsigned long secondsUntilNext = scheduleManager->getSecondsUntilNextUpload();
         html += "<div class='info'><span class='label'>Next Upload In:</span><span class='value'>";
         if (secondsUntilNext == 0) {
@@ -421,7 +435,14 @@ void TestWebServer::handleStatus() {
         json += "\"wifi_connected\":false,";
     }
     
-    if (scheduleManager) {
+    if (config && config->getUploadIntervalMinutes() > 0) {
+        unsigned long intervalMs = (unsigned long)config->getUploadIntervalMinutes() * 60000UL;
+        unsigned long elapsed = millis() - lastIntervalUploadTime;
+        unsigned long secondsUntilNext = (lastIntervalUploadTime == 0 || elapsed >= intervalMs) ? 0 : (intervalMs - elapsed) / 1000;
+        json += "\"next_upload_seconds\":" + String(secondsUntilNext) + ",";
+        json += "\"upload_interval_minutes\":" + String(config->getUploadIntervalMinutes()) + ",";
+        if (scheduleManager) json += "\"time_synced\":" + String(scheduleManager->isTimeSynced() ? "true" : "false") + ",";
+    } else if (scheduleManager) {
         json += "\"next_upload_seconds\":" + String(scheduleManager->getSecondsUntilNextUpload()) + ",";
         json += "\"time_synced\":" + String(scheduleManager->isTimeSynced() ? "true" : "false") + ",";
     }

@@ -7,41 +7,23 @@
 #include <ArduinoJson.h>
 #include <esp32/rom/md5_hash.h>
 
-// ISRG Root X1 - Let's Encrypt root CA certificate (expires June 4, 2035)
-// Used for TLS validation of sleephq.com
-static const char ISRG_ROOT_X1_CA[] PROGMEM = R"EOF(
------BEGIN CERTIFICATE-----
-MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
-TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
-cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
-WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
-ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
-MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
-h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
-0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6
-UA5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+s
-WT8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qy
-HB5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+U
-CvdQNTaeKzWY6vSnwaT8dAMDXB9q6TIG06ruPBWfNJlzAWM2CkhPeUG3prjoBUGz
-7jNHbLaM2M7NTBQW5omEAyRxMD0M2LW0qPPvs1VB+jxOjc2TMYz1Mlq+LZHi/i4
-J+bFSGpE/qJlDKOCqlzExvdIg3raAEAZidMJKyYBlhCKdliAr7EvhNlDETPxQzLc
-7JDxjxREBMGIR4gqFOBBNNjHkCvQJdTMJUByOi7F9KJRjmnHJWMjJJ7C5S00bkpc
-GfaR5ONQKGAl2ipPNNj5UARqNM0WnUyMl52JElbk/y3y0DRZM5M4Kna3gJN/Jjzf
-o6GduABo0CBRuRSIul2vpSd/AgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
-HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
-hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
-ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
-3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
-NFtY2PwByVS5uCbMiogZiUvGqLaQMikz5GHMlOZPYxKj+JLkBNkZPRlRvSHC7sMc
-dlkOF12k2bA1AUf97iGMQlGn/O/E/+61bRNm3geuLSPHFb4NB/7xMqsM3kOF0k+b
-SGuRMGEVB+1RU5cOlkPH5OJFl2sGO3VTEg9CfMHORSJMhIZcgORbNuKaf0cJ6Jd1
-NP+AxtdTMjY2qJmD7V18Kdlg8dODsgSGUf0FsmS3O8n+KHaGEp5V4cW3Mq4SxDP4
-BPCqXzn3v1oDaD0VPKqKAESno09hBjp6K78pUMDJCsRLWC8q8mYhBSVG8HRO0jse
-mOWUyULQTYIX1FiC3zAdPB1nEjVMi/iy0ZnmmfBkaWBmFyNNcOXq6Cz8XNnHM5Mj
-3CfSXftiUUbRVR5PJjEt5OVj/3wXSVI4cpiJQb1+q4P0H94lKBLJqJP/6luUfRa7
-bnivJjC53qFGBqXlbzBJBa3WBzl9Z3Jdso2u/yRV
------END CERTIFICATE-----
-)EOF";
+// GTS Root R4 - Google Trust Services root CA certificate (expires June 22, 2036)
+// Used for TLS validation of sleephq.com (which uses Google Trust Services)
+// If sleephq.com changes CA provider, set CLOUD_INSECURE_TLS=true as fallback
+static const char* GTS_ROOT_R4_CA = \
+    "-----BEGIN CERTIFICATE-----\n" \
+    "MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD\n" \
+    "VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG\n" \
+    "A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw\n" \
+    "WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz\n" \
+    "IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi\n" \
+    "AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi\n" \
+    "QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR\n" \
+    "HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW\n" \
+    "BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D\n" \
+    "9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8\n" \
+    "p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n" \
+    "-----END CERTIFICATE-----\n";
 
 // Upload buffer size for streaming files
 #define CLOUD_UPLOAD_BUFFER_SIZE 4096
@@ -71,8 +53,8 @@ void SleepHQUploader::setupTLS() {
         LOG_WARN("[SleepHQ] TLS certificate validation DISABLED (insecure mode)");
         tlsClient->setInsecure();
     } else {
-        LOG_DEBUG("[SleepHQ] Using ISRG Root X1 CA certificate for TLS validation");
-        tlsClient->setCACert(ISRG_ROOT_X1_CA);
+        LOG_DEBUG("[SleepHQ] Using GTS Root R4 CA certificate for TLS validation");
+        tlsClient->setCACert(GTS_ROOT_R4_CA);
     }
     
     // Set reasonable timeout for ESP32
@@ -538,28 +520,19 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
     // For ESP32 HTTPClient, we need to build the complete payload
     // For files up to ~48KB, assemble in memory; larger files need streaming
     if (fileSize <= 49152) {  // 48KB limit for in-memory assembly
-        uint8_t* fileBuffer = (uint8_t*)malloc(fileSize);
-        if (!fileBuffer) {
-            LOG_ERROR("[SleepHQ] Failed to allocate file buffer");
-            file.close();
-            return false;
-        }
-        file.read(fileBuffer, fileSize);
-        file.close();
-        
         size_t totalBufSize = partBefore.length() + fileSize + partAfter.length();
         uint8_t* combinedBuf = (uint8_t*)malloc(totalBufSize);
         if (!combinedBuf) {
-            free(fileBuffer);
             LOG_ERROR("[SleepHQ] Failed to allocate combined buffer");
+            file.close();
             return false;
         }
         
+        // Build payload in single buffer: headers + file content + trailer
         memcpy(combinedBuf, partBefore.c_str(), partBefore.length());
-        memcpy(combinedBuf + partBefore.length(), fileBuffer, fileSize);
+        file.read(combinedBuf + partBefore.length(), fileSize);
+        file.close();
         memcpy(combinedBuf + partBefore.length() + fileSize, partAfter.c_str(), partAfter.length());
-        
-        free(fileBuffer);
         
         HTTPClient http;
         http.begin(*tlsClient, url);

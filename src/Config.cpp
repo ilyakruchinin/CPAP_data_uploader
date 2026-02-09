@@ -12,7 +12,7 @@ const size_t Config::JSON_FILE_MAX_SIZE;
 
 Config::Config() : 
     uploadHour(12),  // Default: noon
-    sessionDurationSeconds(30),  // Default: 30 seconds
+    sessionDurationSeconds(300),  // Default: 300 seconds (5 minutes)
     maxRetryAttempts(3),  // Default: 3 attempts
     gmtOffsetHours(0),  // Default: UTC
     bootDelaySeconds(30),  // Default: 30 seconds
@@ -481,7 +481,7 @@ bool Config::loadFromSD(fs::FS &sd) {
     
     // Parse new configuration fields with defaults
     uploadHour = doc["UPLOAD_HOUR"] | 12;
-    sessionDurationSeconds = doc["SESSION_DURATION_SECONDS"] | 30;
+    sessionDurationSeconds = doc["SESSION_DURATION_SECONDS"] | 300;
     maxRetryAttempts = doc["MAX_RETRY_ATTEMPTS"] | 3;
     gmtOffsetHours = doc["GMT_OFFSET_HOURS"] | 0;
     bootDelaySeconds = doc["BOOT_DELAY_SECONDS"] | 30;

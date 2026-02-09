@@ -86,6 +86,7 @@ public:
     UploadStateManager* getStateManager() { return stateManager; }
     TimeBudgetManager* getBudgetManager() { return budgetManager; }
     ScheduleManager* getScheduleManager() { return scheduleManager; }
+    bool hasIncompleteFolders() { return stateManager && stateManager->getIncompleteFoldersCount() > 0; }
     
 #ifdef ENABLE_TEST_WEBSERVER
     // Set web server for handling requests during uploads
