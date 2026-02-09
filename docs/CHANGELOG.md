@@ -99,3 +99,39 @@ Fixes two production issues observed during live CPAP data uploads to SleepHQ.
 - **`test/mocks/ArduinoJson.h`** — Added `containsKey()` method to `JsonDocumentBase`. Required by `Config::censorConfigFileWithDoc()`.
 - **`test/mocks/MockPreferences.h`** — Replaced static class member `globalStorage` with function-local static (Meyer's singleton) to fix static destruction order crash (SIGQUIT) on process exit.
 - **`test/test_config/test_config.cpp`** — Fixed `test_config_load_with_defaults` expected `SESSION_DURATION_SECONDS` from 30 to 300 (matching actual default). Updated `test_config_sleephq_endpoint` to include required `CLOUD_CLIENT_ID` for cloud endpoint validation.
+
+---
+
+## Bug Fix Batch — Code Review Round 2 (2026-02-10)
+
+Fixes found during second code review pass of the SleepHQ cloud upload implementation.
+
+### Fix 10 (HIGH) — Budget-exhaustion retry silently skips upload
+- **File:** `src/main.cpp`
+- **Issue:** `budgetExhaustedRetry` was cleared to `false` before `forceThisUpload` was computed. Since `forceThisUpload` depended on `budgetExhaustedRetry`, it was always `false` for budget retries. This caused `uploadNewFiles()` to call `shouldUpload()` internally, which returns `false` after `markUploadCompleted()` — silently skipping the retry.
+- **Fix:** Introduced `isBudgetRetry` local variable to capture the retry state before clearing the flag.
+
+### Fix 11 (HIGH) — Cloud import failure cascades into aborting SMB uploads
+- **Files:** `include/FileUploader.h`, `src/FileUploader.cpp`
+- **Issue:** When `ensureCloudImport()` failed (e.g., network timeout, auth error), the SleepHQ `upload()` call would still execute with no active import, fail, set `uploadSuccess = false`, and abort the entire folder — including SMB uploads that would have succeeded.
+- **Fix:** Added `cloudImportFailed` flag. When `ensureCloudImport()` fails, the flag is set and the SleepHQ backend is skipped for the rest of the session, allowing SMB/WebDAV to proceed independently.
+
+### Fix 12 (MEDIUM) — WebDAV not updated for comma-separated ENDPOINT_TYPE
+- **Files:** `include/Config.h`, `src/Config.cpp`, `src/FileUploader.cpp`
+- **Issue:** WebDAV used exact string match (`== "WEBDAV"`) while SMB and Cloud used `indexOf`-based helpers supporting comma-separated values. Setting `ENDPOINT_TYPE=WEBDAV,CLOUD` would activate Cloud but not WebDAV.
+- **Fix:** Added `hasWebdavEndpoint()` helper (matching `hasSmbEndpoint()`/`hasCloudEndpoint()` pattern) and updated all WebDAV checks in `FileUploader.cpp`. Added WebDAV validation in `loadFromSD()`.
+
+### Fix 13 (MEDIUM) — Unchecked file.read() in in-memory upload path
+- **File:** `src/SleepHQUploader.cpp`
+- **Issue:** `file.read()` return value was ignored in the in-memory multipart upload path (files ≤48KB). A short read (SD error, file truncation between hash and upload) would send uninitialized buffer data, causing a content-hash mismatch on the SleepHQ server.
+- **Fix:** Check `bytesRead != fileSize` and return `false` with error log if short.
+
+### Fix 14 (MEDIUM) — Fragile URL parser for streaming upload
+- **File:** `src/SleepHQUploader.cpp`
+- **Issue:** The streaming upload URL parser found the port separator (`:`) before stripping the path, so a colon in a URL path could be misinterpreted as a port separator.
+- **Fix:** Reordered to strip path first, then search for port separator.
+
+### Improvement — Cache endpoint type flags to avoid per-call string allocation
+- **Files:** `include/Config.h`, `src/Config.cpp`
+- **Issue:** `hasCloudEndpoint()`, `hasSmbEndpoint()`, and `hasWebdavEndpoint()` each created a temporary `String`, converted to uppercase, and searched it — on every call. These are called in hot upload loops on a memory-constrained ESP32.
+- **Fix:** Cached the parsed booleans (`_hasSmbEndpoint`, `_hasCloudEndpoint`, `_hasWebdavEndpoint`) during `loadFromSD()`. Getters now return the cached values directly.

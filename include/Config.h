@@ -58,6 +58,11 @@ private:
     int recentFolderDays;
     bool cloudInsecureTls;
     
+    // Cached endpoint type flags (computed once during loadFromSD)
+    bool _hasSmbEndpoint;
+    bool _hasCloudEndpoint;
+    bool _hasWebdavEndpoint;
+    
     // Power management settings
     int cpuSpeedMhz;
     WifiTxPower wifiTxPower;
@@ -131,6 +136,7 @@ public:
     bool getCloudInsecureTls() const;
     bool hasCloudEndpoint() const;
     bool hasSmbEndpoint() const;
+    bool hasWebdavEndpoint() const;
     
     // Power management getters
     int getCpuSpeedMhz() const;

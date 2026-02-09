@@ -274,9 +274,9 @@ Session Start
 
 #### TLS Security
 
-- **Default:** ISRG Root X1 (Let's Encrypt) root CA certificate is embedded in firmware for TLS validation of `sleephq.com`
+- **Default:** GTS Root R4 (Google Trust Services) root CA certificate is embedded in firmware for TLS validation of `sleephq.com`
 - **Insecure fallback:** Set `CLOUD_INSECURE_TLS: true` to disable certificate validation (useful for testing with proxies, not recommended for production)
-- The embedded certificate expires June 4, 2035
+- The embedded certificate expires June 22, 2036
 
 #### Content Hash
 
@@ -323,7 +323,7 @@ This skips DATALOG folders older than 30 days. The filter compares the folder na
 #### Memory Impact
 
 Cloud upload adds approximately:
-- **Flash:** +110KB over base (with ISRG Root X1 CA cert)
+- **Flash:** +110KB over base (with GTS Root R4 CA cert)
 - **RAM:** +264 bytes static; upload buffers (4KB) allocated during file transfer
 - **Dual-backend (SMB + Cloud):** Flash ~40%, RAM ~14.9% of available
 
@@ -475,10 +475,10 @@ pio test -e native -f test_schedule_manager
 
 ### Test Coverage
 
-Current test results: **154 test cases, all passing**
+Current test results: **175 test cases, all passing**
 
 - `test_time_budget_manager`: 25 tests - Time budget and rate calculation
-- `test_config`: 33 tests - Configuration parsing and validation  
+- `test_config`: 41 tests - Configuration parsing, validation, and cloud options
 - `test_credential_migration`: 6 tests - Secure credential storage
 - `test_sd_scan_failure`: 7 tests - SD card error handling
 - `test_webserver`: 9 tests - Web server endpoints
@@ -486,6 +486,7 @@ Current test results: **154 test cases, all passing**
 - `test_upload_state_manager`: 42 tests - Upload state tracking
 - `test_schedule_manager`: 22 tests - Scheduling and NTP
 - `test_fileuploader_webserver`: 1 test - Integration testing
+- `test_logger_circular_buffer`: 13 tests - Circular buffer logging
 
 ### Hardware Testing
 
@@ -871,12 +872,12 @@ CPAP machines need regular SD card access. Time budgeting ensures:
 
 ### Why Embedded Root CA Certificate?
 
-The SleepHQ cloud uploader embeds the ISRG Root X1 (Let's Encrypt) root CA certificate directly in firmware:
+The SleepHQ cloud uploader embeds the GTS Root R4 (Google Trust Services) root CA certificate directly in firmware:
 - Avoids dependency on external certificate stores
 - ESP32 has no system CA bundle by default
-- ISRG Root X1 covers `sleephq.com` and most modern HTTPS sites
-- Certificate expires 2035 — well beyond expected device lifetime
-- Optional `CLOUD_INSECURE_TLS` fallback for development/testing
+- GTS Root R4 covers `sleephq.com` (which uses Google Trust Services)
+- Certificate expires 2036 — well beyond expected device lifetime
+- Optional `CLOUD_INSECURE_TLS` fallback if SleepHQ changes CA provider
 
 ### Why Import Lifecycle?
 
@@ -919,10 +920,13 @@ SleepHQ requires an import session workflow (create → upload files → process
 
 ## References
 
+- [CONFIGURATION.md](CONFIGURATION.md) - Complete configuration reference
+- [UPLOAD_FLOW.md](UPLOAD_FLOW.md) - Upload flow diagrams
 - [BUILD_TROUBLESHOOTING.md](BUILD_TROUBLESHOOTING.md) - Build issues
 - [FEATURE_FLAGS.md](FEATURE_FLAGS.md) - Backend selection
 - [LIBSMB2_INTEGRATION.md](LIBSMB2_INTEGRATION.md) - SMB integration details
 - [PlatformIO Docs](https://docs.platformio.org/)
 - [ESP32 Arduino Core](https://github.com/espressif/arduino-esp32)
 - [libsmb2 GitHub](https://github.com/sahlberg/libsmb2)
+- [SleepHQ API Docs](https://sleephq.com/api-docs/index.html)
 

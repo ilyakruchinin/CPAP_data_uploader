@@ -73,6 +73,7 @@ private:
     // Helper: lazily create cloud import session on first actual upload
     bool ensureCloudImport();
     bool cloudImportCreated;
+    bool cloudImportFailed;  // True if ensureCloudImport() failed; skip cloud backend for session
     
     // Session management
     bool startUploadSession(fs::FS &sd);

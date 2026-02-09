@@ -29,6 +29,10 @@ Config::Config() :
     recentFolderDays(2),  // Default: re-check today + yesterday
     cloudInsecureTls(false),  // Default: use root CA validation
     
+    _hasSmbEndpoint(false),
+    _hasCloudEndpoint(false),
+    _hasWebdavEndpoint(false),
+    
     storePlainText(false),  // Default: secure mode
     credentialsInFlash(false),  // Will be set during loadFromSD
     
@@ -640,12 +644,29 @@ bool Config::loadFromSD(fs::FS &sd) {
     // Step 5: Validate configuration
     // WIFI_SSID is always required
     // ENDPOINT is required for SMB; for CLOUD, CLOUD_CLIENT_ID is required instead
+    
+    // Compute cached endpoint type flags from the (possibly comma-separated) endpointType string
+    {
+        String upper = endpointType;
+        upper.toUpperCase();
+        _hasSmbEndpoint = (upper.indexOf("SMB") >= 0);
+        _hasCloudEndpoint = (upper.indexOf("CLOUD") >= 0 || upper.indexOf("SLEEPHQ") >= 0);
+        _hasWebdavEndpoint = (upper.indexOf("WEBDAV") >= 0);
+    }
+    
     bool hasValidEndpoint = false;
     if (hasSmbEndpoint()) {
         hasValidEndpoint = !endpoint.isEmpty();
         if (!hasValidEndpoint) {
             LOG_ERROR("SMB endpoint configured but ENDPOINT is empty");
         }
+    }
+    if (hasWebdavEndpoint()) {
+        bool webdavValid = !endpoint.isEmpty();
+        if (!webdavValid) {
+            LOG_ERROR("WEBDAV endpoint configured but ENDPOINT is empty");
+        }
+        hasValidEndpoint = hasValidEndpoint || webdavValid;
     }
     if (hasCloudEndpoint()) {
         bool cloudValid = !cloudClientId.isEmpty();
@@ -654,14 +675,15 @@ bool Config::loadFromSD(fs::FS &sd) {
         }
         hasValidEndpoint = hasValidEndpoint || cloudValid;
     }
-    if (!hasSmbEndpoint() && !hasCloudEndpoint()) {
+    if (!hasSmbEndpoint() && !hasCloudEndpoint() && !hasWebdavEndpoint()) {
         if (endpointType.isEmpty() && !endpoint.isEmpty()) {
             // Legacy: default to SMB when ENDPOINT is set but ENDPOINT_TYPE is empty
             LOG_WARN("ENDPOINT_TYPE not set, defaulting to SMB for backward compatibility");
             endpointType = "SMB";
+            _hasSmbEndpoint = true;
             hasValidEndpoint = true;
         } else if (!endpointType.isEmpty()) {
-            // Non-empty type that isn't SMB or CLOUD (e.g. WEBDAV, SLEEPHQ legacy)
+            // Non-empty type that isn't SMB, CLOUD, or WEBDAV
             hasValidEndpoint = !endpoint.isEmpty();
         }
     }
@@ -736,17 +758,9 @@ int Config::getUploadIntervalMinutes() const { return uploadIntervalMinutes; }
 int Config::getRecentFolderDays() const { return recentFolderDays; }
 bool Config::getCloudInsecureTls() const { return cloudInsecureTls; }
 
-bool Config::hasCloudEndpoint() const {
-    String upper = endpointType;
-    upper.toUpperCase();
-    return (upper.indexOf("CLOUD") >= 0 || upper.indexOf("SLEEPHQ") >= 0);
-}
-
-bool Config::hasSmbEndpoint() const {
-    String upper = endpointType;
-    upper.toUpperCase();
-    return (upper.indexOf("SMB") >= 0);
-}
+bool Config::hasCloudEndpoint() const { return _hasCloudEndpoint; }
+bool Config::hasSmbEndpoint() const { return _hasSmbEndpoint; }
+bool Config::hasWebdavEndpoint() const { return _hasWebdavEndpoint; }
 
 // Power management getters
 int Config::getCpuSpeedMhz() const { return cpuSpeedMhz; }

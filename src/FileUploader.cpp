@@ -17,7 +17,8 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
       webServer(nullptr),
 #endif
       lastSdReleaseTime(0),
-      cloudImportCreated(false)
+      cloudImportCreated(false),
+      cloudImportFailed(false)
 #ifdef ENABLE_SMB_UPLOAD
       , smbUploader(nullptr)
 #endif
@@ -91,7 +92,7 @@ bool FileUploader::begin(fs::FS &sd) {
     }
 #endif
 #ifdef ENABLE_WEBDAV_UPLOAD
-    if (endpointType == "WEBDAV") {
+    if (config->hasWebdavEndpoint()) {
         webdavUploader = new WebDAVUploader(
             config->getEndpoint(),
             config->getEndpointUser(),
@@ -591,6 +592,7 @@ bool FileUploader::isRecentFolder(const String& folderName) const {
 bool FileUploader::ensureCloudImport() {
 #ifdef ENABLE_SLEEPHQ_UPLOAD
     if (cloudImportCreated) return true;
+    if (cloudImportFailed) return false;  // Already failed this session, don't retry
     if (!sleephqUploader || !config->hasCloudEndpoint()) return true;  // No cloud = OK
     
     if (!sleephqUploader->isConnected()) {
@@ -598,6 +600,7 @@ bool FileUploader::ensureCloudImport() {
         if (!sleephqUploader->begin()) {
             LOG_ERROR("[FileUploader] Failed to initialize cloud uploader");
             LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
+            cloudImportFailed = true;
             return false;
         }
     }
@@ -605,6 +608,7 @@ bool FileUploader::ensureCloudImport() {
         if (!sleephqUploader->createImport()) {
             LOG_ERROR("[FileUploader] Failed to create cloud import");
             LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
+            cloudImportFailed = true;
             return false;
         }
         cloudImportCreated = true;
@@ -643,6 +647,7 @@ bool FileUploader::startUploadSession(fs::FS &sd) {
     // Cloud import is created lazily via ensureCloudImport() on first actual upload
     // This avoids creating empty imports when no files have changed
     cloudImportCreated = false;
+    cloudImportFailed = false;
     
     return true;
 }
@@ -903,7 +908,7 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         }
 #endif
 #ifdef ENABLE_WEBDAV_UPLOAD
-        if (webdavUploader && config->getEndpointType() == "WEBDAV") {
+        if (webdavUploader && config->hasWebdavEndpoint()) {
             anyBackendConfigured = true;
             if (!webdavUploader->isConnected()) {
                 LOG_DEBUG("[FileUploader] WebDAV not connected, attempting to connect...");
@@ -924,7 +929,7 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         }
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-        if (sleephqUploader && config->hasCloudEndpoint()) {
+        if (sleephqUploader && config->hasCloudEndpoint() && !cloudImportFailed) {
             anyBackendConfigured = true;
             if (!sleephqUploader->isConnected()) {
                 LOG_DEBUG("[FileUploader] Cloud not connected, attempting to connect...");
@@ -1077,7 +1082,7 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     }
 #endif
 #ifdef ENABLE_WEBDAV_UPLOAD
-    if (webdavUploader && config->getEndpointType() == "WEBDAV") {
+    if (webdavUploader && config->hasWebdavEndpoint()) {
         anyBackendConfigured = true;
         if (!webdavUploader->isConnected()) {
             if (!webdavUploader->begin()) {
@@ -1094,7 +1099,7 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     }
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (sleephqUploader && config->hasCloudEndpoint()) {
+    if (sleephqUploader && config->hasCloudEndpoint() && !cloudImportFailed) {
         anyBackendConfigured = true;
         if (!sleephqUploader->isConnected()) {
             LOG_DEBUG("[FileUploader] Cloud not connected, attempting to connect...");

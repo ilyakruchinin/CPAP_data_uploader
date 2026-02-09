@@ -1,0 +1,22 @@
+{
+  "_comment": "=== SleepHQ Cloud Upload Only ===",
+  "_comment_2": "Uploads CPAP data directly to SleepHQ for analysis",
+
+  "WIFI_SSID": "YourNetworkName",
+  "WIFI_PASS": "YourNetworkPassword",
+
+  "ENDPOINT_TYPE": "CLOUD",
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+
+  "UPLOAD_HOUR": 14,
+  "GMT_OFFSET_HOURS": -8,
+
+  "_comment_optional": "=== Optional Cloud Settings ===",
+  "_comment_interval": "Upload every 60 minutes instead of once daily (0 = daily at UPLOAD_HOUR)",
+  "UPLOAD_INTERVAL_MINUTES": 0,
+  "_comment_max_days": "Only upload the last N days of data (0 = all data)",
+  "MAX_DAYS": 0,
+  "_comment_recent": "Re-check completed folders within the last N days for changed files",
+  "RECENT_FOLDER_DAYS": 2
+}
