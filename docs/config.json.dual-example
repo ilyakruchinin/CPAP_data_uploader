@@ -1,0 +1,28 @@
+{
+  "_comment": "=== Dual Backend: SMB + SleepHQ Cloud ===",
+  "_comment_2": "Uploads to both a local NAS and SleepHQ simultaneously",
+
+  "WIFI_SSID": "YourNetworkName",
+  "WIFI_PASS": "YourNetworkPassword",
+
+  "_comment_smb": "=== SMB/NAS Settings ===",
+  "ENDPOINT": "//192.168.1.100/cpap_backups",
+  "ENDPOINT_TYPE": "SMB,CLOUD",
+  "ENDPOINT_USER": "nasuser",
+  "ENDPOINT_PASS": "naspassword",
+
+  "_comment_cloud": "=== SleepHQ Cloud Settings ===",
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+
+  "_comment_schedule": "=== Upload Schedule ===",
+  "UPLOAD_HOUR": 14,
+  "GMT_OFFSET_HOURS": -8,
+  "UPLOAD_INTERVAL_MINUTES": 60,
+  "MAX_DAYS": 30,
+  "RECENT_FOLDER_DAYS": 2,
+
+  "_comment_session": "=== Upload Session ===",
+  "SESSION_DURATION_SECONDS": 300,
+  "MAX_RETRY_ATTEMPTS": 3
+}

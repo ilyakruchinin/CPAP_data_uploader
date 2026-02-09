@@ -39,7 +39,7 @@ Enables SMB/CIFS upload support for Windows shares, NAS devices, and Samba serve
 
 Enables WebDAV upload support for Nextcloud, ownCloud, and standard WebDAV servers.
 
-**Status**: TODO - Placeholder implementation only
+**Status**: Placeholder implementation (upload interface defined, backend needs completion)
 
 **Binary Size Impact**: +50-80KB (estimated, uses HTTPClient)
 
@@ -55,21 +55,34 @@ Enables WebDAV upload support for Nextcloud, ownCloud, and standard WebDAV serve
 
 ### ENABLE_SLEEPHQ_UPLOAD
 
-Enables direct upload to SleepHQ cloud service for CPAP data analysis.
+Enables direct upload to SleepHQ cloud service for CPAP data analysis. Implements the full SleepHQ import lifecycle: OAuth authentication, team discovery, import creation, multipart file upload with content hashing, and import processing.
 
-**Status**: TODO - Placeholder implementation only
+**Status**: Fully implemented and tested
 
-**Binary Size Impact**: +40-60KB (estimated, uses HTTPClient + JSON)
+**Binary Size Impact**: +110KB (includes HTTPClient, JSON, TLS with embedded GTS Root R4 CA certificate)
 
-**Usage in config.json**:
+**Usage in config.json** (cloud only):
 ```json
 {
-  "ENDPOINT_TYPE": "SLEEPHQ",
-  "ENDPOINT": "https://api.sleephq.com/v1/upload",
-  "ENDPOINT_USER": "user_id",
-  "ENDPOINT_PASS": "api_key"
+  "ENDPOINT_TYPE": "CLOUD",
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret"
 }
 ```
+
+**Usage in config.json** (dual backend — SMB + Cloud):
+```json
+{
+  "ENDPOINT_TYPE": "SMB,CLOUD",
+  "ENDPOINT": "//192.168.1.100/cpap_backups",
+  "ENDPOINT_USER": "username",
+  "ENDPOINT_PASS": "password",
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret"
+}
+```
+
+See [CONFIGURATION.md](CONFIGURATION.md) for all cloud options.
 
 ## How to Enable/Disable Backends
 
@@ -100,12 +113,15 @@ pio run -e pico32 --build-flag="-DENABLE_SMB_UPLOAD" --build-flag="-DENABLE_WEBD
 
 ## Runtime Backend Selection
 
-When multiple backends are enabled at compile time, the active backend is selected at runtime based on the `ENDPOINT_TYPE` setting in `config.json`.
+When multiple backends are enabled at compile time, the active backend(s) are selected at runtime based on the `ENDPOINT_TYPE` setting in `config.json`. Multiple backends can be active simultaneously using comma-separated values.
 
-**Example**: If both SMB and WebDAV are enabled:
-- Set `ENDPOINT_TYPE: "SMB"` to use SMB upload
-- Set `ENDPOINT_TYPE: "WEBDAV"` to use WebDAV upload
-- Change `config.json` and reboot to switch backends
+**Examples**:
+- `"ENDPOINT_TYPE": "SMB"` — SMB upload only
+- `"ENDPOINT_TYPE": "CLOUD"` — SleepHQ cloud upload only
+- `"ENDPOINT_TYPE": "SMB,CLOUD"` — Upload to both SMB and SleepHQ
+- `"ENDPOINT_TYPE": "WEBDAV,CLOUD"` — Upload to both WebDAV and SleepHQ
+
+When multiple backends are active, each file is uploaded to **all** active backends. If the cloud backend fails (e.g., authentication error), SMB/WebDAV uploads continue independently.
 
 ## Implementation Details
 
@@ -151,11 +167,12 @@ If you configure an endpoint type that wasn't compiled in:
 
 | Configuration | Approximate Binary Size |
 |--------------|------------------------|
-| No backends | Base size |
+| No backends | Base size (~800KB) |
 | SMB only | Base + 220-270KB |
 | WebDAV only | Base + 50-80KB (est.) |
-| SleepHQ only | Base + 40-60KB (est.) |
-| All backends | Base + 310-410KB (est.) |
+| SleepHQ only | Base + 110KB |
+| SMB + SleepHQ | Base + 330-380KB |
+| All backends | Base + 380-460KB (est.) |
 
 **Recommendation**: Enable only the backend(s) you need to maximize available flash space for future features.
 
@@ -177,10 +194,11 @@ This feature flag implementation satisfies the following requirements from the s
 
 - **Requirement 10.1**: Read ENDPOINT_TYPE configuration value
 - **Requirement 10.6**: Support WebDAV protocol (placeholder)
-- **Requirement 10.7**: Support SleepHQ direct upload (placeholder)
+- **Requirement 10.7**: Support SleepHQ direct upload (implemented)
 
 ## See Also
 
-- [LIBSMB2_SETUP.md](LIBSMB2_SETUP.md) - SMB backend setup instructions
+- [CONFIGURATION.md](CONFIGURATION.md) - Complete configuration reference
+- [UPLOAD_FLOW.md](UPLOAD_FLOW.md) - Upload flow diagrams
+- [LIBSMB2_INTEGRATION.md](LIBSMB2_INTEGRATION.md) - SMB backend setup instructions
 - [README.md](../README.md) - Main project documentation
-- [requirements.md](../.kiro/specs/file-tracking-and-upload-scheduling/requirements.md) - Full requirements specification

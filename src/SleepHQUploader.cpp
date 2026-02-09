@@ -548,8 +548,13 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         
         // Build payload in single buffer: headers + file content + trailer
         memcpy(combinedBuf, partBefore.c_str(), partBefore.length());
-        file.read(combinedBuf + partBefore.length(), fileSize);
+        size_t bytesRead = file.read(combinedBuf + partBefore.length(), fileSize);
         file.close();
+        if (bytesRead != fileSize) {
+            LOG_ERRORF("[SleepHQ] Short read: expected %lu bytes, got %u", fileSize, bytesRead);
+            free(combinedBuf);
+            return false;
+        }
         memcpy(combinedBuf + partBefore.length() + fileSize, partAfter.c_str(), partAfter.length());
         
         HTTPClient http;
@@ -577,10 +582,11 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
     String host = config->getCloudBaseUrl();
     host.replace("https://", "");
     host.replace("http://", "");
-    int portSep = host.indexOf(':');
+    // Strip trailing path first so ':' in paths can't confuse the parser
     int pathSep = host.indexOf('/');
     if (pathSep > 0) host = host.substring(0, pathSep);
     int port = 443;
+    int portSep = host.indexOf(':');
     if (portSep > 0) {
         port = host.substring(portSep + 1).toInt();
         host = host.substring(0, portSep);

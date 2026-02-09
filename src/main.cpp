@@ -565,12 +565,14 @@ void loop() {
     }
 
     // Check if we're waiting due to budget exhaustion (non-blocking)
+    bool isBudgetRetry = false;
     if (budgetExhaustedRetry) {
         // Wait for the appropriate time before retrying
         if (millis() < nextUploadRetryTime) {
             return;  // Non-blocking wait
         }
         // Wait period over, clear the flag and trigger retry
+        isBudgetRetry = true;
         budgetExhaustedRetry = false;
         LOG("Budget exhaustion wait period complete, resuming upload...");
         
@@ -629,7 +631,7 @@ void loop() {
     // Use forceUpload for interval mode and budget-exhaustion retries so the
     // internal shouldUpload() schedule check doesn't block re-uploads after
     // markUploadCompleted() has already been called for the day.
-    bool forceThisUpload = budgetExhaustedRetry || (config.getUploadIntervalMinutes() > 0);
+    bool forceThisUpload = isBudgetRetry || (config.getUploadIntervalMinutes() > 0);
     bool uploadSuccess = uploader->uploadNewFiles(&sdManager, forceThisUpload);
 
     // Release SD card back to CPAP machine
