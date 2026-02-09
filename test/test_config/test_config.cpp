@@ -90,7 +90,7 @@ void test_config_load_with_defaults() {
     
     // Check default values
     TEST_ASSERT_EQUAL(12, config.getUploadHour());  // Default noon
-    TEST_ASSERT_EQUAL(30, config.getSessionDurationSeconds());  // Default 30 seconds
+    TEST_ASSERT_EQUAL(300, config.getSessionDurationSeconds());  // Default 300 seconds
     TEST_ASSERT_EQUAL(3, config.getMaxRetryAttempts());  // Default 3 attempts
     TEST_ASSERT_EQUAL(0, config.getGmtOffsetHours());  // Default UTC
     TEST_ASSERT_EQUAL(30, config.getBootDelaySeconds());  // Default 30 seconds
@@ -187,13 +187,13 @@ void test_config_webdav_endpoint() {
     TEST_ASSERT_EQUAL_STRING("https://cloud.example.com/remote.php/dav/files/user/", config.getEndpoint().c_str());
 }
 
-// Test SleepHQ endpoint type
+// Test SleepHQ endpoint type (cloud endpoint requires CLOUD_CLIENT_ID)
 void test_config_sleephq_endpoint() {
     std::string configContent = R"({
         "WIFI_SSID": "TestNetwork",
-        "ENDPOINT": "https://sleephq.com/api/upload",
         "ENDPOINT_TYPE": "SLEEPHQ",
-        "ENDPOINT_USER": "apikey123"
+        "CLOUD_CLIENT_ID": "test_client_id",
+        "CLOUD_CLIENT_SECRET": "test_secret"
     })";
     
     mockSD.addFile("/config.json", configContent);
@@ -204,6 +204,7 @@ void test_config_sleephq_endpoint() {
     TEST_ASSERT_TRUE(loaded);
     TEST_ASSERT_TRUE(config.valid());
     TEST_ASSERT_EQUAL_STRING("SLEEPHQ", config.getEndpointType().c_str());
+    TEST_ASSERT_TRUE(config.hasCloudEndpoint());
 }
 
 // Test configuration with negative GMT offset (e.g., PST)

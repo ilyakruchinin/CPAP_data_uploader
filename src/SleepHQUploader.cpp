@@ -100,7 +100,7 @@ bool SleepHQUploader::authenticate() {
     String body = "grant_type=password";
     body += "&client_id=" + config->getCloudClientId();
     body += "&client_secret=" + config->getCloudClientSecret();
-    body += "&scope=read write";
+    body += "&scope=read+write";
     
     String responseBody;
     int httpCode;
@@ -144,7 +144,7 @@ bool SleepHQUploader::ensureAccessToken() {
     
     // Check if token has expired (with 60 second safety margin)
     unsigned long elapsed = (millis() - tokenObtainedAt) / 1000;
-    if (elapsed >= (tokenExpiresIn - 60)) {
+    if (tokenExpiresIn <= 60 || elapsed >= (tokenExpiresIn - 60)) {
         LOG("[SleepHQ] Access token expired, re-authenticating...");
         return authenticate();
     }
@@ -635,11 +635,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         if (headerLine == "\r" || headerLine.length() <= 1) break;
     }
     
-    // Read response body
-    responseBody = "";
-    while (tlsClient->available()) {
-        responseBody += (char)tlsClient->read();
-    }
+    // Read response body (bulk read to avoid O(n²) char-by-char concatenation)
+    responseBody = tlsClient->readString();
     
     tlsClient->stop();
     bytesTransferred = totalSent;
