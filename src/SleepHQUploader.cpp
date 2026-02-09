@@ -293,28 +293,42 @@ bool SleepHQUploader::processImport() {
     return true;
 }
 
-String SleepHQUploader::computeContentHash(fs::FS &sd, const String& localPath, const String& fileName) {
+String SleepHQUploader::computeContentHash(fs::FS &sd, const String& localPath, const String& fileName,
+                                             unsigned long& hashedSize) {
     // SleepHQ content_hash = MD5(file_content + filename)
     // Note: filename only (no path)
+    // hashedSize returns the exact byte count that was hashed, so the upload
+    // can read the same number of bytes ("size-locked" to avoid hash mismatch
+    // when the CPAP machine appends data between hash and upload).
     
     File file = sd.open(localPath, FILE_READ);
     if (!file) {
         LOG_ERRORF("[SleepHQ] Cannot open file for hashing: %s", localPath.c_str());
+        hashedSize = 0;
         return "";
     }
+    
+    // Snapshot file size at open time - only hash this many bytes
+    unsigned long snapshotSize = file.size();
     
     struct MD5Context md5ctx;
     MD5Init(&md5ctx);
     
-    // Hash file content in chunks
+    // Hash exactly snapshotSize bytes (not file.available() which can grow)
     uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE];
-    while (file.available()) {
-        size_t bytesRead = file.read(buffer, sizeof(buffer));
-        if (bytesRead > 0) {
-            MD5Update(&md5ctx, buffer, bytesRead);
+    unsigned long totalHashed = 0;
+    while (totalHashed < snapshotSize) {
+        size_t toRead = sizeof(buffer);
+        if (snapshotSize - totalHashed < toRead) {
+            toRead = snapshotSize - totalHashed;
         }
+        size_t bytesRead = file.read(buffer, toRead);
+        if (bytesRead == 0) break;  // EOF or read error
+        MD5Update(&md5ctx, buffer, bytesRead);
+        totalHashed += bytesRead;
     }
     file.close();
+    hashedSize = totalHashed;
     
     // Append filename to hash
     MD5Update(&md5ctx, (const uint8_t*)fileName.c_str(), fileName.length());
@@ -353,20 +367,21 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
         fileName = fileName.substring(lastSlash + 1);
     }
     
-    // Compute content hash
-    String contentHash = computeContentHash(sd, localPath, fileName);
+    // Compute content hash (returns the exact byte count hashed for size-locked upload)
+    unsigned long lockedFileSize = 0;
+    String contentHash = computeContentHash(sd, localPath, fileName, lockedFileSize);
     if (contentHash.isEmpty()) {
         return false;
     }
     
-    LOG_DEBUGF("[SleepHQ] Uploading: %s (hash: %s)", localPath.c_str(), contentHash.c_str());
+    LOG_DEBUGF("[SleepHQ] Uploading: %s (%lu bytes, hash: %s)", localPath.c_str(), lockedFileSize, contentHash.c_str());
     
-    // Upload via multipart POST
+    // Upload via multipart POST using the same byte count that was hashed
     String path = "/api/v1/imports/" + currentImportId + "/files";
     String responseBody;
     int httpCode;
     
-    if (!httpMultipartUpload(path, fileName, localPath, contentHash, sd, bytesTransferred, responseBody, httpCode)) {
+    if (!httpMultipartUpload(path, fileName, localPath, contentHash, lockedFileSize, sd, bytesTransferred, responseBody, httpCode)) {
         LOG_ERRORF("[SleepHQ] Upload failed for: %s", localPath.c_str());
         return false;
     }
@@ -459,6 +474,7 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
 
 bool SleepHQUploader::httpMultipartUpload(const String& path, const String& fileName,
                                            const String& filePath, const String& contentHash,
+                                           unsigned long lockedFileSize,
                                            fs::FS &sd, unsigned long& bytesTransferred,
                                            String& responseBody, int& httpCode) {
     if (!tlsClient) {
@@ -471,7 +487,9 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         LOG_ERRORF("[SleepHQ] Cannot open file: %s", filePath.c_str());
         return false;
     }
-    unsigned long fileSize = file.size();
+    // Use the locked file size (same byte count that was hashed) instead of
+    // file.size() which may have grown since the hash was computed.
+    unsigned long fileSize = lockedFileSize;
     
     // Extract the directory path for the 'path' field
     String dirPath = filePath;
@@ -595,18 +613,23 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
     
     uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE];
     unsigned long totalSent = 0;
-    while (file.available()) {
-        size_t bytesRead = file.read(buffer, sizeof(buffer));
-        if (bytesRead > 0) {
-            size_t written = tlsClient->write(buffer, bytesRead);
-            if (written != bytesRead) {
-                LOG_ERROR("[SleepHQ] Write error during streaming upload");
-                file.close();
-                tlsClient->stop();
-                return false;
-            }
-            totalSent += written;
+    // Read exactly fileSize bytes (locked to match the content hash)
+    // Do NOT use file.available() which can grow if CPAP appends data
+    while (totalSent < fileSize) {
+        size_t toRead = sizeof(buffer);
+        if (fileSize - totalSent < toRead) {
+            toRead = fileSize - totalSent;
         }
+        size_t bytesRead = file.read(buffer, toRead);
+        if (bytesRead == 0) break;  // EOF or read error
+        size_t written = tlsClient->write(buffer, bytesRead);
+        if (written != bytesRead) {
+            LOG_ERROR("[SleepHQ] Write error during streaming upload");
+            file.close();
+            tlsClient->stop();
+            return false;
+        }
+        totalSent += written;
     }
     file.close();
     

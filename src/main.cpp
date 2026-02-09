@@ -626,7 +626,11 @@ void loop() {
     // - File prioritization (DATALOG newest first, then root/SETTINGS)
     // - State persistence
     // - Retry count management
-    bool uploadSuccess = uploader->uploadNewFiles(&sdManager);
+    // Use forceUpload for interval mode and budget-exhaustion retries so the
+    // internal shouldUpload() schedule check doesn't block re-uploads after
+    // markUploadCompleted() has already been called for the day.
+    bool forceThisUpload = budgetExhaustedRetry || (config.getUploadIntervalMinutes() > 0);
+    bool uploadSuccess = uploader->uploadNewFiles(&sdManager, forceThisUpload);
 
     // Release SD card back to CPAP machine
     sdManager.releaseControl();

@@ -16,7 +16,8 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
 #ifdef ENABLE_TEST_WEBSERVER
       webServer(nullptr),
 #endif
-      lastSdReleaseTime(0)
+      lastSdReleaseTime(0),
+      cloudImportCreated(false)
 #ifdef ENABLE_SMB_UPLOAD
       , smbUploader(nullptr)
 #endif
@@ -409,6 +410,11 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
                     // For delta/deep scans, include completed folders
                     folders.push_back(folderName);
                     LOG_INFOF("[FileUploader] Found completed DATALOG folder: %s", folderName.c_str());
+                } else if (isRecentFolder(folderName)) {
+                    // Recent completed folders are re-scanned to detect files
+                    // that changed (e.g. CPAP still writing to today's data)
+                    folders.push_back(folderName);
+                    LOG_DEBUGF("[FileUploader] Re-checking recent completed folder: %s", folderName.c_str());
                 } else {
                     LOG_DEBUGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
                 }
@@ -561,6 +567,54 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
     return files;
 }
 
+// Check if a DATALOG folder name (YYYYMMDD) is within the recent window
+// Recent folders are re-scanned on interval uploads to detect changed files
+bool FileUploader::isRecentFolder(const String& folderName) const {
+    int recentDays = config->getRecentFolderDays();
+    if (recentDays <= 0) return false;
+    
+    time_t now = time(nullptr);
+    if (now < 24 * 3600) return false;  // NTP not synced
+    
+    time_t cutoff = now - ((long)recentDays * 86400L);
+    struct tm cutoffTm;
+    localtime_r(&cutoff, &cutoffTm);
+    char cutoffStr[9];
+    snprintf(cutoffStr, sizeof(cutoffStr), "%04d%02d%02d",
+             cutoffTm.tm_year + 1900, cutoffTm.tm_mon + 1, cutoffTm.tm_mday);
+    
+    return folderName >= String(cutoffStr);
+}
+
+// Lazily create a cloud import session on first actual upload
+// Returns true if import is ready (already created or just created)
+bool FileUploader::ensureCloudImport() {
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (cloudImportCreated) return true;
+    if (!sleephqUploader || !config->hasCloudEndpoint()) return true;  // No cloud = OK
+    
+    if (!sleephqUploader->isConnected()) {
+        LOG("[FileUploader] Connecting cloud uploader for import session...");
+        if (!sleephqUploader->begin()) {
+            LOG_ERROR("[FileUploader] Failed to initialize cloud uploader");
+            LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
+            return false;
+        }
+    }
+    if (sleephqUploader->isConnected()) {
+        if (!sleephqUploader->createImport()) {
+            LOG_ERROR("[FileUploader] Failed to create cloud import");
+            LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
+            return false;
+        }
+        cloudImportCreated = true;
+    }
+    return cloudImportCreated;
+#else
+    return true;
+#endif
+}
+
 // Start upload session with time budget
 bool FileUploader::startUploadSession(fs::FS &sd) {
     LOG("[FileUploader] Starting upload session");
@@ -586,24 +640,9 @@ bool FileUploader::startUploadSession(fs::FS &sd) {
     // Initialize periodic release timer
     lastSdReleaseTime = millis();
     
-    // Create cloud import session if cloud backend is active
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (sleephqUploader && config->hasCloudEndpoint()) {
-        if (!sleephqUploader->isConnected()) {
-            LOG("[FileUploader] Connecting cloud uploader for import session...");
-            if (!sleephqUploader->begin()) {
-                LOG_ERROR("[FileUploader] Failed to initialize cloud uploader");
-                LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
-            }
-        }
-        if (sleephqUploader->isConnected()) {
-            if (!sleephqUploader->createImport()) {
-                LOG_ERROR("[FileUploader] Failed to create cloud import");
-                LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
-            }
-        }
-    }
-#endif
+    // Cloud import is created lazily via ensureCloudImport() on first actual upload
+    // This avoids creating empty imports when no files have changed
+    cloudImportCreated = false;
     
     return true;
 }
@@ -755,8 +794,12 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         }
     }
     
+    // Check if this is a recently completed folder being re-scanned
+    bool isRecentRescan = stateManager->isFolderCompleted(folderName) && isRecentFolder(folderName);
+    
     // Upload each file
     int uploadedCount = 0;
+    int skippedUnchanged = 0;
     for (const String& fileName : files) {
         // Check for periodic SD card release before each file
         if (!checkAndReleaseSD(sdManager)) {
@@ -768,6 +811,15 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         
         // Check time budget before uploading
         String localPath = folderPath + "/" + fileName;
+        
+        // For recent folder re-scans, check if file has changed via checksum
+        if (isRecentRescan) {
+            if (!stateManager->hasFileChanged(sd, localPath)) {
+                skippedUnchanged++;
+                continue;  // File unchanged since last upload
+            }
+            LOG_DEBUGF("[FileUploader] File changed in recent folder: %s", fileName.c_str());
+        }
         
         // Get file size
         File file = sd.open(localPath);
@@ -804,6 +856,11 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
                 LOG("[FileUploader] WARNING: Failed to save state after partial upload");
             }
             return false;  // Session interrupted due to budget
+        }
+        
+        // Lazily create cloud import on first actual upload (avoids empty imports)
+        if (!ensureCloudImport()) {
+            LOG_WARN("[FileUploader] Cloud import not available, skipping cloud uploads this session");
         }
         
         // Upload the file
@@ -913,13 +970,23 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
             budgetManager->recordUpload(bytesTransferred, uploadTime);
         }
         
+        // Store per-file checksum so hasFileChanged() can detect changes on re-scan
+        String checksum = stateManager->calculateChecksum(sd, localPath);
+        if (!checksum.isEmpty()) {
+            stateManager->markFileUploaded(localPath, checksum);
+        }
+        
         uploadedCount++;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), bytesTransferred);
         LOG_DEBUGF("[FileUploader] Budget remaining: %lu ms", budgetManager->getRemainingBudgetMs());
     }
     
-    // All files uploaded successfully
-    LOGF("[FileUploader] Successfully uploaded all %d files in folder", uploadedCount);
+    // All files processed successfully
+    if (isRecentRescan) {
+        LOGF("[FileUploader] Re-scan complete: %d uploaded, %d unchanged in folder", uploadedCount, skippedUnchanged);
+    } else {
+        LOGF("[FileUploader] Successfully uploaded all %d files in folder", uploadedCount);
+    }
     
     // Mark folder as completed
     stateManager->markFolderCompleted(folderName);
@@ -975,6 +1042,11 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     if (!stateManager->hasFileChanged(sd, filePath)) {
         LOG_DEBUG("[FileUploader] File unchanged, skipping upload");
         return true;  // Not an error, just no need to upload
+    }
+    
+    // Lazily create cloud import on first actual upload (avoids empty imports)
+    if (!ensureCloudImport()) {
+        LOG_WARN("[FileUploader] Cloud import not available, skipping cloud uploads this session");
     }
     
     // Upload the file

@@ -68,6 +68,32 @@ All bugs found during a full code review of the SleepHQ cloud upload implementat
 - **Issue:** Character-by-character `String` concatenation in streaming upload response reader causes O(n²) reallocation.
 - **Fix:** Use `tlsClient->readString()` for bulk read.
 
+---
+
+## SleepHQ Upload Reliability Fixes (2026-02-10)
+
+Fixes two production issues observed during live CPAP data uploads to SleepHQ.
+
+### Fix 7 (HIGH) — SleepHQ rejects imports as "corrupted" (hash mismatch)
+- **Files:** `include/SleepHQUploader.h`, `src/SleepHQUploader.cpp`
+- **Issue:** `computeContentHash()` reads the file once, then `httpMultipartUpload()` reads it again. Between these two reads, the CPAP machine appends data to the file (especially during an active sleep session). SleepHQ computes its own hash of the received data, finds it doesn't match the `content_hash` field, and marks the import as failed ("One of the files in this import was corrupted during upload").
+- **Fix:** Size-locked reads. `computeContentHash()` now snapshots the file size and hashes exactly that many bytes, returning the `hashedSize`. `httpMultipartUpload()` accepts a `lockedFileSize` parameter and reads exactly that many bytes for both in-memory and streaming upload paths. This guarantees the hash always matches the uploaded content, even if the CPAP appends data between or during reads.
+
+### Fix 8 (HIGH) — Interval uploads silently skip all files after first successful session
+- **File:** `src/main.cpp`
+- **Issue:** `main.cpp` handles interval timing independently, but `uploadNewFiles()` has an internal `shouldUpload()` check that returns false after `markUploadCompleted()` is called. Every subsequent interval session entered `uploadNewFiles()` and returned immediately without uploading anything.
+- **Fix:** When the interval timer fires, pass `forceUpload=true` to `uploadNewFiles()` to bypass the internal daily schedule check.
+
+### Fix 9 (HIGH) — Changed files in completed DATALOG folders never re-uploaded
+- **Files:** `include/FileUploader.h`, `src/FileUploader.cpp`, `include/Config.h`, `src/Config.cpp`
+- **Issue:** Once a DATALOG folder was marked "completed", it was permanently skipped by `scanDatalogFolders()`. Files that grew during an active CPAP session (today's BRP, PLD, SA2 data) were never re-uploaded, even on subsequent interval runs.
+- **Fix:** Added configurable `RECENT_FOLDER_DAYS` (default: 2). Completed folders within the recent window are re-scanned on each interval upload. Per-file MD5 checksums are stored via `UploadStateManager::markFileUploaded()` (reusing existing infrastructure). Only files whose checksum has changed are re-uploaded, making re-scans efficient.
+
+### Improvement — Lazy cloud import creation (avoids empty imports on SleepHQ)
+- **Files:** `include/FileUploader.h`, `src/FileUploader.cpp`
+- **Issue:** `startUploadSession()` eagerly created a SleepHQ import session. If no files had changed (all checksums match), an empty import was submitted, cluttering the SleepHQ dashboard with "0 files, 0 bytes" entries.
+- **Fix:** Import creation deferred to `ensureCloudImport()`, called lazily on first actual file upload. If no files need uploading, no import is created.
+
 ### Test & Mock Fixes
 - **`test/mocks/MockFS.h`** — Added `indexOf(const char*)`, `indexOf(const String&)`, and `lastIndexOf(char)` overloads to mock `String` class. `Config.cpp` uses string-search `indexOf` for endpoint type detection.
 - **`test/mocks/ArduinoJson.h`** — Added `containsKey()` method to `JsonDocumentBase`. Required by `Config::censorConfigFileWithDoc()`.
