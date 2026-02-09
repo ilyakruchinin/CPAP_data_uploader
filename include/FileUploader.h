@@ -67,6 +67,13 @@ private:
     bool uploadDatalogFolder(class SDCardManager* sdManager, const String& folderName);
     bool uploadSingleFile(class SDCardManager* sdManager, const String& filePath);
     
+    // Helper: check if a DATALOG folder name (YYYYMMDD) is within the recent window
+    bool isRecentFolder(const String& folderName) const;
+    
+    // Helper: lazily create cloud import session on first actual upload
+    bool ensureCloudImport();
+    bool cloudImportCreated;
+    
     // Session management
     bool startUploadSession(fs::FS &sd);
     void endUploadSession(fs::FS &sd);

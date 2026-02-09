@@ -55,6 +55,7 @@ private:
     int cloudDeviceId;
     int maxDays;
     int uploadIntervalMinutes;
+    int recentFolderDays;
     bool cloudInsecureTls;
     
     // Power management settings
@@ -126,6 +127,7 @@ public:
     int getCloudDeviceId() const;
     int getMaxDays() const;
     int getUploadIntervalMinutes() const;
+    int getRecentFolderDays() const;
     bool getCloudInsecureTls() const;
     bool hasCloudEndpoint() const;
     bool hasSmbEndpoint() const;

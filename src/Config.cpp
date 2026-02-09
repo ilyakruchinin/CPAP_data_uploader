@@ -26,6 +26,7 @@ Config::Config() :
     cloudDeviceId(0),
     maxDays(0),  // Default: all days
     uploadIntervalMinutes(0),  // Default: use daily schedule
+    recentFolderDays(2),  // Default: re-check today + yesterday
     cloudInsecureTls(false),  // Default: use root CA validation
     
     storePlainText(false),  // Default: secure mode
@@ -496,6 +497,7 @@ bool Config::loadFromSD(fs::FS &sd) {
     cloudDeviceId = doc["CLOUD_DEVICE_ID"] | 0;
     maxDays = doc["MAX_DAYS"] | 0;
     uploadIntervalMinutes = doc["UPLOAD_INTERVAL_MINUTES"] | 0;
+    recentFolderDays = doc["RECENT_FOLDER_DAYS"] | 2;
     cloudInsecureTls = doc["CLOUD_INSECURE_TLS"] | false;
     
     // Validate MAX_DAYS
@@ -508,6 +510,12 @@ bool Config::loadFromSD(fs::FS &sd) {
     if (uploadIntervalMinutes < 0) {
         LOG_WARN("UPLOAD_INTERVAL_MINUTES cannot be negative, setting to 0 (daily schedule)");
         uploadIntervalMinutes = 0;
+    }
+    
+    // Validate RECENT_FOLDER_DAYS
+    if (recentFolderDays < 0) {
+        LOG_WARN("RECENT_FOLDER_DAYS cannot be negative, setting to 2");
+        recentFolderDays = 2;
     }
     
     // Power management settings with validation
@@ -684,6 +692,9 @@ bool Config::loadFromSD(fs::FS &sd) {
         if (uploadIntervalMinutes > 0) {
             LOGF("Upload interval: every %d minutes", uploadIntervalMinutes);
         }
+        if (recentFolderDays > 0) {
+            LOGF("Recent folder re-check: %d days", recentFolderDays);
+        }
         LOG("========================================");
     } else {
         LOG_ERROR("Configuration validation failed");
@@ -722,6 +733,7 @@ const String& Config::getCloudBaseUrl() const { return cloudBaseUrl; }
 int Config::getCloudDeviceId() const { return cloudDeviceId; }
 int Config::getMaxDays() const { return maxDays; }
 int Config::getUploadIntervalMinutes() const { return uploadIntervalMinutes; }
+int Config::getRecentFolderDays() const { return recentFolderDays; }
 bool Config::getCloudInsecureTls() const { return cloudInsecureTls; }
 
 bool Config::hasCloudEndpoint() const {

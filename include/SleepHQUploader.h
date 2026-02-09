@@ -42,11 +42,13 @@ private:
                      String& responseBody, int& httpCode);
     bool httpMultipartUpload(const String& path, const String& fileName,
                              const String& filePath, const String& contentHash,
+                             unsigned long lockedFileSize,
                              fs::FS &sd, unsigned long& bytesTransferred,
                              String& responseBody, int& httpCode);
     
     // Content hash: MD5(file_content + filename)
-    String computeContentHash(fs::FS &sd, const String& localPath, const String& fileName);
+    String computeContentHash(fs::FS &sd, const String& localPath, const String& fileName,
+                               unsigned long& hashedSize);
     
     // OAuth
     bool authenticate();
