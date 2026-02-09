@@ -202,6 +202,12 @@ public:
         return objectData[key];
     }
     
+    bool containsKey(const char* key) const {
+        return objectData.find(key) != objectData.end() ||
+               nestedObjects.find(key) != nestedObjects.end() ||
+               nestedArrays.find(key) != nestedArrays.end();
+    }
+    
     JsonObject getObject(const char* key) {
         auto it = nestedObjects.find(key);
         if (it != nestedObjects.end()) {

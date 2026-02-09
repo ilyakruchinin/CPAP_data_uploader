@@ -647,8 +647,15 @@ bool Config::loadFromSD(fs::FS &sd) {
         hasValidEndpoint = hasValidEndpoint || cloudValid;
     }
     if (!hasSmbEndpoint() && !hasCloudEndpoint()) {
-        // Legacy: require ENDPOINT for backward compatibility
-        hasValidEndpoint = !endpoint.isEmpty();
+        if (endpointType.isEmpty() && !endpoint.isEmpty()) {
+            // Legacy: default to SMB when ENDPOINT is set but ENDPOINT_TYPE is empty
+            LOG_WARN("ENDPOINT_TYPE not set, defaulting to SMB for backward compatibility");
+            endpointType = "SMB";
+            hasValidEndpoint = true;
+        } else if (!endpointType.isEmpty()) {
+            // Non-empty type that isn't SMB or CLOUD (e.g. WEBDAV, SLEEPHQ legacy)
+            hasValidEndpoint = !endpoint.isEmpty();
+        }
     }
     
     isValid = !wifiSSID.isEmpty() && hasValidEndpoint;

@@ -571,23 +571,15 @@ void TestWebServer::handleConfig() {
         
         json += "\"wifi_ssid\":\"" + config->getWifiSSID() + "\",";
         
-        // Return censored value for WiFi password if in secure mode
-        if (credentialsSecured) {
-            json += "\"wifi_password\":\"***STORED_IN_FLASH***\",";
-        } else {
-            json += "\"wifi_password\":\"" + config->getWifiPassword() + "\",";
-        }
+        // Always censor WiFi password (never expose via HTTP)
+        json += "\"wifi_password\":\"***HIDDEN***\",";
         
         json += "\"endpoint\":\"" + config->getEndpoint() + "\",";
         json += "\"endpoint_type\":\"" + config->getEndpointType() + "\",";
         json += "\"endpoint_user\":\"" + config->getEndpointUser() + "\",";
         
-        // Return censored value for endpoint password if in secure mode
-        if (credentialsSecured) {
-            json += "\"endpoint_password\":\"***STORED_IN_FLASH***\",";
-        } else {
-            json += "\"endpoint_password\":\"" + config->getEndpointPassword() + "\",";
-        }
+        // Always censor endpoint password (never expose via HTTP)
+        json += "\"endpoint_password\":\"***HIDDEN***\",";
         
         json += "\"upload_hour\":" + String(config->getUploadHour()) + ",";
         json += "\"session_duration_seconds\":" + String(config->getSessionDurationSeconds()) + ",";
@@ -597,11 +589,8 @@ void TestWebServer::handleConfig() {
         // Cloud upload config
         if (config->hasCloudEndpoint()) {
             json += "\"cloud_client_id\":\"" + config->getCloudClientId() + "\",";
-            if (credentialsSecured) {
-                json += "\"cloud_client_secret\":\"***STORED_IN_FLASH***\",";
-            } else {
-                json += "\"cloud_client_secret\":\"***HIDDEN***\",";
-            }
+            // Always censor cloud client secret (never expose via HTTP)
+            json += "\"cloud_client_secret\":\"***HIDDEN***\",";
             json += "\"cloud_device_id\":" + String(config->getCloudDeviceId()) + ",";
             json += "\"cloud_base_url\":\"" + config->getCloudBaseUrl() + "\",";
             if (!config->getCloudTeamId().isEmpty()) {

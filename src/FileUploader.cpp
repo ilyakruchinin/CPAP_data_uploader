@@ -157,8 +157,11 @@ bool FileUploader::checkAndReleaseSD(SDCardManager* sdManager) {
     
     LOG_DEBUG("[FileUploader] Periodic SD card release - giving CPAP priority access");
     
-    // Pause active time tracking
-    budgetManager->pauseActiveTime();
+    // Pause active time tracking (only if an upload session is active)
+    bool hasActiveSession = budgetManager->getRemainingBudgetMs() > 0 || budgetManager->getActiveTimeMs() > 0;
+    if (hasActiveSession) {
+        budgetManager->pauseActiveTime();
+    }
     
     // Release SD card
     sdManager->releaseControl();
@@ -190,8 +193,10 @@ bool FileUploader::checkAndReleaseSD(SDCardManager* sdManager) {
         return false;  // Abort upload
     }
     
-    // Resume active time tracking
-    budgetManager->resumeActiveTime();
+    // Resume active time tracking (only if an upload session is active)
+    if (hasActiveSession) {
+        budgetManager->resumeActiveTime();
+    }
     
     // Reset release timer
     lastSdReleaseTime = millis();
@@ -1052,19 +1057,10 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
         budgetManager->recordUpload(bytesTransferred, uploadTime);
     }
     
-    // Calculate and store new checksum
-    // The hasFileChanged method already calculated it, but we need to mark it as uploaded
-    // We'll recalculate to ensure consistency
-    File checksumFile = sd.open(filePath);
-    if (checksumFile) {
-        // Calculate checksum (simplified - actual implementation in UploadStateManager)
-        String checksum = "";  // Will be calculated by markFileUploaded
-        checksumFile.close();
-        
-        // Mark file as uploaded with its checksum
+    // Calculate and store checksum so hasFileChanged() won't flag this file next session
+    String checksum = stateManager->calculateChecksum(sd, filePath);
+    if (!checksum.isEmpty()) {
         stateManager->markFileUploaded(filePath, checksum);
-        
-        // Save state
         stateManager->save(sd);
     }
     

@@ -59,6 +59,21 @@ public:
         return pos != std::string::npos ? static_cast<int>(pos) : -1;
     }
     
+    int indexOf(const char* str) const {
+        size_t pos = data.find(str);
+        return pos != std::string::npos ? static_cast<int>(pos) : -1;
+    }
+    
+    int indexOf(const String& str) const {
+        size_t pos = data.find(str.data);
+        return pos != std::string::npos ? static_cast<int>(pos) : -1;
+    }
+    
+    int lastIndexOf(char ch) const {
+        size_t pos = data.rfind(ch);
+        return pos != std::string::npos ? static_cast<int>(pos) : -1;
+    }
+    
     String substring(size_t start) const {
         return String(data.substr(start));
     }

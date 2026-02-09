@@ -10,7 +10,11 @@
 // Mock Preferences class for testing
 class Preferences {
 private:
-    static std::map<std::string, std::string> globalStorage;  // Shared across all instances
+    // Use function-local static to avoid static destruction order fiasco
+    static std::map<std::string, std::string>& globalStorage() {
+        static std::map<std::string, std::string> storage;
+        return storage;
+    }
     std::string currentNamespace;
     bool isOpen;
     bool initFailed;  // For testing initialization failures
@@ -41,10 +45,10 @@ public:
         
         // Remove all keys with current namespace prefix
         std::string prefix = currentNamespace + ":";
-        auto it = globalStorage.begin();
-        while (it != globalStorage.end()) {
+        auto it = globalStorage().begin();
+        while (it != globalStorage().end()) {
             if (it->first.find(prefix) == 0) {
-                it = globalStorage.erase(it);
+                it = globalStorage().erase(it);
             } else {
                 ++it;
             }
@@ -57,7 +61,7 @@ public:
         if (!isOpen || !key) return false;
         
         std::string fullKey = currentNamespace + ":" + key;
-        return globalStorage.erase(fullKey) > 0;
+        return globalStorage().erase(fullKey) > 0;
     }
     
     // Store a string value
@@ -66,7 +70,7 @@ public:
         
         std::string fullKey = currentNamespace + ":" + key;
         std::string strValue = value.toStdString();
-        globalStorage[fullKey] = strValue;
+        globalStorage()[fullKey] = strValue;
         return strValue.length();
     }
     
@@ -75,8 +79,8 @@ public:
         if (!isOpen || !key) return defaultValue;
         
         std::string fullKey = currentNamespace + ":" + key;
-        auto it = globalStorage.find(fullKey);
-        if (it != globalStorage.end()) {
+        auto it = globalStorage().find(fullKey);
+        if (it != globalStorage().end()) {
             return String(it->second.c_str());
         }
         return defaultValue;
@@ -87,7 +91,7 @@ public:
         if (!isOpen || !key) return 0;
         
         std::string fullKey = currentNamespace + ":" + key;
-        globalStorage[fullKey] = std::to_string(value);
+        globalStorage()[fullKey] = std::to_string(value);
         return sizeof(int32_t);
     }
     
@@ -96,8 +100,8 @@ public:
         if (!isOpen || !key) return defaultValue;
         
         std::string fullKey = currentNamespace + ":" + key;
-        auto it = globalStorage.find(fullKey);
-        if (it != globalStorage.end()) {
+        auto it = globalStorage().find(fullKey);
+        if (it != globalStorage().end()) {
             try {
                 return std::stoi(it->second);
             } catch (...) {
@@ -112,7 +116,7 @@ public:
         if (!isOpen || !key) return false;
         
         std::string fullKey = currentNamespace + ":" + key;
-        return globalStorage.find(fullKey) != globalStorage.end();
+        return globalStorage().find(fullKey) != globalStorage().end();
     }
     
     // Test helper: Force initialization failure
@@ -122,17 +126,14 @@ public:
     
     // Test helper: Get all stored keys (for debugging)
     static std::map<std::string, std::string> getAllData() {
-        return globalStorage;
+        return globalStorage();
     }
     
     // Test helper: Clear all data across all namespaces
     static void clearAll() {
-        globalStorage.clear();
+        globalStorage().clear();
     }
 };
-
-// Define static storage
-std::map<std::string, std::string> Preferences::globalStorage;
 
 #endif // UNIT_TEST
 

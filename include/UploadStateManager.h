@@ -19,11 +19,11 @@ private:
     
     static const unsigned long PENDING_FOLDER_TIMEOUT_SECONDS = 7 * 24 * 60 * 60;  // 604800 seconds
     
-    String calculateChecksum(fs::FS &sd, const String& filePath);
     bool loadState(fs::FS &sd);
     bool saveState(fs::FS &sd);
 
 public:
+    String calculateChecksum(fs::FS &sd, const String& filePath);
     UploadStateManager();
     
     bool begin(fs::FS &sd);
