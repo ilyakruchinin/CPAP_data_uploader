@@ -141,7 +141,9 @@ uploadNewFiles(forceUpload)
   │    └─ All files uploaded? ──► Mark folder completed
   │
   ├─ Scan root files (/, /SETTINGS)
-  │    └─ Upload new/changed files (by MD5 checksum)
+  │    ├─ Cloud import active? ──► force-include ALL files
+  │    │    (SleepHQ requires STR.edf, Identification.*, SETTINGS/)
+  │    └─ No cloud import? ──► upload only new/changed files (by MD5)
   │
   ├─ End session
   │    ├─ Process cloud import (if active)
@@ -209,7 +211,11 @@ scanRootAndSettingsFiles()
 ## Multi-Backend Upload
 
 ```
-uploadSingleFile(filePath)
+uploadSingleFile(filePath, forceUpload)
+  │
+  ├─ Check if file has changed (MD5 checksum)
+  │    ├─ forceUpload = true? ──► skip check (cloud needs companion files)
+  │    └─ Unchanged and not forced? ──► skip upload, return success
   │
   ├─ Lazily create cloud import (ensureCloudImport)
   │    ├─ Already created? ──► continue

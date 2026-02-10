@@ -135,3 +135,19 @@ Fixes found during second code review pass of the SleepHQ cloud upload implement
 - **Files:** `include/Config.h`, `src/Config.cpp`
 - **Issue:** `hasCloudEndpoint()`, `hasSmbEndpoint()`, and `hasWebdavEndpoint()` each created a temporary `String`, converted to uppercase, and searched it — on every call. These are called in hot upload loops on a memory-constrained ESP32.
 - **Fix:** Cached the parsed booleans (`_hasSmbEndpoint`, `_hasCloudEndpoint`, `_hasWebdavEndpoint`) during `loadFromSD()`. Getters now return the cached values directly.
+
+---
+
+## Bug Fix Batch — Hardware Testing Round (2026-02-10)
+
+Fixes found during live hardware testing of the SleepHQ cloud upload.
+
+### Fix 15 (HIGH) — "Incomplete folders remain" infinite retry loop
+- **File:** `src/FileUploader.cpp`
+- **Issue:** `RECENT_FOLDER_DAYS` causes completed folders to be re-included in `scanDatalogFolders()` for change detection. The `totalFoldersCount` formula was `datalogFolders.size() + completedCount + pendingCount`, which double-counted these recent completed folders — once in `datalogFolders.size()` and again in `completedCount`. This made `getIncompleteFoldersCount()` return phantom incomplete folders, causing an infinite "upload will retry" loop even when all files were successfully uploaded.
+- **Fix:** Filter out already-completed and pending folders from the scan result before adding to the total count. Fixed in both `uploadNewFiles()` and `scanPendingFolders()`.
+
+### Fix 16 (HIGH) — SleepHQ imports fail: root/SETTINGS files missing from cloud imports
+- **Files:** `include/FileUploader.h`, `src/FileUploader.cpp`
+- **Issue:** SleepHQ requires `STR.edf`, `Identification.json`, `Identification.crc`, and `/SETTINGS/` files alongside DATALOG data to process an import. These root/SETTINGS files were only uploaded if `hasFileChanged()` detected a change. If they had been previously uploaded to SMB, their checksums were already stored and they were silently skipped — never reaching the SleepHQ import. This caused SleepHQ to mark imports as "failed".
+- **Fix:** When a cloud import is active (`cloudImportCreated = true`), Phase 2 now force-includes all root and SETTINGS files regardless of checksum state. Added `forceAll` parameter to `scanRootAndSettingsFiles()` and `forceUpload` parameter to `uploadSingleFile()`. SleepHQ's server-side content_hash deduplication prevents redundant data transfer.
