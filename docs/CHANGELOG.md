@@ -151,3 +151,11 @@ Fixes found during live hardware testing of the SleepHQ cloud upload.
 - **Files:** `include/FileUploader.h`, `src/FileUploader.cpp`
 - **Issue:** SleepHQ requires `STR.edf`, `Identification.json`, `Identification.crc`, and `/SETTINGS/` files alongside DATALOG data to process an import. These root/SETTINGS files were only uploaded if `hasFileChanged()` detected a change. If they had been previously uploaded to SMB, their checksums were already stored and they were silently skipped — never reaching the SleepHQ import. This caused SleepHQ to mark imports as "failed".
 - **Fix:** When a cloud import is active (`cloudImportCreated = true`), Phase 2 now force-includes all root and SETTINGS files regardless of checksum state. Added `forceAll` parameter to `scanRootAndSettingsFiles()` and `forceUpload` parameter to `uploadSingleFile()`. SleepHQ's server-side content_hash deduplication prevents redundant data transfer.
+
+### Fix 17 (HIGH) — SSL memory allocation failure after many cloud uploads
+- **File:** `src/SleepHQUploader.cpp`
+- **Issue:** After uploading ~30+ files in a single session, the ESP32 ran out of contiguous heap for TLS handshake buffers (~40-50KB). Root cause: `HTTPClient::end()` does not close the TLS connection when the server responds with `Connection: keep-alive` (HTTP/1.1 default). TLS session buffers stayed allocated between uploads, and repeated `malloc`/`free` cycles for in-memory upload buffers (up to 49KB) fragmented the heap until no contiguous block remained for TLS.
+- **Fix:** Three-layer defense:
+  1. **Force connection close**: Set `http.setReuse(false)` on all `HTTPClient` instances (both `httpRequest()` and `httpMultipartUpload()`) to ensure TLS buffers are freed after each request.
+  2. **Heap monitoring with cleanup**: Before every TLS operation, check `ESP.getMaxAllocHeap()`. If the largest contiguous free block is below 55KB (`MIN_HEAP_FOR_TLS`), force `tlsClient->stop()` to reclaim TLS buffers before proceeding.
+  3. **Graceful fallback to streaming**: If the in-memory upload path (≤48KB files) detects insufficient heap for the buffer + TLS, it falls through to the streaming path instead of failing.

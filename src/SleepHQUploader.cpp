@@ -28,6 +28,9 @@ static const char* GTS_ROOT_R4_CA = \
 // Upload buffer size for streaming files
 #define CLOUD_UPLOAD_BUFFER_SIZE 4096
 
+// Minimum contiguous heap required for TLS handshake (~40KB buffers + headroom)
+#define MIN_HEAP_FOR_TLS 55000
+
 SleepHQUploader::SleepHQUploader(Config* cfg)
     : config(cfg),
       tokenObtainedAt(0),
@@ -430,10 +433,24 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
         setupTLS();
     }
     
+    // Check heap before TLS operation - force cleanup if fragmented
+    uint32_t maxBlock = ESP.getMaxAllocHeap();
+    if (maxBlock < MIN_HEAP_FOR_TLS) {
+        LOG_WARNF("[SleepHQ] Low contiguous heap (%u bytes) - forcing TLS cleanup", maxBlock);
+        tlsClient->stop();
+        delay(10);
+        maxBlock = ESP.getMaxAllocHeap();
+        if (maxBlock < MIN_HEAP_FOR_TLS) {
+            LOG_ERRORF("[SleepHQ] Heap still too low after cleanup (%u bytes), cannot establish TLS", maxBlock);
+            return false;
+        }
+    }
+    
     String baseUrl = config->getCloudBaseUrl();
     String url = baseUrl + path;
     
     HTTPClient http;
+    http.setReuse(false);  // Force connection close to free TLS buffers after each request
     http.begin(*tlsClient, url);
     http.setTimeout(15000);  // 15 second timeout
     
@@ -469,6 +486,8 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
     
     responseBody = http.getString();
     http.end();
+    
+    LOG_DEBUGF("[SleepHQ] Heap after request: %u free, %u max block", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     return true;
 }
 
@@ -535,10 +554,35 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
     String baseUrl = config->getCloudBaseUrl();
     String url = baseUrl + path;
     
+    // Check heap before TLS operation - force cleanup if fragmented
+    uint32_t maxBlock = ESP.getMaxAllocHeap();
+    LOG_DEBUGF("[SleepHQ] Heap before upload: %u free, %u max block", ESP.getFreeHeap(), maxBlock);
+    if (maxBlock < MIN_HEAP_FOR_TLS) {
+        LOG_WARNF("[SleepHQ] Low contiguous heap (%u bytes) - forcing TLS cleanup", maxBlock);
+        tlsClient->stop();
+        delay(10);
+        maxBlock = ESP.getMaxAllocHeap();
+        if (maxBlock < MIN_HEAP_FOR_TLS) {
+            LOG_ERRORF("[SleepHQ] Heap too low for TLS (%u bytes), skipping upload", maxBlock);
+            file.close();
+            return false;
+        }
+    }
+    
     // For ESP32 HTTPClient, we need to build the complete payload
     // For files up to ~48KB, assemble in memory; larger files need streaming
     if (fileSize <= 49152) {  // 48KB limit for in-memory assembly
         size_t totalBufSize = partBefore.length() + fileSize + partAfter.length();
+        
+        // Verify heap can handle both the buffer AND the TLS handshake
+        if (ESP.getMaxAllocHeap() < totalBufSize + MIN_HEAP_FOR_TLS) {
+            LOG_WARNF("[SleepHQ] Insufficient heap for in-memory upload (%u needed, %u available) - using streaming",
+                      totalBufSize + MIN_HEAP_FOR_TLS, ESP.getMaxAllocHeap());
+            // Fall through to streaming path instead of failing
+            file.close();
+            goto streaming_upload;
+        }
+        
         uint8_t* combinedBuf = (uint8_t*)malloc(totalBufSize);
         if (!combinedBuf) {
             LOG_ERROR("[SleepHQ] Failed to allocate combined buffer");
@@ -558,6 +602,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         memcpy(combinedBuf + partBefore.length() + fileSize, partAfter.c_str(), partAfter.length());
         
         HTTPClient http;
+        http.setReuse(false);  // Force connection close to free TLS buffers
         http.begin(*tlsClient, url);
         http.setTimeout(30000);
         http.addHeader("Accept", "application/vnd.api+json");
@@ -572,11 +617,14 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             bytesTransferred = fileSize;
         }
         http.end();
+        LOG_DEBUGF("[SleepHQ] Heap after upload: %u free, %u max block", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
         return httpCode > 0;
     }
     
     // For larger files, stream via WiFiClientSecure directly
     file.close();
+    
+streaming_upload:
     
     // Parse host and port from base URL
     String host = config->getCloudBaseUrl();
