@@ -235,12 +235,15 @@ uploadSingleFile(filePath, forceUpload)
   │    │
   │    └─ SleepHQ (if ENDPOINT_TYPE contains "CLOUD"):
   │         ├─ Skip if cloudImportFailed = true
-  │         ├─ Connect if needed (OAuth auth)
+  │         ├─ Heap check (need ≥55KB contiguous for TLS)
+  │         │    └─ Low? ──► force tlsClient->stop(), reclaim memory
+  │         ├─ Connect if needed (OAuth auth, setReuse=false)
   │         ├─ Compute content_hash = MD5(content + filename)
   │         ├─ Size-lock file (snapshot size at hash time)
   │         └─ Multipart POST with content_hash + file data
-  │              ├─ File ≤ 48KB: in-memory assembly
-  │              └─ File > 48KB: streaming upload
+  │              ├─ File ≤ 48KB AND heap sufficient: in-memory assembly
+  │              ├─ File ≤ 48KB BUT heap tight: fall through to streaming
+  │              └─ File > 48KB: streaming upload (Connection: close)
   │
   ├─ All backends succeeded?
   │    ├─ YES: Mark file uploaded (store checksum)
