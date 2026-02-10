@@ -226,7 +226,9 @@ These options are only relevant when `ENDPOINT_TYPE` includes `CLOUD` or `SLEEPH
 4. **File upload**: Each file is uploaded via multipart POST with a content hash for deduplication
 5. **Import processing**: After all files are uploaded, the import is submitted for server-side processing
 
-**Content hash**: SleepHQ uses `MD5(file_content + filename)` for server-side deduplication. If a file has already been uploaded with the same hash, SleepHQ skips it automatically.
+**Required companion files**: SleepHQ requires `STR.edf`, `Identification.json`, `Identification.crc`, and `/SETTINGS/` files alongside DATALOG data to process an import. When a cloud import is active, these files are automatically force-included in every upload session regardless of whether they've changed locally.
+
+**Content hash**: SleepHQ uses `MD5(file_content + filename)` for server-side deduplication. If a file has already been uploaded with the same hash, SleepHQ skips it automatically. This means force-including companion files does not cause redundant data transfer.
 
 **TLS**: The firmware embeds the GTS Root R4 (Google Trust Services) root CA certificate for secure TLS validation. If SleepHQ changes its CA provider, set `CLOUD_INSECURE_TLS: true` as a temporary fallback.
 

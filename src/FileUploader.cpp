@@ -249,7 +249,15 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
     std::vector<String> datalogFolders = scanDatalogFolders(sd);
     
     // Update total folders count for progress tracking
-    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
+    // Note: datalogFolders may include recent completed folders (RECENT_FOLDER_DAYS)
+    // that are re-scanned for changes. Exclude those to avoid double-counting.
+    int newInScan = 0;
+    for (const String& f : datalogFolders) {
+        if (!stateManager->isFolderCompleted(f) && !stateManager->isPendingFolder(f)) {
+            newInScan++;
+        }
+    }
+    stateManager->setTotalFoldersCount(newInScan + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
     
     for (const String& folderName : datalogFolders) {
         // Check if we still have budget
@@ -285,7 +293,11 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
     // Phase 2: Process root and SETTINGS files (if budget remains)
     if (budgetManager->hasBudget()) {
         LOG("[FileUploader] Phase 2: Processing root and SETTINGS files");
-        std::vector<String> rootSettingsFiles = scanRootAndSettingsFiles(sd);
+        // When a cloud import is active, force-include all root/SETTINGS files
+        // even if unchanged locally. SleepHQ requires STR.edf, Identification.*,
+        // and SETTINGS/ alongside DATALOG data to process an import.
+        bool forceForCloud = cloudImportCreated;
+        std::vector<String> rootSettingsFiles = scanRootAndSettingsFiles(sd, forceForCloud);
         
         for (const String& filePath : rootSettingsFiles) {
             // Check if we still have budget
@@ -300,8 +312,8 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
                 break;
             }
             
-            // Upload the file
-            if (uploadSingleFile(sdManager, filePath)) {
+            // Upload the file (force when cloud import needs companion files)
+            if (uploadSingleFile(sdManager, filePath, forceForCloud)) {
                 anyUploaded = true;
             }
             
@@ -336,13 +348,21 @@ bool FileUploader::scanPendingFolders(SDCardManager* sdManager) {
     std::vector<String> datalogFolders = scanDatalogFolders(sd);
     
     // Update total folders count for progress tracking
-    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
+    // Note: datalogFolders may include recent completed folders (RECENT_FOLDER_DAYS)
+    // that are re-scanned for changes. Exclude those to avoid double-counting.
+    int newInScan = 0;
+    for (const String& f : datalogFolders) {
+        if (!stateManager->isFolderCompleted(f) && !stateManager->isPendingFolder(f)) {
+            newInScan++;
+        }
+    }
+    stateManager->setTotalFoldersCount(newInScan + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
     
-    LOG_DEBUGF("[FileUploader] Found %d incomplete folders", datalogFolders.size());
+    LOG_DEBUGF("[FileUploader] Found %d incomplete folders", newInScan);
     LOG_DEBUGF("[FileUploader] Total folders: %d (completed: %d, incomplete: %d, pending: %d)", 
-         stateManager->getCompletedFoldersCount() + datalogFolders.size() + stateManager->getPendingFoldersCount(),
+         stateManager->getCompletedFoldersCount() + newInScan + stateManager->getPendingFoldersCount(),
          stateManager->getCompletedFoldersCount(),
-         datalogFolders.size(),
+         newInScan,
          stateManager->getPendingFoldersCount());
     
     return true;
@@ -514,8 +534,15 @@ std::vector<String> FileUploader::scanFolderFiles(fs::FS &sd, const String& fold
 }
 
 // Scan root and SETTINGS files that need tracking
-std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
+// When forceAll is true, include all existing files regardless of checksum state.
+// This is needed for cloud imports where SleepHQ requires companion files
+// (STR.edf, Identification.*, SETTINGS/) alongside DATALOG data.
+std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd, bool forceAll) {
     std::vector<String> files;
+    
+    if (forceAll) {
+        LOG("[FileUploader] Cloud import active - including all root/SETTINGS files");
+    }
     
     // Root files to track
     std::vector<String> rootFiles = {
@@ -528,10 +555,9 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
     
     for (const String& file : rootFiles) {
         if (sd.exists(file)) {
-            // Check if file has changed
-            if (stateManager->hasFileChanged(sd, file)) {
+            if (forceAll || stateManager->hasFileChanged(sd, file)) {
                 files.push_back(file);
-                LOG_DEBUGF("[FileUploader] Root file changed: %s", file.c_str());
+                LOG_DEBUGF("[FileUploader] Root file %s: %s", forceAll ? "included" : "changed", file.c_str());
             }
         }
     }
@@ -550,9 +576,9 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
                 }
                 String settingsPath = "/SETTINGS/" + settingsFileName;
                 
-                if (stateManager->hasFileChanged(sd, settingsPath)) {
+                if (forceAll || stateManager->hasFileChanged(sd, settingsPath)) {
                     files.push_back(settingsPath);
-                    LOG_DEBUGF("[FileUploader] SETTINGS file changed: %s", settingsPath.c_str());
+                    LOG_DEBUGF("[FileUploader] SETTINGS file %s: %s", forceAll ? "included" : "changed", settingsPath.c_str());
                 }
             }
             settingsFile.close();
@@ -563,7 +589,7 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
         LOG_DEBUG("[FileUploader] /SETTINGS directory not found or not accessible");
     }
     
-    LOG_DEBUGF("[FileUploader] Found %d changed root/SETTINGS files", files.size());
+    LOGF("[FileUploader] Found %d root/SETTINGS files to upload%s", files.size(), forceAll ? " (forced for cloud import)" : "");
     
     return files;
 }
@@ -1006,7 +1032,9 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
 }
 
 // Upload a single file (for root and SETTINGS files)
-bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& filePath) {
+// When forceUpload is true, skip the hasFileChanged check (used for cloud imports
+// where SleepHQ needs companion files even if unchanged locally).
+bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& filePath, bool forceUpload) {
     fs::FS &sd = sdManager->getFS();
     LOGF("[FileUploader] Uploading single file: %s", filePath.c_str());
     
@@ -1044,7 +1072,8 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     }
     
     // Check if file has changed (checksum comparison)
-    if (!stateManager->hasFileChanged(sd, filePath)) {
+    // Skip this check when forceUpload is true (cloud imports need companion files)
+    if (!forceUpload && !stateManager->hasFileChanged(sd, filePath)) {
         LOG_DEBUG("[FileUploader] File unchanged, skipping upload");
         return true;  // Not an error, just no need to upload
     }
