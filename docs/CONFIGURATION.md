@@ -158,7 +158,7 @@ https://cloud.example.com/remote.php/dav/files/user/cpap
 | `GMT_OFFSET_HOURS` | integer | No | `0` | Timezone offset from UTC in hours. Examples: PST = `-8`, EST = `-5`, UTC = `0`, CET = `+1`, AEST = `+10`. |
 | `UPLOAD_INTERVAL_MINUTES` | integer | No | `0` | Upload every N minutes instead of once daily. Set to `0` to use the daily schedule (`UPLOAD_HOUR`). When set, `UPLOAD_HOUR` is ignored. Minimum effective value: `1`. |
 | `MAX_DAYS` | integer | No | `0` | Only upload DATALOG folders from the last N days. Set to `0` to upload all data. Requires NTP time sync; if time is unavailable, all folders are processed. **Affects all backends** (SMB, Cloud, WebDAV). |
-| `RECENT_FOLDER_DAYS` | integer | No | `2` | Re-check completed DATALOG folders within the last N days for changed files. Files are compared by MD5 checksum; only changed files are re-uploaded. Useful for catching data that grows during an active sleep session (e.g., today's BRP, PLD files). Minimum: `0` (no re-checking), maximum: `7`. |
+| `RECENT_FOLDER_DAYS` | integer | No | `2` | Re-check completed DATALOG folders within the last N days for new or changed files. See [MAX_DAYS vs RECENT_FOLDER_DAYS](#max_days-vs-recent_folder_days) below. Minimum: `0` (no re-checking), maximum: `7`. |
 
 ### How Scheduling Works
 
@@ -171,6 +171,27 @@ https://cloud.example.com/remote.php/dav/files/user/cpap
 
 **Budget exhaustion retry**: If an upload session runs out of time (hits `SESSION_DURATION_SECONDS`), the device automatically schedules a retry after `2 × SESSION_DURATION_SECONDS` to continue uploading remaining files.
 
+### MAX_DAYS vs RECENT_FOLDER_DAYS
+
+These two settings control different aspects of which DATALOG folders are processed:
+
+| Setting | Question it answers | Affects |
+|---------|-------------------|---------|
+| `MAX_DAYS` | "How far back should I upload?" | Which folders are **eligible** at all |
+| `RECENT_FOLDER_DAYS` | "Which completed folders should I re-check for new or changed files?" | Which **already-completed** folders are re-scanned |
+
+**`MAX_DAYS`** limits the historical scope. With `MAX_DAYS=30`, folders older than 30 days are skipped entirely — they are never uploaded or checked. Set to `0` to upload everything (useful for initial backlog upload).
+
+**`RECENT_FOLDER_DAYS`** handles the fact that the CPAP machine continues writing data to recent folders. For example:
+1. Your 9pm upload session finds folder `20260207` with 2 small files → uploads them → marks the folder **completed**.
+2. By 6am, the CPAP has written 8 more files into the same folder (BRP, PLD, SA2, etc.).
+3. Without `RECENT_FOLDER_DAYS`, that folder is "completed" and **never checked again** — those 8 files are missed.
+4. With `RECENT_FOLDER_DAYS=2`, the next upload session re-scans the folder, discovers the new files, and uploads them.
+
+This is particularly important with **frequent uploads** (`UPLOAD_INTERVAL_MINUTES`), where data is likely to change between sessions. Changed files are detected efficiently using file size comparison (no content reads needed) — only new or grown files are re-uploaded.
+
+Both settings require NTP time sync to function. If time is unavailable, `MAX_DAYS` is ignored (all folders processed) and `RECENT_FOLDER_DAYS` is disabled (no re-scanning).
+
 ---
 
 ## Upload Session
@@ -181,7 +202,7 @@ https://cloud.example.com/remote.php/dav/files/user/cpap
 | `MAX_RETRY_ATTEMPTS` | integer | No | `3` | Maximum number of retry attempts for a single DATALOG folder before skipping it. Resets when the folder is successfully uploaded or when upload state is cleared. |
 | `BOOT_DELAY_SECONDS` | integer | No | `30` | Delay (in seconds) after boot before the first upload attempt. Allows the CPAP machine to initialize and begin writing data. |
 | `SD_RELEASE_INTERVAL_SECONDS` | integer | No | `2` | How often (in seconds) the device temporarily releases the SD card during an upload session, giving the CPAP machine priority access. Lower values are more polite to the CPAP machine but slow uploads. |
-| `SD_RELEASE_WAIT_MS` | integer | No | `500` | How long (in milliseconds) the device waits with the SD card released before reclaiming it. During this time the CPAP machine can read/write. |
+| `SD_RELEASE_WAIT_MS` | integer | No | `1500` | How long (in milliseconds) the device waits with the SD card released before reclaiming it. During this time the CPAP machine can read/write. With the default 2s release interval, this gives a ~57/43 ESP/CPAP split ensuring the CPAP gets adequate write access. |
 
 ### Session Behavior
 
@@ -207,7 +228,7 @@ These options are only relevant when `ENDPOINT_TYPE` includes `CLOUD` or `SLEEPH
 | `CLOUD_CLIENT_ID` | string | **Yes** | — | SleepHQ OAuth client ID. Obtain from your SleepHQ account API settings. |
 | `CLOUD_CLIENT_SECRET` | string | **Yes** | — | SleepHQ OAuth client secret. Automatically migrated to secure flash storage on first boot. |
 | `CLOUD_TEAM_ID` | string | No | auto-discovered | SleepHQ team ID. If omitted, automatically discovered via the `/api/v1/me` endpoint after authentication. Set this to skip the discovery step. |
-| `CLOUD_DEVICE_ID` | integer | No | `0` | Device ID sent to SleepHQ with import creation. |
+| `CLOUD_DEVICE_ID` | integer | No | auto-discovered | SleepHQ device type ID. If omitted, auto-discovered from `/api/v1/devices/` (matches ResMed Series 11 by default). See [Known Device IDs](#known-sleephq-device-ids) below. |
 | `CLOUD_BASE_URL` | string | No | `"https://sleephq.com"` | SleepHQ API base URL. Only change for testing or self-hosted instances. |
 | `CLOUD_INSECURE_TLS` | boolean | No | `false` | Skip TLS certificate validation. **Not recommended for production.** Use only for testing with proxies or custom servers. |
 
@@ -227,6 +248,25 @@ These options are only relevant when `ENDPOINT_TYPE` includes `CLOUD` or `SLEEPH
 5. **Import processing**: After all files are uploaded, the import is submitted for server-side processing
 
 **Required companion files**: SleepHQ requires `STR.edf`, `Identification.json`, `Identification.crc`, and `/SETTINGS/` files alongside DATALOG data to process an import. When a cloud import is active, these files are automatically force-included in every upload session regardless of whether they've changed locally.
+
+### Known SleepHQ Device IDs
+
+The `CLOUD_DEVICE_ID` represents the **type of CPAP machine**, not a specific user's device. These are static IDs assigned by SleepHQ. If omitted, the firmware auto-discovers by fetching `/api/v1/devices/` and matching ResMed Series 11.
+
+| Device ID | Brand | Name |
+|-----------|-------|------|
+| **17** | ResMed | **Series 11 (Elite, AutoSet, etc)** — AirSense 11, AirCurve 11 |
+| 16 | ResMed | Series 10 (AirSense, AirCurve etc) |
+| 18 | ResMed | Series 9 (S9 AutoSet, Lumis, etc) |
+| 295 | Philips Respironics | DreamStation |
+| 3969787 | Philips Respironics | DreamStation 2 |
+| 3605 | Fisher & Paykel | SleepStyle |
+| 69184 | Viatom | O2 Ring (Pulse Oximetry) |
+| 4678013 | Löwenstein | Darth Vader (20A etc) |
+| 4678023 | Löwenstein | Stormtrooper (SMART etc) |
+| 39 | Other/Unknown | Unsupported device (import will likely fail) |
+
+> **Note:** These IDs are not visible anywhere in the SleepHQ web interface and can only be obtained via the API. The list above was retrieved from the live API on February 2026. The firmware auto-discovers by fetching `/api/v1/devices` and matching ResMed Series 11 by default.
 
 **Content hash**: SleepHQ uses `MD5(file_content + filename)` for server-side deduplication. If a file has already been uploaded with the same hash, SleepHQ skips it automatically. This means force-including companion files does not cause redundant data transfer.
 
@@ -351,11 +391,11 @@ These settings reduce current consumption, useful when the CPAP machine's USB po
 | `MAX_RETRY_ATTEMPTS` | integer | `3` | [Session](#upload-session) |
 | `BOOT_DELAY_SECONDS` | integer | `30` | [Session](#upload-session) |
 | `SD_RELEASE_INTERVAL_SECONDS` | integer | `2` | [Session](#upload-session) |
-| `SD_RELEASE_WAIT_MS` | integer | `500` | [Session](#upload-session) |
+| `SD_RELEASE_WAIT_MS` | integer | `1500` | [Session](#upload-session) |
 | `CLOUD_CLIENT_ID` | string | — | [Cloud](#sleephq-cloud-settings) |
 | `CLOUD_CLIENT_SECRET` | string | — | [Cloud](#sleephq-cloud-settings) |
 | `CLOUD_TEAM_ID` | string | auto | [Cloud](#sleephq-cloud-settings) |
-| `CLOUD_DEVICE_ID` | integer | `0` | [Cloud](#sleephq-cloud-settings) |
+| `CLOUD_DEVICE_ID` | integer | auto | [Cloud](#sleephq-cloud-settings) |
 | `CLOUD_BASE_URL` | string | `"https://sleephq.com"` | [Cloud](#sleephq-cloud-settings) |
 | `CLOUD_INSECURE_TLS` | boolean | `false` | [Cloud](#sleephq-cloud-settings) |
 | `CPU_SPEED_MHZ` | integer | `240` | [Power](#power-management) |

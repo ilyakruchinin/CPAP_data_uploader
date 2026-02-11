@@ -47,6 +47,10 @@ private:
     // Helper method for periodic SD card release
     bool checkAndReleaseSD(class SDCardManager* sdManager);
     
+    // Ensure SD card is retaken after a backend released it during network I/O.
+    // Also gives CPAP a guaranteed window between every file upload.
+    bool ensureSdAndReleaseBetweenFiles(class SDCardManager* sdManager);
+    
     // Uploader instances (only compiled if feature flag is enabled)
 #ifdef ENABLE_SMB_UPLOAD
     SMBUploader* smbUploader;
@@ -71,19 +75,20 @@ private:
     bool isRecentFolder(const String& folderName) const;
     
     // Helper: lazily create cloud import session on first actual upload
-    bool ensureCloudImport();
+    bool ensureCloudImport(SDCardManager* sdManager = nullptr);
     bool cloudImportCreated;
     bool cloudImportFailed;  // True if ensureCloudImport() failed; skip cloud backend for session
+    bool companionFilesUploaded;  // True if Phase 2 successfully uploaded root/SETTINGS companion files
     
     // Session management
     bool startUploadSession(fs::FS &sd);
-    void endUploadSession(fs::FS &sd);
+    void endUploadSession(fs::FS &sd, SDCardManager* sdManager = nullptr);
 
 public:
     FileUploader(Config* cfg, WiFiManager* wifi);
     ~FileUploader();
     
-    bool begin(fs::FS &sd);
+    bool begin(fs::FS &sd, SDCardManager* sdManager = nullptr);
     bool shouldUpload();
     bool uploadNewFiles(class SDCardManager* sdManager, bool forceUpload = false);
     bool scanPendingFolders(class SDCardManager* sdManager);  // Scan SD card without uploading
