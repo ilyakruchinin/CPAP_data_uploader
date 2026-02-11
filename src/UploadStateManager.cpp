@@ -97,6 +97,23 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
     return checksumStr;
 }
 
+String UploadStateManager::calculateChecksumFromBuffer(const uint8_t* data, size_t size) {
+    struct MD5Context md5_ctx;
+    MD5Init(&md5_ctx);
+    MD5Update(&md5_ctx, data, size);
+    
+    uint8_t hash[16];
+    MD5Final(hash, &md5_ctx);
+    
+    String checksumStr = "";
+    for (int i = 0; i < 16; i++) {
+        char hex[3];
+        sprintf(hex, "%02x", hash[i]);
+        checksumStr += hex;
+    }
+    return checksumStr;
+}
+
 bool UploadStateManager::hasFileChanged(fs::FS &sd, const String& filePath) {
     // Calculate current checksum
     String currentChecksum = calculateChecksum(sd, filePath);
@@ -117,6 +134,24 @@ bool UploadStateManager::hasFileChanged(fs::FS &sd, const String& filePath) {
 }
 
 void UploadStateManager::markFileUploaded(const String& filePath, const String& checksum) {
+    fileChecksums[filePath] = checksum;
+}
+
+bool UploadStateManager::hasFileSizeChanged(const String& filePath, unsigned long currentSize) {
+    auto it = fileSizes.find(filePath);
+    if (it == fileSizes.end()) {
+        // No stored size — file is new (never uploaded)
+        return true;
+    }
+    return (it->second != currentSize);
+}
+
+void UploadStateManager::markFileUploadedWithSize(const String& filePath, unsigned long size) {
+    fileSizes[filePath] = size;
+}
+
+void UploadStateManager::markFileUploadedWithSize(const String& filePath, unsigned long size, const String& checksum) {
+    fileSizes[filePath] = size;
     fileChecksums[filePath] = checksum;
 }
 
@@ -329,6 +364,24 @@ bool UploadStateManager::loadState(fs::FS &sd) {
     }
 #endif
     
+    // Load file sizes (for size-based change detection)
+    fileSizes.clear();
+#ifdef UNIT_TEST
+    JsonObject sizes = doc.getObject("file_sizes");
+    if (!sizes.isNull()) {
+        for (auto it = sizes.begin(); it != sizes.end(); ++it) {
+            fileSizes[String(it->first.c_str())] = it->second.as<unsigned long>();
+        }
+    }
+#else
+    JsonObject sizes = doc["file_sizes"];
+    if (!sizes.isNull()) {
+        for (JsonPair kv : sizes) {
+            fileSizes[String(kv.key().c_str())] = kv.value().as<unsigned long>();
+        }
+    }
+#endif
+    
     // Load completed folders
     completedDatalogFolders.clear();
 #ifdef UNIT_TEST
@@ -386,7 +439,8 @@ bool UploadStateManager::saveState(fs::FS &sd) {
     size_t estimatedSize = 200 + 
                           (completedDatalogFolders.size() * 30) + 
                           (pendingDatalogFolders.size() * 50) +
-                          (fileChecksums.size() * 100);
+                          (fileChecksums.size() * 100) +
+                          (fileSizes.size() * 60);
     
     // Add 50% overhead for JSON formatting and safety margin
     size_t jsonCapacity = estimatedSize * 3 / 2;
@@ -412,6 +466,12 @@ bool UploadStateManager::saveState(fs::FS &sd) {
     JsonObject checksums = doc.createNestedObject("file_checksums");
     for (const auto& pair : fileChecksums) {
         checksums[pair.first.c_str()] = pair.second.c_str();
+    }
+    
+    // Save file sizes
+    JsonObject sizesObj = doc.createNestedObject("file_sizes");
+    for (const auto& pair : fileSizes) {
+        sizesObj[pair.first.c_str()] = pair.second;
     }
     
     // Save completed folders

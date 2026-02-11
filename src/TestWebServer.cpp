@@ -268,7 +268,7 @@ void TestWebServer::handleRoot() {
             html += "<div style='background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 10px 0;'>";
             html += "<p><strong>Folder:</strong> " + retryFolder + "</p>";
             html += "<p><strong>Attempt:</strong> " + String(retryCount + 1) + " of " + String(maxRetries) + "</p>";
-            html += "<p><strong>Reason:</strong> Upload session time budget exhausted before completing all files.</p>";
+            html += "<p><strong>Reason:</strong> Upload session time budget exhausted before completing all files in this folder.</p>";
             
             // Show retry wait time if waiting
             if (budgetExhaustedRetry && nextUploadRetryTime > millis()) {
@@ -690,15 +690,13 @@ String TestWebServer::getCurrentTimeString() {
     return String(buffer);
 }
 
-// Helper: Get count of pending files (estimate)
+// Helper: Get count of pending DATALOG folders (estimate)
+// Note: This requires SD card access to count files within folders,
+// which we don't have here. Return -1 to indicate "unknown".
 int TestWebServer::getPendingFilesCount() {
     if (!stateManager) {
         return 0;
     }
-    
-    // Count files in incomplete DATALOG folders
-    // Note: This requires SD card access, which we don't have here
-    // Return -1 to indicate "unknown" rather than misleading 0
     return -1;
 }
 

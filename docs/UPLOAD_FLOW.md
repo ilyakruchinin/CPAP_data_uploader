@@ -143,7 +143,9 @@ uploadNewFiles(forceUpload)
   ├─ Scan root files (/, /SETTINGS)
   │    ├─ Cloud import active? ──► force-include ALL files
   │    │    (SleepHQ requires STR.edf, Identification.*, SETTINGS/)
-  │    └─ No cloud import? ──► upload only new/changed files (by MD5)
+  │    ├─ No cloud import? ──► upload only new/changed files (by MD5)
+  │    └─ Changed files found + cloud endpoint? ──► re-scan with
+  │         forceAll=true (Fix 18: ensure companion files included)
   │
   ├─ End session
   │    ├─ Process cloud import (if active)
@@ -160,6 +162,11 @@ uploadNewFiles(forceUpload)
 ```
 scanDatalogFolders()
   │
+  ├─ [DIAG] Log current local date, yesterday's date
+  ├─ [DIAG] Check: today's folder EXISTS/NOT FOUND on SD card
+  ├─ [DIAG] Check: yesterday's folder EXISTS/NOT FOUND on SD card
+  ├─ [DIAG] Raw /DATALOG listing (all entries, no filters)
+  │
   ├─ List /DATALOG directory
   │    └─ Each subfolder is named YYYYMMDD (e.g., 20260210)
   │
@@ -169,7 +176,7 @@ scanDatalogFolders()
   │    │    └─ Folder date < (today - MAX_DAYS)? ──► SKIP
   │    │
   │    ├─ Completed folder check:
-  │    │    ├─ Not completed? ──► INCLUDE
+  │    │    ├─ Not completed? ──► INCLUDE (logged as NEW)
   │    │    ├─ Completed AND within RECENT_FOLDER_DAYS? ──► INCLUDE (re-check)
   │    │    └─ Completed AND older? ──► SKIP
   │    │
@@ -178,6 +185,7 @@ scanDatalogFolders()
   │         ├─ Pending > 7 days still empty? ──► Mark completed (promote)
   │         └─ Pending with new files? ──► INCLUDE (promote to active)
   │
+  ├─ [DIAG] Log summary: total dirs, skipped old, skipped completed, to process
   ├─ Sort: newest date first (prioritize recent data)
   │
   └─ Return folder list
@@ -186,8 +194,9 @@ scanDatalogFolders()
 scanFolderFiles(folderPath)
   │
   ├─ List all files in folder
+  ├─ [DIAG] Log ALL files with sizes (not just .edf)
   │
-  ├─ For each file:
+  ├─ For each .edf file:
   │    ├─ Already uploaded with same checksum? ──► SKIP
   │    └─ New or checksum changed? ──► INCLUDE
   │
@@ -234,16 +243,21 @@ uploadSingleFile(filePath, forceUpload)
   │    │    └─ Upload file via HTTP PUT
   │    │
   │    └─ SleepHQ (if ENDPOINT_TYPE contains "CLOUD"):
-  │         ├─ Skip if cloudImportFailed = true
-  │         ├─ Heap check (need ≥55KB contiguous for TLS)
-  │         │    └─ Low? ──► force tlsClient->stop(), reclaim memory
-  │         ├─ Connect if needed (OAuth auth, setReuse=false)
-  │         ├─ Compute content_hash = MD5(content + filename)
-  │         ├─ Size-lock file (snapshot size at hash time)
-  │         └─ Multipart POST with content_hash + file data
-  │              ├─ File ≤ 48KB AND heap sufficient: in-memory assembly
-  │              ├─ File ≤ 48KB BUT heap tight: fall through to streaming
-  │              └─ File > 48KB: streaming upload (Connection: close)
+         ├─ Skip if cloudImportFailed = true
+         ├─ Full TLS client destroy/recreate (Fix 20: fight heap fragmentation)
+         ├─ Connect if needed (OAuth auth, setReuse=false)
+         ├─ Compute content_hash = MD5(content + filename)
+         ├─ Size-lock file (snapshot size at hash time)
+         ├─ Multipart POST with content_hash + file data
+         │    ├─ Path format: "./DATALOG/20260210/" (API spec)
+         │    ├─ File ≤ 48KB AND heap sufficient: in-memory assembly
+         │    ├─ File ≤ 48KB BUT heap tight: fall through to streaming
+         │    └─ File > 48KB: streaming upload (Connection: close)
+         │
+         └─ NOTE: Upload-time hash verification is impossible
+              (SleepHQ echoes declared hash in 201 response regardless
+               of data integrity — corruption detected only server-side
+               during import processing)
   │
   ├─ All backends succeeded?
   │    ├─ YES: Mark file uploaded (store checksum)
@@ -275,11 +289,20 @@ ensureCloudImport() ◄── called on first file upload
   │
   ├─ Discover team_id (if not configured):
   │    ├─ GET /api/v1/me (with Bearer token)
-  │    └─ Extract team_id from response
+  │    └─ Extract current_team_id from response
+  │
+  ├─ Discover machine info (Fix 19):
+  │    ├─ GET /api/v1/teams/{team_id}/machines
+  │    └─ Log model, brand, serial_number, name
+  │
+  ├─ Discover device_id (if not configured — Fix 19):
+  │    ├─ GET /api/v1/devices (static device TYPE catalog)
+  │    ├─ Auto-match: brand="ResMed" + name contains "Series 11"
+  │    └─ Fall back: log all device types for manual config
   │
   ├─ Create import:
-  │    ├─ POST /api/v1/team/{team_id}/imports
-  │    │    body: device_id, programmatic=true
+  │    ├─ POST /api/v1/teams/{team_id}/imports
+  │    │    body: device_id, name="{machineName} Auto-Upload"
   │    ├─ Parse import_id from response
   │    └─ Set cloudImportCreated = true
   │
@@ -288,28 +311,59 @@ ensureCloudImport() ◄── called on first file upload
        └─ Log warning (cloud skipped, other backends continue)
 
 
-For each file:
+For each DATALOG file (Fix 22):
   │
-  ├─ Compute content_hash:
-  │    ├─ Open file, snapshot size
-  │    ├─ MD5 hash exactly snapshotSize bytes
-  │    ├─ Append filename to hash
-  │    └─ Return hex digest + hashedSize
+  ├─ Size-based change detection (metadata only, no SD read):
+  │    ├─ file.size() vs stored size from last upload
+  │    ├─ Size unchanged ──► skip (DATALOG files are append-only)
+  │    └─ Size changed or new file ──► needs upload
   │
-  ├─ Upload file:
-  │    POST /api/v1/team/{team_id}/imports/{import_id}/files
-  │    Content-Type: multipart/form-data
-  │    Parts: name, path, content_hash, file (size-locked to hashedSize)
+  ├─ Single-read upload with progressive hash (Fix 22):
+  │    ├─ Open file, lock size
+  │    │
+  │    ├─ In-memory path (≤48KB — most CPAP files):
+  │    │    ├─ Allocate payload buffer
+  │    │    ├─ Read file into buffer (single SD read)
+  │    │    ├─ Compute MD5(content + filename) from buffer
+  │    │    ├─ Assemble multipart: name → path → file → content_hash
+  │    │    ├─ Release SD card
+  │    │    └─ HTTP POST (CPAP has SD during entire upload)
+  │    │
+  │    └─ Streaming path (>48KB — large BRP/PLD files):
+  │         ├─ Connect TLS, send HTTP headers + preamble
+  │         ├─ Loop per chunk (~4KB):
+  │         │    ├─ Take SD → read chunk → release SD
+  │         │    ├─ MD5Update with chunk (CPU only)
+  │         │    └─ Send chunk over TLS (CPAP has SD)
+  │         ├─ Finalize MD5(content + filename) → hash
+  │         ├─ Send content_hash as final multipart field
+  │         └─ Wait for response (CPAP has SD)
   │
-  └─ SleepHQ deduplication:
-       └─ If content_hash already exists on server ──► file skipped (HTTP 200)
+  │    Multipart body structure (hash AFTER file):
+  │      name, path, file content, content_hash
+  │
+  │    ├─ HTTP 201 ──► new file uploaded
+  │    └─ HTTP 200 ──► file already on server (dedup, logged as skipped)
+  │
+  ├─ Store file size for next-session change detection
+  │    (no post-upload checksum read needed for DATALOG)
+  │
+  └─ Release SD + CPAP window between files (Fix 21)
+
+
+For each root/SETTINGS file:
+  │
+  ├─ Hash-based change detection (reads file for MD5):
+  │    └─ Content may change in-place, size alone insufficient
+  │
+  └─ Same single-read upload as above
 
 
 Session End
   │
   └─ processImport():
-       ├─ PUT /api/v1/team/{team_id}/imports/{import_id}/process
-       └─ Triggers server-side data processing
+       ├─ POST /api/v1/imports/{import_id}/process_files
+       └─ Server-side hash validation detects any corruption
 ```
 
 ---
@@ -351,44 +405,72 @@ loadFromSD()
 
 ## SD Card Sharing
 
-The device shares the SD card with the CPAP machine using a cooperative time-slicing approach.
+The device shares the SD card with the CPAP machine using cooperative time-slicing, batch reads, and aggressive release during network I/O. The goal is to minimize SPI bus hold time so the CPAP can write therapy data uninterrupted.
+
+**Important:** `SD_MMC.end()` in `releaseControl()` unmounts the entire filesystem, invalidating all open file handles. SD can only be released when no files are open.
 
 ```
-┌──────────────────────────────────────────────────┐
-│              SD Card Timeline                     │
-│                                                   │
-│  CPAP owns card ──► Device takes control          │
-│                      │                            │
-│   ┌──────────────────┼────────────────────────┐   │
-│   │  Upload Session  │                        │   │
-│   │                  ▼                        │   │
-│   │  ┌─ Upload file(s) ─┐                    │   │
-│   │  │  (2 sec default)  │                    │   │
-│   │  └──────┬────────────┘                    │   │
-│   │         │                                 │   │
-│   │         ▼                                 │   │
-│   │  ┌─ Release SD card ─┐                   │   │
-│   │  │  (500 ms default)  │ ◄─ CPAP can      │   │
-│   │  │                    │    read/write     │   │
-│   │  └──────┬─────────────┘                   │   │
-│   │         │                                 │   │
-│   │         ▼                                 │   │
-│   │  ┌─ Reclaim SD card ─┐                   │   │
-│   │  │  Upload more files │                   │   │
-│   │  └──────┬─────────────┘                   │   │
-│   │         │                                 │   │
-│   │         ▼                                 │   │
-│   │  ... repeat until budget exhausted ...    │   │
-│   │         │                                 │   │
-│   │         ▼                                 │   │
-│   │  Release SD card ──► CPAP owns card       │   │
-│   └───────────────────────────────────────────┘   │
-│                                                   │
-│  Timing (configurable):                           │
-│  SD_RELEASE_INTERVAL_SECONDS: how long to hold    │
-│  SD_RELEASE_WAIT_MS: how long to release          │
-│  SESSION_DURATION_SECONDS: total session budget   │
-└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│     SD Card Timeline — Batch Mode (cloud-only, Fix 23)   │
+│                                                          │
+│  CPAP owns card ──► ESP takes control (mount ~600ms)     │
+│                      │                                   │
+│   ┌──────────────────┼──────────────────────────────┐    │
+│   │  Batch Read      │                              │    │
+│   │                  ▼                              │    │
+│   │  ┌─ Read N small files into 48KB buffer ──┐    │    │
+│   │  │  File 1: read → buffer[0..768]         │    │    │
+│   │  │  File 2: read → buffer[769..772]       │    │    │
+│   │  │  File 3: read → buffer[773..3166]      │    │    │
+│   │  │  ... all small files in single SD hold │    │    │
+│   │  └──────┬────────────────────────────────┘     │    │
+│   │         │                                      │    │
+│   │         ▼                                      │    │
+│   │  ┌─ Release SD card ──────────────────────┐   │    │
+│   │  │  Upload all N files from RAM buffer:   │   │    │
+│   │  │  uploadFromBuffer() × N (no SD needed) │   │    │
+│   │  │  CPAP has SD for entire upload phase   │   │    │
+│   │  └──────┬─────────────────────────────────┘   │    │
+│   │         │                                      │    │
+│   │         ▼                                      │    │
+│   │  ┌─ Retake SD for state save ────────────┐    │    │
+│   │  │  Mark all N files uploaded, save state │    │    │
+│   │  └──────┬────────────────────────────────┘    │    │
+│   │         │                                      │    │
+│   │         ▼                                      │    │
+│   │  ┌─ CPAP window (Fix 21) ────────────────┐   │    │
+│   │  │  Release SD for SD_RELEASE_WAIT_MS     │   │    │
+│   │  └──────┬─────────────────────────────────┘   │    │
+│   │         │                                      │    │
+│   │         ▼                                      │    │
+│   │  ... next batch or large file ...              │    │
+│   └────────────────────────────────────────────────┘    │
+│                                                          │
+│     SD Card Timeline — Streaming (>48KB files)           │
+│                                                          │
+│   ┌────────────────────────────────────────────────┐    │
+│   │  Release SD during TLS handshake (~2-3s)       │    │
+│   │  Retake SD → open file → stream all data       │    │
+│   │  (SD held during file I/O — unavoidable)       │    │
+│   │  Close file → release SD                       │    │
+│   │  Send hash + wait for response (SD released)   │    │
+│   └────────────────────────────────────────────────┘    │
+│                                                          │
+│  Session end:                                            │
+│  Release SD → processImport() (network) → retake SD     │
+│  Save state → print statistics → release SD              │
+│                                                          │
+│  Timing (configurable):                                  │
+│  SD_RELEASE_INTERVAL_SECONDS: periodic release (2s)      │
+│  SD_RELEASE_WAIT_MS: CPAP window duration (1500ms)       │
+│  SESSION_DURATION_SECONDS: total session budget (300s)   │
+│                                                          │
+│  Effective CPAP SD access during uploads:                │
+│  • Batched small files: ~95% (SD held only for reads)    │
+│  • Streaming files: ~60% (SD held during file stream)    │
+│  • Between batches/files: 100% for 1500ms guaranteed     │
+│  • Session end: 100% during processImport()              │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ---

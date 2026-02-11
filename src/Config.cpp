@@ -491,7 +491,7 @@ bool Config::loadFromSD(fs::FS &sd) {
     gmtOffsetHours = doc["GMT_OFFSET_HOURS"] | 0;
     bootDelaySeconds = doc["BOOT_DELAY_SECONDS"] | 30;
     sdReleaseIntervalSeconds = doc["SD_RELEASE_INTERVAL_SECONDS"] | 2;
-    sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 500;
+    sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 1500;
     logToSdCard = doc["LOG_TO_SD_CARD"] | false;
     
     // Cloud upload settings

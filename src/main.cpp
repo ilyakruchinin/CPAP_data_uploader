@@ -211,14 +211,15 @@ void setup() {
     uploader = new FileUploader(&config, &wifiManager);
     
     // Take control of SD card to initialize uploader components
+    // begin() releases SD internally after state load, before NTP sync
     LOG("Initializing uploader...");
     if (sdManager.takeControl()) {
-        if (!uploader->begin(sdManager.getFS())) {
+        if (!uploader->begin(sdManager.getFS(), &sdManager)) {
             LOG_ERROR("Failed to initialize uploader");
-            sdManager.releaseControl();
+            if (sdManager.hasControl()) sdManager.releaseControl();
             return;
         }
-        sdManager.releaseControl();
+        if (sdManager.hasControl()) sdManager.releaseControl();
         LOG("Uploader initialized successfully");
     } else {
         LOG_ERROR("Failed to take SD card control for uploader initialization");
@@ -353,7 +354,7 @@ void loop() {
             if (uploader) {
                 delete uploader;
                 uploader = new FileUploader(&config, &wifiManager);
-                if (uploader->begin(sdManager.getFS())) {
+                if (uploader->begin(sdManager.getFS(), &sdManager)) {
                     LOG("Uploader reinitialized with fresh state");
                     
                     // Update TestWebServer with new manager references
