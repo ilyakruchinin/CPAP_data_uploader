@@ -1,36 +1,21 @@
 {
-  "_comment": "=== WiFi Settings (required) ===",
   "WIFI_SSID": "YourNetworkName",
   "WIFI_PASS": "YourNetworkPassword",
 
-  "_comment_endpoint": "=== Upload Endpoint (at least one backend required) ===",
-  "_comment_endpoint_type": "ENDPOINT_TYPE: 'SMB', 'CLOUD', 'WEBDAV', or comma-separated e.g. 'SMB,CLOUD'",
   "ENDPOINT": "//192.168.1.100/cpap_backups",
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
-
-  "_comment_schedule": "=== Upload Schedule ===",
   "UPLOAD_HOUR": 12,
-  "_comment_timezone": "GMT_OFFSET_HOURS: Offset from GMT. Examples: PST=-8, EST=-5, UTC=0, CET=+1, AEST=+10",
+
+  "SESSION_DURATION_SECONDS": 30,
+  "MAX_RETRY_ATTEMPTS": 3,
+  "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
   "GMT_OFFSET_HOURS": 0,
 
-  "_comment_session": "=== Upload Session ===",
-  "SESSION_DURATION_SECONDS": 300,
-  "MAX_RETRY_ATTEMPTS": 3,
-  "BOOT_DELAY_SECONDS": 30,
-  "SD_RELEASE_INTERVAL_SECONDS": 2,
-  "SD_RELEASE_WAIT_MS": 500,
-
-  "_comment_power": "=== Power Management ===",
-  "CPU_SPEED_MHZ": 240,
-  "WIFI_TX_PWR": "high",
-  "WIFI_PWR_SAVING": "none",
-
-  "_comment_debug": "=== Debugging ===",
   "LOG_TO_SD_CARD": false,
 
-  "_comment_security": "=== Credential Security ===",
-  "_comment_security_2": "Omit or set to false for secure mode (credentials stored in ESP32 flash)",
-  "STORE_CREDENTIALS_PLAIN_TEXT": false
+  "CPU_SPEED_MHZ": 240,
+  "WIFI_TX_PWR": "high",
+  "WIFI_PWR_SAVING": "none"
 }

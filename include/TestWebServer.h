@@ -9,6 +9,7 @@
 #include "ScheduleManager.h"
 #include "WiFiManager.h"
 #include "CPAPMonitor.h"
+#include "TrafficMonitor.h"
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -20,6 +21,8 @@ extern volatile bool g_resetStateFlag;
 extern volatile bool g_scanNowFlag;
 extern volatile bool g_deltaScanFlag;
 extern volatile bool g_deepScanFlag;
+extern volatile bool g_monitorActivityFlag;
+extern volatile bool g_stopMonitorFlag;
 
 class TestWebServer {
 private:
@@ -30,6 +33,7 @@ private:
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
     CPAPMonitor* cpapMonitor;
+    TrafficMonitor* trafficMonitor;
     
 #ifdef ENABLE_OTA_UPDATES
     OTAManager* otaManager;
@@ -46,6 +50,10 @@ private:
     void handleConfig();
     void handleLogs();
     void handleNotFound();
+    void handleMonitorStart();
+    void handleMonitorStop();
+    void handleSdActivity();
+    void handleMonitorPage();
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -78,6 +86,7 @@ public:
     // Update manager references (needed after uploader recreation)
     void updateManagers(UploadStateManager* state, TimeBudgetManager* budget, ScheduleManager* schedule);
     void setWiFiManager(WiFiManager* wifi);
+    void setTrafficMonitor(TrafficMonitor* tm);
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA manager access

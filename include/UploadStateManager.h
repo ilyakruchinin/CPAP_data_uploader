@@ -11,7 +11,6 @@ private:
     String stateFilePath;
     unsigned long lastUploadTimestamp;
     std::map<String, String> fileChecksums;
-    std::map<String, unsigned long> fileSizes;  // For size-based change detection (DATALOG append-only files)
     std::set<String> completedDatalogFolders;
     std::map<String, unsigned long> pendingDatalogFolders;  // folderName -> firstSeenTimestamp
     String currentRetryFolder;
@@ -25,7 +24,6 @@ private:
 
 public:
     String calculateChecksum(fs::FS &sd, const String& filePath);
-    String calculateChecksumFromBuffer(const uint8_t* data, size_t size);
     UploadStateManager();
     
     bool begin(fs::FS &sd);
@@ -33,11 +31,6 @@ public:
     // Checksum-based tracking for root/SETTINGS files
     bool hasFileChanged(fs::FS &sd, const String& filePath);
     void markFileUploaded(const String& filePath, const String& checksum);
-    
-    // Size-based tracking for DATALOG append-only files (no SD read needed)
-    bool hasFileSizeChanged(const String& filePath, unsigned long currentSize);
-    void markFileUploadedWithSize(const String& filePath, unsigned long size);
-    void markFileUploadedWithSize(const String& filePath, unsigned long size, const String& checksum);
     
     // Folder-based tracking for DATALOG
     bool isFolderCompleted(const String& folderName);

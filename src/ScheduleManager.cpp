@@ -3,27 +3,44 @@
 #include <ESP32Ping.h>
 
 ScheduleManager::ScheduleManager() :
+    uploadStartHour(8),
+    uploadEndHour(22),
+    uploadMode("scheduled"),
     uploadHour(12),
+    uploadCompletedToday(false),
+    lastCompletedDay(-1),
     lastUploadTimestamp(0),
     ntpSynced(false),
     ntpServer("pool.ntp.org"),
     gmtOffsetHours(0)
 {}
 
-bool ScheduleManager::begin(int uploadHour, int gmtOffsetHours) {
-    this->uploadHour = uploadHour;
-    this->gmtOffsetHours = gmtOffsetHours;
+bool ScheduleManager::begin(const String& mode, int startHour, int endHour, int gmtOffset) {
+    this->uploadMode = mode;
+    this->uploadStartHour = startHour;
+    this->uploadEndHour = endHour;
+    this->gmtOffsetHours = gmtOffset;
     
-    // Validate upload hour
+    // Also set legacy uploadHour for backward compat
+    this->uploadHour = startHour;
+    
+    LOGF("[Schedule] Mode: %s, Window: %d:00-%d:00, GMT%+d",
+         mode.c_str(), startHour, endHour, gmtOffset);
+    
+    syncTime();
+    return true;
+}
+
+bool ScheduleManager::begin(int uploadHour, int gmtOffsetHours) {
+    // Legacy overload: create a 2-hour window from the single upload hour
+    this->uploadHour = uploadHour;
+    
     if (uploadHour < 0 || uploadHour > 23) {
         LOG("Invalid upload hour, using default (12)");
         this->uploadHour = 12;
     }
     
-    // Attempt to synchronize time with NTP server
-    syncTime();
-    
-    return true;
+    return begin("scheduled", this->uploadHour, (this->uploadHour + 2) % 24, gmtOffsetHours);
 }
 
 bool ScheduleManager::syncTime() {
@@ -92,73 +109,102 @@ bool ScheduleManager::syncTime() {
     return false;
 }
 
+// ============================================================================
+// Window-based scheduling (new FSM methods)
+// ============================================================================
+
+bool ScheduleManager::isInUploadWindow() {
+    if (!ntpSynced) return false;
+    
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) return false;
+    
+    int currentHour = timeinfo.tm_hour;
+    
+    if (uploadStartHour <= uploadEndHour) {
+        // Normal window: e.g., 8-22
+        return currentHour >= uploadStartHour && currentHour < uploadEndHour;
+    } else {
+        // Cross-midnight window: e.g., 22-6
+        return currentHour >= uploadStartHour || currentHour < uploadEndHour;
+    }
+}
+
+bool ScheduleManager::canUploadFreshData() {
+    if (!ntpSynced) return false;
+    
+    if (isSmartMode()) {
+        // Smart mode: fresh data can upload anytime
+        return true;
+    }
+    // Scheduled mode: fresh data only within upload window
+    return isInUploadWindow();
+}
+
+bool ScheduleManager::canUploadOldData() {
+    if (!ntpSynced) return false;
+    
+    // Both modes: old data only within upload window
+    return isInUploadWindow();
+}
+
+bool ScheduleManager::isUploadEligible(bool hasFreshData, bool hasOldData) {
+    if (!ntpSynced) return false;
+    
+    // In scheduled mode, check if already completed today
+    if (!isSmartMode() && isDayCompleted()) {
+        return false;
+    }
+    
+    // Check if any data category is eligible right now
+    if (hasFreshData && canUploadFreshData()) return true;
+    if (hasOldData && canUploadOldData()) return true;
+    
+    return false;
+}
+
+void ScheduleManager::markDayCompleted() {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        lastCompletedDay = timeinfo.tm_yday;
+        uploadCompletedToday = true;
+    }
+    lastUploadTimestamp = time(nullptr);
+    LOGF("[Schedule] Day marked as completed (yday=%d)", lastCompletedDay);
+}
+
+bool ScheduleManager::isDayCompleted() {
+    if (!uploadCompletedToday) return false;
+    
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) return false;
+    
+    // Reset if we're on a new day
+    if (timeinfo.tm_yday != lastCompletedDay) {
+        uploadCompletedToday = false;
+        return false;
+    }
+    return true;
+}
+
+// ============================================================================
+// Legacy methods (delegate to new logic)
+// ============================================================================
+
 bool ScheduleManager::isUploadTime() {
     if (!ntpSynced) {
         LOG("Time not synced, cannot check upload schedule");
         return false;
     }
     
-    time_t now = time(nullptr);
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo)) {
-        LOG("Failed to get local time");
-        return false;
-    }
-    
-    // Check if we're in the upload hour
-    if (timeinfo.tm_hour != uploadHour) {
-        return false;
-    }
-    
-    // Check if we've already uploaded today
-    // Convert lastUploadTimestamp to tm struct
-    if (lastUploadTimestamp > 0) {
-        time_t lastUpload = lastUploadTimestamp;
-        struct tm lastUploadInfo;
-        localtime_r(&lastUpload, &lastUploadInfo);
-        
-        // If we uploaded today already, don't upload again
-        if (timeinfo.tm_year == lastUploadInfo.tm_year &&
-            timeinfo.tm_mon == lastUploadInfo.tm_mon &&
-            timeinfo.tm_mday == lastUploadInfo.tm_mday) {
-            return false;
-        }
-    }
-    
-    return true;
+    // Use new window check + day completion
+    if (isDayCompleted()) return false;
+    return isInUploadWindow();
 }
 
 void ScheduleManager::markUploadCompleted() {
-    lastUploadTimestamp = time(nullptr);
+    markDayCompleted();
     LOGF("Upload marked as completed at timestamp: %lu", lastUploadTimestamp);
-}
-
-unsigned long ScheduleManager::calculateNextUploadTime() {
-    if (!ntpSynced) {
-        return 0;
-    }
-    
-    time_t now = time(nullptr);
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo)) {
-        return 0;
-    }
-    
-    // Create a tm struct for the next upload time
-    struct tm nextUpload = timeinfo;
-    nextUpload.tm_hour = uploadHour;
-    nextUpload.tm_min = 0;
-    nextUpload.tm_sec = 0;
-    
-    // If current time is past the upload hour today, schedule for tomorrow
-    if (timeinfo.tm_hour >= uploadHour) {
-        nextUpload.tm_mday += 1;
-    }
-    
-    // Convert to time_t
-    time_t nextUploadTime = mktime(&nextUpload);
-    
-    return (unsigned long)nextUploadTime;
 }
 
 unsigned long ScheduleManager::getSecondsUntilNextUpload() {
@@ -166,15 +212,38 @@ unsigned long ScheduleManager::getSecondsUntilNextUpload() {
         return 0;
     }
     
-    unsigned long nextUploadTime = calculateNextUploadTime();
-    time_t now = time(nullptr);
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) return 0;
     
-    if (nextUploadTime > (unsigned long)now) {
-        return nextUploadTime - (unsigned long)now;
+    // Calculate seconds until upload window opens
+    int currentHour = timeinfo.tm_hour;
+    int hoursUntil;
+    
+    if (uploadStartHour <= uploadEndHour) {
+        // Normal window
+        if (currentHour < uploadStartHour) {
+            hoursUntil = uploadStartHour - currentHour;
+        } else if (currentHour >= uploadEndHour) {
+            hoursUntil = (24 - currentHour) + uploadStartHour;
+        } else {
+            return 0; // Currently in window
+        }
+    } else {
+        // Cross-midnight window
+        if (currentHour >= uploadStartHour || currentHour < uploadEndHour) {
+            return 0; // Currently in window
+        }
+        hoursUntil = uploadStartHour - currentHour;
+        if (hoursUntil < 0) hoursUntil += 24;
     }
     
-    return 0;
+    // Approximate: hours * 3600 minus current minutes/seconds
+    return (unsigned long)hoursUntil * 3600 - timeinfo.tm_min * 60 - timeinfo.tm_sec;
 }
+
+// ============================================================================
+// Time utilities
+// ============================================================================
 
 bool ScheduleManager::isTimeSynced() const {
     return ntpSynced;
@@ -206,3 +275,12 @@ String ScheduleManager::getCurrentLocalTime() const {
     
     return String(buffer);
 }
+
+// ============================================================================
+// Getters for web UI
+// ============================================================================
+
+const String& ScheduleManager::getUploadMode() const { return uploadMode; }
+int ScheduleManager::getUploadStartHour() const { return uploadStartHour; }
+int ScheduleManager::getUploadEndHour() const { return uploadEndHour; }
+bool ScheduleManager::isSmartMode() const { return uploadMode == "smart"; }

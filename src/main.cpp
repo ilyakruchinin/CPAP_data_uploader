@@ -8,6 +8,8 @@
 #include "pins_config.h"
 #include "version.h"
 
+#include "TrafficMonitor.h"
+
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
 #endif
@@ -24,6 +26,7 @@ Config config;
 SDCardManager sdManager;
 WiFiManager wifiManager;
 FileUploader* uploader = nullptr;
+TrafficMonitor trafficMonitor;
 
 #ifdef ENABLE_OTA_UPDATES
 OTAManager otaManager;
@@ -35,19 +38,47 @@ CPAPMonitor* cpapMonitor = nullptr;
 #endif
 
 // ============================================================================
-// Global State
+// Upload FSM State
+// ============================================================================
+enum class UploadState {
+    IDLE,
+    LISTENING,
+    ACQUIRING,
+    UPLOADING,
+    RELEASING,
+    COOLDOWN,
+    COMPLETE,
+    MONITORING
+};
+
+UploadState currentState = UploadState::IDLE;
+unsigned long stateEnteredAt = 0;
+unsigned long cooldownStartedAt = 0;
+bool freshDataRemaining = false;
+bool oldDataRemaining = false;
+bool uploadCycleHadTimeout = false;
+
+// Monitoring mode flags
+bool monitoringRequested = false;
+bool stopMonitoringRequested = false;
+
+// IDLE state periodic check
+unsigned long lastIdleCheck = 0;
+const unsigned long IDLE_CHECK_INTERVAL_MS = 60000;  // 60 seconds
+
+// ============================================================================
+// Global State (legacy + shared)
 // ============================================================================
 unsigned long lastNtpSyncAttempt = 0;
 const unsigned long NTP_RETRY_INTERVAL_MS = 5 * 60 * 1000;  // 5 minutes
 
-// Retry timing (accessible by web server)
-unsigned long nextUploadRetryTime = 0;
-bool budgetExhaustedRetry = false;  // True if waiting due to budget exhaustion
-
 unsigned long lastWifiReconnectAttempt = 0;
-unsigned long lastUploadCheck = 0;
 unsigned long lastSdCardRetry = 0;
-unsigned long lastIntervalUploadTime = 0;  // For UPLOAD_INTERVAL_MINUTES scheduling
+
+// Legacy variables still referenced by TestWebServer.cpp (will be replaced in Phase 7)
+unsigned long nextUploadRetryTime = 0;
+bool budgetExhaustedRetry = false;
+unsigned long lastIntervalUploadTime = 0;
 
 // SD card logging periodic dump timing
 unsigned long lastLogDumpTime = 0;
@@ -63,7 +94,34 @@ extern volatile bool g_deepScanFlag;
 
 // External scan status flag
 extern volatile bool g_scanInProgress;
+
+// New monitoring trigger flags (defined in TestWebServer.cpp)
+extern volatile bool g_monitorActivityFlag;
+extern volatile bool g_stopMonitorFlag;
 #endif
+
+// ============================================================================
+// FSM Helper: State name for logging
+// ============================================================================
+const char* getStateName(UploadState state) {
+    switch (state) {
+        case UploadState::IDLE: return "IDLE";
+        case UploadState::LISTENING: return "LISTENING";
+        case UploadState::ACQUIRING: return "ACQUIRING";
+        case UploadState::UPLOADING: return "UPLOADING";
+        case UploadState::RELEASING: return "RELEASING";
+        case UploadState::COOLDOWN: return "COOLDOWN";
+        case UploadState::COMPLETE: return "COMPLETE";
+        case UploadState::MONITORING: return "MONITORING";
+        default: return "UNKNOWN";
+    }
+}
+
+void transitionTo(UploadState newState) {
+    LOGF("[FSM] %s -> %s", getStateName(currentState), getStateName(newState));
+    currentState = newState;
+    stateEnteredAt = millis();
+}
 
 // ============================================================================
 // Helper Functions
@@ -143,6 +201,9 @@ void setup() {
         LOG("Failed to initialize SD card manager");
         return;
     }
+    
+    // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
+    trafficMonitor.begin(CS_SENSE);
 
     // Boot delay - wait for CPAP machine to finish booting and release SD card
     // This delay is applied before first SD card access attempt
@@ -211,15 +272,14 @@ void setup() {
     uploader = new FileUploader(&config, &wifiManager);
     
     // Take control of SD card to initialize uploader components
-    // begin() releases SD internally after state load, before NTP sync
     LOG("Initializing uploader...");
     if (sdManager.takeControl()) {
-        if (!uploader->begin(sdManager.getFS(), &sdManager)) {
+        if (!uploader->begin(sdManager.getFS())) {
             LOG_ERROR("Failed to initialize uploader");
-            if (sdManager.hasControl()) sdManager.releaseControl();
+            sdManager.releaseControl();
             return;
         }
-        if (sdManager.hasControl()) sdManager.releaseControl();
+        sdManager.releaseControl();
         LOG("Uploader initialized successfully");
     } else {
         LOG_ERROR("Failed to take SD card control for uploader initialization");
@@ -291,6 +351,10 @@ void setup() {
         LOG_DEBUG("OTA manager linked to web server");
 #endif
         
+        // Set TrafficMonitor reference in web server for SD Activity Monitor
+        testWebServer->setTrafficMonitor(&trafficMonitor);
+        LOG_DEBUG("TrafficMonitor linked to web server");
+        
         // Set web server reference in uploader for responsive handling during uploads
         if (uploader) {
             uploader->setWebServer(testWebServer);
@@ -305,21 +369,182 @@ void setup() {
 }
 
 // ============================================================================
+// FSM State Handlers
+// ============================================================================
+
+void handleIdle() {
+    unsigned long now = millis();
+    if (now - lastIdleCheck < IDLE_CHECK_INTERVAL_MS) return;
+    lastIdleCheck = now;
+    
+    if (!uploader || !uploader->getScheduleManager()) return;
+    
+    ScheduleManager* sm = uploader->getScheduleManager();
+    
+    // Check data availability from last known state (no SD access needed)
+    freshDataRemaining = uploader->hasIncompleteFolders();  // Approximate
+    oldDataRemaining = freshDataRemaining;  // Will be refined during upload
+    
+    if (sm->isUploadEligible(freshDataRemaining, oldDataRemaining)) {
+        transitionTo(UploadState::LISTENING);
+    }
+}
+
+void handleListening() {
+    // TrafficMonitor.update() is called in main loop before FSM dispatch
+    uint32_t inactivityMs = (uint32_t)config.getInactivitySeconds() * 1000UL;
+    
+    if (trafficMonitor.isIdleFor(inactivityMs)) {
+        LOGF("[FSM] %ds of bus silence confirmed", config.getInactivitySeconds());
+        transitionTo(UploadState::ACQUIRING);
+        return;
+    }
+    
+    // Check if still eligible (window might have closed)
+    ScheduleManager* sm = uploader->getScheduleManager();
+    if (!sm->isUploadEligible(freshDataRemaining, oldDataRemaining)) {
+        LOG("[FSM] No longer eligible to upload (window closed or no data)");
+        transitionTo(UploadState::IDLE);
+    }
+}
+
+void handleAcquiring() {
+    if (sdManager.takeControl()) {
+        LOG("[FSM] SD card control acquired");
+        transitionTo(UploadState::UPLOADING);
+    } else {
+        LOG_WARN("[FSM] Failed to acquire SD card, releasing to cooldown");
+        transitionTo(UploadState::RELEASING);
+    }
+}
+
+void handleUploading() {
+    if (!uploader) {
+        transitionTo(UploadState::RELEASING);
+        return;
+    }
+    
+    // Determine data filter based on what's eligible right now
+    ScheduleManager* sm = uploader->getScheduleManager();
+    DataFilter filter;
+    bool canFresh = sm->canUploadFreshData();
+    bool canOld = sm->canUploadOldData();
+    
+    if (canFresh && canOld) {
+        filter = DataFilter::ALL_DATA;
+    } else if (canFresh) {
+        filter = DataFilter::FRESH_ONLY;
+    } else if (canOld) {
+        filter = DataFilter::OLD_ONLY;
+    } else {
+        LOG_WARN("[FSM] No data category eligible, releasing");
+        transitionTo(UploadState::RELEASING);
+        return;
+    }
+    
+    int maxMinutes = config.getExclusiveAccessMinutes();
+    UploadResult result = uploader->uploadWithExclusiveAccess(&sdManager, maxMinutes, filter);
+    
+    switch (result) {
+        case UploadResult::COMPLETE:
+            transitionTo(UploadState::COMPLETE);
+            break;
+        case UploadResult::TIMEOUT:
+            uploadCycleHadTimeout = true;
+            transitionTo(UploadState::RELEASING);
+            break;
+        case UploadResult::ERROR:
+            LOG_ERROR("[FSM] Upload error occurred");
+            transitionTo(UploadState::RELEASING);
+            break;
+    }
+}
+
+void handleReleasing() {
+    if (sdManager.hasControl()) {
+        sdManager.releaseControl();
+    }
+    cooldownStartedAt = millis();
+    transitionTo(UploadState::COOLDOWN);
+}
+
+void handleCooldown() {
+    unsigned long cooldownMs = (unsigned long)config.getCooldownMinutes() * 60UL * 1000UL;
+    
+    if (millis() - cooldownStartedAt < cooldownMs) {
+        return;  // Non-blocking wait
+    }
+    
+    LOGF("[FSM] Cooldown complete (%d minutes)", config.getCooldownMinutes());
+    
+    if (uploadCycleHadTimeout) {
+        // More files to upload — go back to listening for inactivity
+        uploadCycleHadTimeout = false;
+        
+        ScheduleManager* sm = uploader->getScheduleManager();
+        if (sm->isUploadEligible(true, true)) {
+            trafficMonitor.resetIdleTracking();
+            transitionTo(UploadState::LISTENING);
+        } else {
+            LOG("[FSM] No longer eligible after cooldown");
+            transitionTo(UploadState::IDLE);
+        }
+    } else {
+        transitionTo(UploadState::IDLE);
+    }
+}
+
+void handleComplete() {
+    ScheduleManager* sm = uploader->getScheduleManager();
+    
+    if (sm->isSmartMode()) {
+        // Smart mode: cooldown then re-scan for new fresh data
+        LOG("[FSM] Smart mode complete — entering cooldown before re-scan");
+        uploadCycleHadTimeout = false;  // Not a timeout, but we want to re-check
+        
+        // We'll go through cooldown → listening → if no new data → idle
+        // Set the flag so cooldown transitions to LISTENING for re-scan
+        uploadCycleHadTimeout = true;
+        transitionTo(UploadState::RELEASING);
+    } else {
+        // Scheduled mode: done for today
+        sm->markDayCompleted();
+        LOG("[FSM] Scheduled mode — day marked as completed");
+        transitionTo(UploadState::IDLE);
+    }
+}
+
+void handleMonitoring() {
+    // TrafficMonitor.update() runs as normal (called in main loop)
+    // No upload activity, no SD card access
+    // Web endpoint /api/sd-activity serves live PCNT sample data
+    
+    if (stopMonitoringRequested) {
+        stopMonitoringRequested = false;
+        LOG("[FSM] Monitoring stopped by user");
+        transitionTo(UploadState::IDLE);
+    }
+}
+
+// ============================================================================
 // Loop Function
 // ============================================================================
 void loop() {
+    // ── Always-on tasks ──
+    
     // Periodic SD card log dump (every 10 seconds when enabled)
     if (config.getLogToSdCard()) {
         unsigned long currentTime = millis();
         if (currentTime - lastLogDumpTime >= LOG_DUMP_INTERVAL_MS) {
-            // Attempt to dump logs to SD card
-            // This is non-blocking and will skip if SD card is in use
             if (Logger::getInstance().dumpLogsToSDCardPeriodic(&sdManager)) {
                 LOG_DEBUG("Periodic log dump to SD card completed");
             }
             lastLogDumpTime = currentTime;
         }
     }
+    
+    // Update traffic monitor (non-blocking ~100ms sample)
+    trafficMonitor.update();
 
 #ifdef ENABLE_TEST_WEBSERVER
     // Update CPAP monitor
@@ -334,36 +559,33 @@ void loop() {
         testWebServer->handleClient();
     }
     
+    // ── Web trigger handlers (operate independently of FSM) ──
+    
     // Check for state reset trigger
     if (g_resetStateFlag) {
         LOG("=== State Reset Triggered via Web Interface ===");
         g_resetStateFlag = false;
         
-        // Take SD card control to reset state
         if (sdManager.takeControl()) {
             LOG("Resetting upload state...");
             
-            // Delete the state file
             if (sdManager.getFS().remove("/.upload_state.json")) {
                 LOG("Upload state file deleted successfully");
             } else {
                 LOG_WARN("Failed to delete state file (may not exist)");
             }
             
-            // Reinitialize uploader to load fresh state
             if (uploader) {
                 delete uploader;
                 uploader = new FileUploader(&config, &wifiManager);
-                if (uploader->begin(sdManager.getFS(), &sdManager)) {
+                if (uploader->begin(sdManager.getFS())) {
                     LOG("Uploader reinitialized with fresh state");
                     
-                    // Update TestWebServer with new manager references
                     if (testWebServer) {
                         testWebServer->updateManagers(uploader->getStateManager(),
                                                      uploader->getBudgetManager(),
                                                      uploader->getScheduleManager());
                         uploader->setWebServer(testWebServer);
-                        LOG_DEBUG("TestWebServer manager references updated");
                     }
                 } else {
                     LOG_ERROR("Failed to reinitialize uploader");
@@ -371,10 +593,10 @@ void loop() {
             }
             
             sdManager.releaseControl();
+            transitionTo(UploadState::IDLE);
             LOG("State reset complete");
         } else {
             LOG_ERROR("Cannot reset state - SD card in use");
-            LOG("Will retry on next loop iteration");
         }
     }
     
@@ -383,29 +605,17 @@ void loop() {
         LOG("=== SD Card Scan Triggered via Web Interface ===");
         g_scanNowFlag = false;
         
-        // Try to take control of SD card
         if (sdManager.takeControl()) {
-            LOG("SD card control acquired, scanning for pending folders...");
-            
-            // Set scan in progress flag
             g_scanInProgress = true;
-            
-            // Perform scan without uploading
             if (uploader->scanPendingFolders(&sdManager)) {
                 LOG("SD card scan completed successfully");
             } else {
                 LOG("SD card scan failed");
             }
-            
-            // Clear scan in progress flag
             g_scanInProgress = false;
-            
-            // Release SD card
             sdManager.releaseControl();
-            LOG("SD card control released");
         } else {
             LOG_ERROR("Cannot scan SD card - in use by CPAP");
-            LOG("Will retry on next loop iteration");
         }
     }
     
@@ -414,29 +624,17 @@ void loop() {
         LOG("=== Delta Scan Triggered via Web Interface ===");
         g_deltaScanFlag = false;
         
-        // Try to take control of SD card
         if (sdManager.takeControl()) {
-            LOG("SD card control acquired, performing delta scan...");
-            
-            // Set scan in progress flag
             g_scanInProgress = true;
-            
-            // Perform delta scan (compare remote vs local file counts)
             if (uploader->performDeltaScan(&sdManager)) {
                 LOG("Delta scan completed successfully");
             } else {
                 LOG("Delta scan failed");
             }
-            
-            // Clear scan in progress flag
             g_scanInProgress = false;
-            
-            // Release SD card
             sdManager.releaseControl();
-            LOG("SD card control released");
         } else {
             LOG_ERROR("Cannot perform delta scan - SD card in use by CPAP");
-            LOG("Will retry on next loop iteration");
         }
     }
     
@@ -445,242 +643,95 @@ void loop() {
         LOG("=== Deep Scan Triggered via Web Interface ===");
         g_deepScanFlag = false;
         
-        // Try to take control of SD card
         if (sdManager.takeControl()) {
-            LOG("SD card control acquired, performing deep scan...");
-            
-            // Set scan in progress flag
             g_scanInProgress = true;
-            
-            // Perform deep scan (compare remote vs local file sizes)
             if (uploader->performDeepScan(&sdManager)) {
                 LOG("Deep scan completed successfully");
             } else {
                 LOG("Deep scan failed");
             }
-            
-            // Clear scan in progress flag
             g_scanInProgress = false;
-            
-            // Release SD card
             sdManager.releaseControl();
-            LOG("SD card control released");
         } else {
             LOG_ERROR("Cannot perform deep scan - SD card in use by CPAP");
-            LOG("Will retry on next loop iteration");
         }
     }
     
-    // Check for upload trigger
+    // Check for upload trigger (force immediate upload — skip inactivity check)
     if (g_triggerUploadFlag) {
         LOG("=== Upload Triggered via Web Interface ===");
         g_triggerUploadFlag = false;
-        
-        // Force upload regardless of schedule
-        // We'll bypass the shouldUpload() check and go straight to upload
-        LOG("Forcing immediate upload session...");
-        
-        // Try to take control of SD card
-        if (sdManager.takeControl()) {
-            LOG("SD card control acquired, starting forced upload...");
-            
-            // Perform upload with force flag to bypass schedule check
-            bool uploadSuccess = uploader->uploadNewFiles(&sdManager, true);
-            
-            // Release SD card
-            sdManager.releaseControl();
-            LOG("SD card control released");
-            
-            // Update interval timer after any forced upload attempt
-            lastIntervalUploadTime = millis();
-            
-            if (uploadSuccess) {
-                LOG("Forced upload completed successfully");
-                budgetExhaustedRetry = false;  // Clear any pending retry from previous sessions
-            } else {
-                LOG("Forced upload incomplete (budget exhausted or errors)");
-                
-                // Set retry timing for incomplete upload
-                unsigned long sessionDuration = config.getSessionDurationSeconds() * 1000;
-                unsigned long waitTime = sessionDuration * 2;
-                
-                nextUploadRetryTime = millis() + waitTime;
-                budgetExhaustedRetry = true;
-                
-                // Log wait time information
-                unsigned long waitSeconds = waitTime / 1000;
-                unsigned long waitMinutes = waitSeconds / 60;
-                if (waitMinutes > 0) {
-                    LOGF("Waiting %lu minutes %lu seconds before retry...", waitMinutes, waitSeconds % 60);
-                } else {
-                    LOGF("Waiting %lu seconds before retry...", waitSeconds);
-                }
-                LOG_DEBUG("This allows CPAP machine priority access to SD card");
-            }
-        } else {
-            LOG_ERROR("Cannot start upload - SD card in use by CPAP");
-            LOG("Will retry on next loop iteration");
-        }
+        uploadCycleHadTimeout = false;
+        transitionTo(UploadState::ACQUIRING);
+    }
+    
+    // Check for monitoring triggers
+    if (g_monitorActivityFlag) {
+        g_monitorActivityFlag = false;
+        monitoringRequested = true;
+    }
+    if (g_stopMonitorFlag) {
+        g_stopMonitorFlag = false;
+        stopMonitoringRequested = true;
     }
 #endif
     
-    // Check WiFi connection (non-blocking with 30 second retry interval)
+    // ── WiFi reconnection (non-blocking with 30 second retry interval) ──
     if (!wifiManager.isConnected()) {
         unsigned long currentTime = millis();
         if (currentTime - lastWifiReconnectAttempt >= 30000) {
             LOG_WARN("WiFi disconnected, attempting to reconnect...");
             
-            // Validate configuration before attempting reconnection
             if (!config.valid() || config.getWifiSSID().isEmpty()) {
                 LOG_ERROR("Cannot reconnect to WiFi: Invalid configuration");
-                LOG_ERROR("SSID is empty or configuration is invalid");
                 lastWifiReconnectAttempt = currentTime;
                 return;
             }
             
             if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
                 LOG_ERROR("Failed to reconnect to WiFi");
-                LOG("Will retry in 30 seconds...");
                 lastWifiReconnectAttempt = currentTime;
                 return;
             }
             LOG_DEBUG("WiFi reconnected successfully");
-            
-            // Reset NTP sync attempt timer to trigger immediate sync after reconnection
             lastNtpSyncAttempt = 0;
             lastWifiReconnectAttempt = 0;
         }
-        return;  // Skip rest of loop while WiFi is down
+        return;  // Skip FSM while WiFi is down
     }
 
-    // Handle NTP sync retry if time is not synchronized
-    // This runs periodically to ensure time stays synchronized
+    // ── NTP sync retry ──
     if (uploader) {
         unsigned long currentTime = millis();
         if (currentTime - lastNtpSyncAttempt >= NTP_RETRY_INTERVAL_MS) {
             LOG_DEBUG("Periodic NTP synchronization check...");
-            // Note: shouldUpload() checks time sync internally
-            // We just want to trigger the check periodically
             lastNtpSyncAttempt = currentTime;
         }
     }
-
-    // Check if we're waiting due to budget exhaustion (non-blocking)
-    bool isBudgetRetry = false;
-    if (budgetExhaustedRetry) {
-        // Wait for the appropriate time before retrying
-        if (millis() < nextUploadRetryTime) {
-            return;  // Non-blocking wait
-        }
-        // Wait period over, clear the flag and trigger retry
-        isBudgetRetry = true;
-        budgetExhaustedRetry = false;
-        LOG("Budget exhaustion wait period complete, resuming upload...");
-        
-        // Proceed to retry upload (skip schedule check since we have incomplete folders)
-    } else {
-        // Not in retry mode, check if it's time for scheduled upload
-        // Use non-blocking check every 60 seconds
-        unsigned long currentTime = millis();
-        if (currentTime - lastUploadCheck < 60000) {
-            return;  // Don't check too frequently
-        }
-        lastUploadCheck = currentTime;
-        
-        // Check upload schedule: interval-based or daily
-        int intervalMinutes = config.getUploadIntervalMinutes();
-        if (intervalMinutes > 0) {
-            // Interval-based scheduling: upload every N minutes
-            unsigned long intervalMs = (unsigned long)intervalMinutes * 60000UL;
-            if (lastIntervalUploadTime > 0 && (currentTime - lastIntervalUploadTime) < intervalMs) {
-                return;  // Not time yet
+    
+    // ── Monitoring request handling (can interrupt most states) ──
+    if (monitoringRequested) {
+        monitoringRequested = false;
+        if (currentState != UploadState::UPLOADING) {
+            if (currentState == UploadState::ACQUIRING && sdManager.hasControl()) {
+                sdManager.releaseControl();
             }
-            // Time for interval upload
-            LOG_DEBUGF("Interval upload triggered (every %d minutes)", intervalMinutes);
-        } else {
-            // Daily scheduling: use ScheduleManager
-            if (!uploader || !uploader->shouldUpload()) {
-                // Not upload time yet
-                return;
-            }
+            trafficMonitor.resetStatistics();
+            transitionTo(UploadState::MONITORING);
         }
+        // If UPLOADING, the upload will complete its current cycle and then
+        // the FSM will naturally transition. For now, we don't interrupt uploads.
     }
 
-    LOG("=== Upload Window Active ===");
-    LOG("Attempting to start upload session...");
-
-    // Try to take control of SD card for upload session (non-blocking retry)
-    if (!sdManager.takeControl()) {
-        unsigned long now = millis();
-        if (now - lastSdCardRetry >= 5000) {
-            LOG("CPAP machine is using SD card, will retry in 5 seconds...");
-            lastSdCardRetry = now;
-        }
-        return;
-    }
-    lastSdCardRetry = 0;  // Reset retry timer on success
-
-    LOG("SD card control acquired, starting upload session...");
-
-    // Perform upload session
-    // Note: uploadNewFiles() handles:
-    // - Time budget enforcement (active time only)
-    // - Periodic SD card release (gives CPAP priority access)
-    // - File prioritization (DATALOG newest first, then root/SETTINGS)
-    // - State persistence
-    // - Retry count management
-    // Use forceUpload for interval mode and budget-exhaustion retries so the
-    // internal shouldUpload() schedule check doesn't block re-uploads after
-    // markUploadCompleted() has already been called for the day.
-    bool forceThisUpload = isBudgetRetry || (config.getUploadIntervalMinutes() > 0);
-    bool uploadSuccess = uploader->uploadNewFiles(&sdManager, forceThisUpload);
-
-    // Release SD card back to CPAP machine
-    sdManager.releaseControl();
-    LOG("SD card control released");
-
-    // Determine if we need to wait before retrying
-    // The upload can fail for two reasons:
-    // 1. Budget exhausted (partial upload) - need to wait 2x session duration
-    // 2. All files uploaded or scheduled upload complete - wait until next day
-    
-    // Update interval upload timer regardless of success/failure
-    lastIntervalUploadTime = millis();
-    
-    if (uploadSuccess) {
-        LOG("=== Upload Session Completed Successfully ===");
-        LOG_DEBUG("All pending files have been uploaded");
-        budgetExhaustedRetry = false;  // Clear retry state on success
-        if (config.getUploadIntervalMinutes() > 0) {
-            LOGF("Next upload in %d minutes (interval mode)", config.getUploadIntervalMinutes());
-        } else {
-            LOG_DEBUG("Next upload will occur at scheduled time tomorrow");
-        }
-        // The ScheduleManager has already marked upload as completed
-        // No need to set retry timer - will wait for next scheduled time
-    } else if (uploader && uploader->hasIncompleteFolders()) {
-        LOG("=== Upload Session Incomplete ===");
-        LOG("Session ended due to time budget exhaustion or errors");
-        
-        // Calculate wait time (2x session duration) before retry
-        unsigned long sessionDuration = config.getSessionDurationSeconds() * 1000;
-        unsigned long waitTime = sessionDuration * 2;
-        
-        nextUploadRetryTime = millis() + waitTime;
-        budgetExhaustedRetry = true;
-        
-        // Log wait time information
-        unsigned long waitSeconds = waitTime / 1000;
-        unsigned long waitMinutes = waitSeconds / 60;
-        if (waitMinutes > 0) {
-            LOGF("Waiting %lu minutes %lu seconds before retry...", waitMinutes, waitSeconds % 60);
-        } else {
-            LOGF("Waiting %lu seconds before retry...", waitSeconds);
-        }
-        LOG_DEBUG("This allows CPAP machine priority access to SD card");
-        
-        // Note: We stay in the same upload window (same day)
-        // The ScheduleManager will NOT mark upload as completed
-        // So shouldUpload() will continue to return true after wait period
+    // ── FSM dispatch ──
+    switch (currentState) {
+        case UploadState::IDLE:       handleIdle();       break;
+        case UploadState::LISTENING:  handleListening();  break;
+        case UploadState::ACQUIRING:  handleAcquiring();  break;
+        case UploadState::UPLOADING:  handleUploading();  break;
+        case UploadState::RELEASING:  handleReleasing();  break;
+        case UploadState::COOLDOWN:   handleCooldown();   break;
+        case UploadState::COMPLETE:   handleComplete();   break;
+        case UploadState::MONITORING: handleMonitoring(); break;
     }
 }
