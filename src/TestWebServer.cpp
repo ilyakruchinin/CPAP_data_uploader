@@ -1,5 +1,7 @@
 #include "TestWebServer.h"
 #include "Logger.h"
+#include "UploadFSM.h"
+#include "version.h"
 #include <time.h>
 
 // Global trigger flags
@@ -16,7 +18,12 @@ volatile bool g_scanInProgress = false;
 volatile bool g_monitorActivityFlag = false;
 volatile bool g_stopMonitorFlag = false;
 
-// External retry timing variables (defined in main.cpp)
+// External FSM state (defined in main.cpp)
+extern UploadState currentState;
+extern unsigned long stateEnteredAt;
+extern unsigned long cooldownStartedAt;
+
+// Legacy variables (defined in main.cpp)
 extern unsigned long nextUploadRetryTime;
 extern bool budgetExhaustedRetry;
 extern unsigned long lastIntervalUploadTime;
@@ -99,6 +106,7 @@ bool TestWebServer::begin() {
     LOG("[TestWebServer]   GET /reset-state   - Clear upload state");
     LOG("[TestWebServer]   GET /config        - Display configuration");
     LOG("[TestWebServer]   GET /logs          - Retrieve system logs (JSON)");
+    LOG("[TestWebServer]   GET /monitor       - SD Activity Monitor (live)");
     
     return true;
 }
@@ -110,244 +118,193 @@ void TestWebServer::handleClient() {
     }
 }
 
-// GET / - HTML status page
+// GET / - HTML status page (modern dark dashboard)
 void TestWebServer::handleRoot() {
     String html = "<!DOCTYPE html><html><head>";
-    html += "<title>CPAP Auto-Uploader Status</title>";
+    html += "<title>CPAP Data Uploader</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    
-    // Add auto-refresh if scan is in progress
     if (g_scanInProgress) {
         html += "<meta http-equiv='refresh' content='5'>";
     }
-    
     html += "<style>";
-    html += "body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }";
-    html += "h1 { color: #333; }";
-    html += "h2 { color: #666; margin-top: 30px; }";
-    html += ".container { background: white; padding: 20px; border-radius: 8px; max-width: 800px; }";
-    html += ".info { margin: 10px 0; }";
-    html += ".label { font-weight: bold; display: inline-block; width: 200px; }";
-    html += ".value { color: #0066cc; }";
-    html += ".button { display: inline-block; padding: 10px 20px; margin: 10px 5px; ";
-    html += "background: #0066cc; color: white; text-decoration: none; border-radius: 4px; }";
-    html += ".button:hover { background: #0052a3; }";
-    html += ".button.danger { background: #cc0000; }";
-    html += ".button.danger:hover { background: #a30000; }";
-    html += ".button.disabled { background: #cccccc; color: #666666; cursor: not-allowed; }";
-    html += ".scan-warning { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 15px 0; }";
-    html += "</style>";
-    html += "</head><body>";
-    html += "<div class='container'>";
-    html += "<h1>CPAP Auto-Uploader Status</h1>";
-    
-    // Show scan warning if scan is in progress
+    html += "*{box-sizing:border-box;margin:0;padding:0}";
+    html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
+    html += "background:#0f1923;color:#c7d5e0;min-height:100vh;padding:20px}";
+    html += ".wrap{max-width:900px;margin:0 auto}";
+    html += "h1{font-size:1.6em;color:#fff;margin-bottom:4px}";
+    html += ".subtitle{color:#66c0f4;font-size:0.9em;margin-bottom:20px}";
+    html += ".cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:20px}";
+    html += ".card{background:#1b2838;border:1px solid #2a475e;border-radius:10px;padding:18px}";
+    html += ".card h2{font-size:0.85em;text-transform:uppercase;letter-spacing:1px;color:#66c0f4;margin-bottom:12px;border-bottom:1px solid #2a475e;padding-bottom:8px}";
+    html += ".row{display:flex;justify-content:space-between;padding:5px 0;font-size:0.88em}";
+    html += ".row .k{color:#8f98a0}.row .v{color:#c7d5e0;font-weight:500;text-align:right}";
+    // FSM state badge
+    html += ".fsm{display:inline-block;padding:4px 12px;border-radius:20px;font-weight:700;font-size:0.8em;letter-spacing:0.5px}";
+    html += ".fsm-idle{background:#2a475e;color:#8f98a0}";
+    html += ".fsm-listening{background:#1a3a1a;color:#44ff44;animation:pulse 2s infinite}";
+    html += ".fsm-acquiring,.fsm-uploading{background:#1a2a4a;color:#66c0f4}";
+    html += ".fsm-cooldown{background:#3a2a1a;color:#ffaa44}";
+    html += ".fsm-complete{background:#1a3a1a;color:#44ff44}";
+    html += ".fsm-monitoring{background:#2a1a3a;color:#cc66ff}";
+    html += ".fsm-releasing{background:#3a2a1a;color:#ffaa44}";
+    html += "@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.6}}";
+    // Progress bar
+    html += ".prog-bar{background:#2a475e;border-radius:6px;height:10px;margin-top:6px;overflow:hidden}";
+    html += ".prog-fill{background:linear-gradient(90deg,#66c0f4,#44aaff);height:100%;border-radius:6px;transition:width 0.5s}";
+    // Buttons
+    html += ".actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}";
+    html += ".btn{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:6px;font-size:0.85em;font-weight:600;text-decoration:none;border:none;cursor:pointer;transition:all 0.2s}";
+    html += ".btn-primary{background:#66c0f4;color:#0f1923}.btn-primary:hover{background:#88d0ff}";
+    html += ".btn-secondary{background:#2a475e;color:#c7d5e0}.btn-secondary:hover{background:#3a5a7e}";
+    html += ".btn-accent{background:#9b59b6;color:#fff}.btn-accent:hover{background:#b06ed0}";
+    html += ".btn-danger{background:#c0392b;color:#fff}.btn-danger:hover{background:#e04030}";
+    html += ".btn-disabled{background:#1b2838;color:#4a5568;cursor:not-allowed}";
+    // WiFi signal colors
+    html += ".sig-exc{color:#44ff44}.sig-good{color:#88dd44}.sig-fair{color:#ddcc44}.sig-weak{color:#dd8844}.sig-vweak{color:#dd4444}";
+    // Alert
+    html += ".alert{background:#3a2a1a;border:1px solid #aa6622;border-radius:8px;padding:14px;margin-bottom:16px}";
+    html += ".alert h3{color:#ffaa44;font-size:0.9em;margin-bottom:6px}";
+    html += ".alert p{font-size:0.85em;color:#c7d5e0;margin:3px 0}";
+    html += "</style></head><body><div class='wrap'>";
+
+    // ── Header ──
+    html += "<h1>CPAP Data Uploader</h1>";
+    html += "<p class='subtitle'>Firmware " + String(FIRMWARE_VERSION) + " &middot; " + getUptimeString() + " uptime</p>";
+
+    // ── Scan-in-progress banner ──
     if (g_scanInProgress) {
-        html += "<div class='scan-warning'>";
-        html += "<h3>&#x23F3; Scan in Progress</h3>";
-        html += "<p><strong>A scan operation is currently running.</strong></p>";
-        html += "<p>This page will automatically refresh every 5 seconds until the scan completes.</p>";
-        html += "<p>Please wait for the scan to finish before triggering another scan.</p>";
-        html += "</div>";
+        html += "<div class='alert'><h3>&#x23F3; Scan In Progress</h3>";
+        html += "<p>Page auto-refreshes every 5s. Wait for completion before starting another.</p></div>";
     }
+
+    // ── FSM State + System card (side by side) ──
+    html += "<div class='cards'>";
+
+    // FSM State card
+    html += "<div class='card'>";
+    html += "<h2>Upload Engine</h2>";
+    String stName = String(getStateName(currentState));
+    stName.toLowerCase();
+    html += "<div class='row'><span class='k'>State</span><span class='fsm fsm-" + stName + "'>" + String(getStateName(currentState)) + "</span></div>";
     
-    // System information
-    html += "<h2>System Information</h2>";
-    html += "<div class='info'><span class='label'>Uptime:</span><span class='value'>" + getUptimeString() + "</span></div>";
-    html += "<div class='info'><span class='label'>Current Time:</span><span class='value'>" + getCurrentTimeString() + "</span></div>";
-    html += "<div class='info'><span class='label'>Free Heap:</span><span class='value'>" + String(ESP.getFreeHeap()) + " bytes</span></div>";
+    // State duration
+    unsigned long inStateSec = (millis() - stateEnteredAt) / 1000;
+    String inStateStr;
+    if (inStateSec >= 3600) inStateStr = String(inStateSec / 3600) + "h " + String((inStateSec % 3600) / 60) + "m";
+    else if (inStateSec >= 60) inStateStr = String(inStateSec / 60) + "m " + String(inStateSec % 60) + "s";
+    else inStateStr = String(inStateSec) + "s";
+    html += "<div class='row'><span class='k'>In state for</span><span class='v'>" + inStateStr + "</span></div>";
     
-    // WiFi information
+    // Mode and window from ScheduleManager
+    if (scheduleManager) {
+        String mode = scheduleManager->isSmartMode() ? "Smart" : "Scheduled";
+        html += "<div class='row'><span class='k'>Mode</span><span class='v'>" + mode + "</span></div>";
+        html += "<div class='row'><span class='k'>Time synced</span><span class='v'>" + String(scheduleManager->isTimeSynced() ? "Yes" : "No") + "</span></div>";
+    }
+    if (config) {
+        html += "<div class='row'><span class='k'>Upload window</span><span class='v'>" + String(config->getUploadStartHour()) + ":00 - " + String(config->getUploadEndHour()) + ":00</span></div>";
+        html += "<div class='row'><span class='k'>Inactivity threshold</span><span class='v'>" + String(config->getInactivitySeconds()) + "s</span></div>";
+        html += "<div class='row'><span class='k'>Exclusive access</span><span class='v'>" + String(config->getExclusiveAccessMinutes()) + " min</span></div>";
+        html += "<div class='row'><span class='k'>Cooldown</span><span class='v'>" + String(config->getCooldownMinutes()) + " min</span></div>";
+    }
+    html += "</div>";
+
+    // System card
+    html += "<div class='card'>";
+    html += "<h2>System</h2>";
+    html += "<div class='row'><span class='k'>Time</span><span class='v'>" + getCurrentTimeString() + "</span></div>";
+    html += "<div class='row'><span class='k'>Free heap</span><span class='v'>" + String(ESP.getFreeHeap() / 1024) + " KB</span></div>";
+    
     if (wifiManager && wifiManager->isConnected()) {
         int rssi = wifiManager->getSignalStrength();
         String quality = wifiManager->getSignalQuality();
-        String qualityColor = "#0066cc";
-        
-        // Color code based on signal quality
-        if (quality == "Excellent") {
-            qualityColor = "#00cc00";
-        } else if (quality == "Good") {
-            qualityColor = "#66cc00";
-        } else if (quality == "Fair") {
-            qualityColor = "#cc9900";
-        } else if (quality == "Weak") {
-            qualityColor = "#cc6600";
-        } else if (quality == "Very Weak") {
-            qualityColor = "#cc0000";
-        }
-        
-        html += "<div class='info'><span class='label'>WiFi Signal:</span><span class='value' style='color:" + qualityColor + ";'>";
-        html += quality + " (" + String(rssi) + " dBm)</span></div>";
+        String sigClass = "sig-fair";
+        if (quality == "Excellent") sigClass = "sig-exc";
+        else if (quality == "Good") sigClass = "sig-good";
+        else if (quality == "Fair") sigClass = "sig-fair";
+        else if (quality == "Weak") sigClass = "sig-weak";
+        else sigClass = "sig-vweak";
+        html += "<div class='row'><span class='k'>WiFi</span><span class='v " + sigClass + "'>" + quality + " (" + String(rssi) + " dBm)</span></div>";
+        html += "<div class='row'><span class='k'>IP</span><span class='v'>" + wifiManager->getIPAddress() + "</span></div>";
     }
     
-    // Upload status
-    html += "<h2>Upload Status</h2>";
-    if (config && config->getUploadIntervalMinutes() > 0) {
-        unsigned long intervalMs = (unsigned long)config->getUploadIntervalMinutes() * 60000UL;
-        unsigned long elapsed = millis() - lastIntervalUploadTime;
-        unsigned long secondsUntilNext = (lastIntervalUploadTime == 0 || elapsed >= intervalMs) ? 0 : (intervalMs - elapsed) / 1000;
-        html += "<div class='info'><span class='label'>Next Upload In:</span><span class='value'>";
-        if (secondsUntilNext == 0) {
-            html += "Upload window active";
-        } else {
-            html += String(secondsUntilNext / 60) + " minutes, ";
-            html += String(secondsUntilNext % 60) + " seconds";
-        }
-        html += " (every " + String(config->getUploadIntervalMinutes()) + " min)";
-        html += "</span></div>";
-    } else if (scheduleManager) {
-        unsigned long secondsUntilNext = scheduleManager->getSecondsUntilNextUpload();
-        html += "<div class='info'><span class='label'>Next Upload In:</span><span class='value'>";
-        if (secondsUntilNext == 0) {
-            html += "Upload window active";
-        } else {
-            html += String(secondsUntilNext / 3600) + " hours, ";
-            html += String((secondsUntilNext % 3600) / 60) + " minutes";
-        }
-        html += "</span></div>";
-        html += "<div class='info'><span class='label'>Upload Time Synced:</span><span class='value'>";
-        html += scheduleManager->isTimeSynced() ? "Yes" : "No";
-        html += "</span></div>";
-    } else {
-        html += "<div class='info'><span class='label'>Status:</span><span class='value'>Initializing...</span></div>";
+    if (config) {
+        html += "<div class='row'><span class='k'>Endpoint</span><span class='v'>" + config->getEndpointType() + "</span></div>";
+        html += "<div class='row'><span class='k'>GMT offset</span><span class='v'>+" + String(config->getGmtOffsetHours()) + "</span></div>";
     }
+    html += "</div>";
+    html += "</div>"; // end .cards row 1
+
+    // ── Upload Progress card (full width) ──
+    html += "<div class='cards'>";
+    html += "<div class='card' style='grid-column:1/-1'>";
+    html += "<h2>Upload Progress</h2>";
     
-    if (budgetManager) {
-        unsigned long remainingBudget = budgetManager->getRemainingBudgetMs();
-        html += "<div class='info'><span class='label'>Time Budget Remaining:</span><span class='value'>";
-        if (remainingBudget == 0) {
-            html += "No active session";
-        } else {
-            html += String(remainingBudget) + " ms";
-        }
-        html += "</span></div>";
-        
-        unsigned long rate = budgetManager->getTransmissionRate();
-        float rateKB = rate / 1024.0;
-        html += "<div class='info'><span class='label'>Transfer Rate:</span><span class='value'>";
-        html += String(rateKB, 1) + " KB/s (" + String(rate) + " B/s)</span></div>";
-    } else {
-        html += "<div class='info'><span class='label'>Budget:</span><span class='value'>Not initialized</span></div>";
-    }
-    
-    // Upload progress
     if (stateManager) {
-        int completedFolders = stateManager->getCompletedFoldersCount();
-        int incompleteFolders = stateManager->getIncompleteFoldersCount();
-        int pendingFolders = stateManager->getPendingFoldersCount();
-        int totalFolders = completedFolders + incompleteFolders + pendingFolders;
+        int completed = stateManager->getCompletedFoldersCount();
+        int incomplete = stateManager->getIncompleteFoldersCount();
+        int pending = stateManager->getPendingFoldersCount();
+        int total = completed + incomplete + pending;
         
-        if (totalFolders == 0) {
-            // State not yet initialized (no upload session has run)
-            html += "<div class='info'><span class='label'>Upload Status:</span><span class='value'>";
-            html += "Not yet scanned (waiting for first upload window)</span></div>";
+        if (total == 0) {
+            html += "<div class='row'><span class='k'>Status</span><span class='v'>Waiting for first scan</span></div>";
         } else {
-            html += "<div class='info'><span class='label'>Upload Progress:</span><span class='value'>";
-            if (pendingFolders > 0) {
-                html += String(completedFolders) + " / " + String(totalFolders) + " folders completed, " + String(pendingFolders) + " empty</span></div>";
-            } else {
-                html += String(completedFolders) + " / " + String(totalFolders) + " folders completed</span></div>";
-            }
+            int pct = (total > 0) ? (completed * 100 / total) : 0;
+            html += "<div class='row'><span class='k'>Folders</span><span class='v'>" + String(completed) + " / " + String(total) + " completed";
+            if (pending > 0) html += " (" + String(pending) + " empty)";
+            html += "</span></div>";
+            html += "<div class='prog-bar'><div class='prog-fill' style='width:" + String(pct) + "%'></div></div>";
             
-            if (incompleteFolders > 0) {
-                html += "<div class='info'><span class='label'>Incomplete Folders:</span><span class='value'>";
-                html += String(incompleteFolders) + "</span></div>";
+            if (incomplete > 0) {
+                html += "<div class='row' style='margin-top:6px'><span class='k'>Incomplete</span><span class='v' style='color:#ffaa44'>" + String(incomplete) + " folders remaining</span></div>";
             }
         }
         
-        // Show retry information if applicable
-        String retryFolder = stateManager->getCurrentRetryFolder();
-        if (!retryFolder.isEmpty()) {
-            int retryCount = stateManager->getCurrentRetryCount();
-            html += "<div class='info'><span class='label'>Current Retry:</span><span class='value' style='color: #cc6600;'>";
-            html += "Folder " + retryFolder + " (attempt " + String(retryCount + 1) + ")</span></div>";
-        }
-    } else {
-        html += "<div class='info'><span class='label'>Pending Folders:</span><span class='value'>Unknown</span></div>";
-    }
-    
-    // Retry warning
-    if (stateManager) {
+        // Retry info
         String retryFolder = stateManager->getCurrentRetryFolder();
         if (!retryFolder.isEmpty()) {
             int retryCount = stateManager->getCurrentRetryCount();
             int maxRetries = config ? config->getMaxRetryAttempts() : 3;
-            
-            html += "<h2 style='color: #cc6600;'>WARNING: Upload in Progress</h2>";
-            html += "<div style='background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 10px 0;'>";
-            html += "<p><strong>Folder:</strong> " + retryFolder + "</p>";
-            html += "<p><strong>Attempt:</strong> " + String(retryCount + 1) + " of " + String(maxRetries) + "</p>";
-            html += "<p><strong>Reason:</strong> Upload session time budget exhausted before completing all files.</p>";
-            
-            // Show retry wait time if waiting
-            if (budgetExhaustedRetry && nextUploadRetryTime > millis()) {
-                unsigned long remainingMs = nextUploadRetryTime - millis();
-                unsigned long remainingSeconds = remainingMs / 1000;
-                unsigned long remainingMinutes = remainingSeconds / 60;
-                
-                html += "<p><strong>Next Retry In:</strong> ";
-                if (remainingMinutes > 0) {
-                    html += String(remainingMinutes) + " minutes " + String(remainingSeconds % 60) + " seconds";
-                } else {
-                    html += String(remainingSeconds) + " seconds";
-                }
-                html += "</p>";
+            html += "<div class='row' style='margin-top:6px'><span class='k'>Retrying</span><span class='v' style='color:#ffaa44'>" + retryFolder + " (attempt " + String(retryCount + 1) + "/" + String(maxRetries) + ")</span></div>";
+        }
+        
+        if (budgetManager) {
+            unsigned long rate = budgetManager->getTransmissionRate();
+            if (rate > 0) {
+                float rateKB = rate / 1024.0;
+                html += "<div class='row'><span class='k'>Transfer rate</span><span class='v'>" + String(rateKB, 1) + " KB/s</span></div>";
             }
-            
-            if (retryCount >= 2) {
-                html += "<p style='color: #cc0000;'><strong>WARNING: Multiple retries detected!</strong></p>";
-                html += "<p>Consider increasing <code>SESSION_DURATION_SECONDS</code> in config.json if uploads consistently fail.</p>";
-                html += "<p>Current session duration: " + String(config ? config->getSessionDurationSeconds() : 0) + " seconds (active time)</p>";
-            }
-            
-            html += "</div>";
         }
     }
+    html += "</div></div>"; // end progress card + cards
 
-#ifdef ENABLE_CPAP_MONITOR
-    // CPAP SD Card Usage Monitor
-    if (cpapMonitor) {
-        html += "<h2>CPAP SD Card Usage (24 Hours)</h2>";
-        html += "<div class='info'><span class='label'>Monitoring Interval:</span><span class='value'>Every 10 minutes</span></div>";
-        
-        // Add the usage table
-        html += cpapMonitor->getUsageTableHTML();
-    }
-#endif //ENABLE_CPAP_MONITOR
-
-    
-    // Configuration
-    html += "<h2>Configuration</h2>";
-    if (config) {
-        html += "<div class='info'><span class='label'>Endpoint Type:</span><span class='value'>" + config->getEndpointType() + "</span></div>";
-        html += "<div class='info'><span class='label'>Endpoint:</span><span class='value'>" + config->getEndpoint() + "</span></div>";
-        html += "<div class='info'><span class='label'>Upload Hour:</span><span class='value'>" + String(config->getUploadHour()) + ":00</span></div>";
-        html += "<div class='info'><span class='label'>Session Duration:</span><span class='value'>" + String(config->getSessionDurationSeconds()) + " seconds</span></div>";
-    }
-    
-    // Action buttons
+    // ── Actions ──
+    html += "<div class='card' style='margin-bottom:20px'>";
     html += "<h2>Actions</h2>";
-    html += "<a href='/trigger-upload' class='button'>Trigger Upload Now</a>";
+    html += "<div class='actions'>";
+    html += "<a href='/trigger-upload' class='btn btn-primary'>&#9650; Trigger Upload</a>";
     
-    // Disable scan buttons if scan is in progress
     if (g_scanInProgress) {
-        html += "<span class='button disabled'>Scan SD Card (In Progress)</span>";
-        html += "<span class='button disabled'>Delta Scan (In Progress)</span>";
-        html += "<span class='button disabled'>Deep Scan (In Progress)</span>";
+        html += "<span class='btn btn-disabled'>Scan (In Progress)</span>";
     } else {
-        html += "<a href='/scan-now' class='button'>Scan SD Card</a>";
-        html += "<a href='/delta-scan' class='button'>Delta Scan (Compare Remote)</a>";
-        html += "<a href='/deep-scan' class='button'>Deep Scan (Compare File Sizes)</a>";
+        html += "<a href='/scan-now' class='btn btn-secondary'>&#128269; Scan SD Card</a>";
+        html += "<a href='/delta-scan' class='btn btn-secondary'>&#916; Delta Scan</a>";
+        html += "<a href='/deep-scan' class='btn btn-secondary'>&#128203; Deep Scan</a>";
     }
     
-    html += "<a href='/status' class='button'>View JSON Status</a>";
-    html += "<a href='/config' class='button'>View Full Config</a>";
-    html += "<a href='/logs' class='button'>View System Logs</a>";
-#ifdef ENABLE_OTA_UPDATES
-    html += "<a href='/ota' class='button'>Firmware Update</a>";
-#endif
-    html += "<a href='/reset-state' class='button danger' onclick='return confirm(\"Are you sure you want to reset upload state?\")'>Reset Upload State</a>";
+    html += "<a href='/monitor' class='btn btn-accent'>&#128200; SD Activity Monitor</a>";
+    html += "</div>";
     
+    html += "<div class='actions' style='margin-top:10px'>";
+    html += "<a href='/status' class='btn btn-secondary'>JSON Status</a>";
+    html += "<a href='/config' class='btn btn-secondary'>Config</a>";
+    html += "<a href='/logs' class='btn btn-secondary'>Logs</a>";
+#ifdef ENABLE_OTA_UPDATES
+    html += "<a href='/ota' class='btn btn-secondary'>&#128190; Firmware Update</a>";
+#endif
+    html += "<a href='/reset-state' class='btn btn-danger' onclick='return confirm(\"Reset all upload state? This cannot be undone.\")'>Reset State</a>";
+    html += "</div></div>";
+
     html += "</div></body></html>";
     
     server->send(200, "text/html", html);

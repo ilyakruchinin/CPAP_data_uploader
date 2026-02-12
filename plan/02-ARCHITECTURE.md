@@ -110,7 +110,7 @@ Cross-midnight support: if START > END, the window wraps. E.g., START=22, END=6 
 | State | Description | Duration |
 |---|---|---|
 | **IDLE** | Not eligible to upload. Checking periodically (every 60s). | Until schedule/mode triggers |
-| **LISTENING** | PCNT sampling bus activity. Tracking consecutive silence. | Until Z seconds of silence |
+| **LISTENING** | PCNT sampling bus activity. Tracking consecutive silence. | Until Z seconds of silence (default 125s — see 01-FINDINGS.md §6) |
 | **ACQUIRING** | Taking SD card control, initializing SD_MMC. | ~500ms (brief transition) |
 | **UPLOADING** | ESP has exclusive SD access. Uploading files as fast as possible. No periodic releases. | Up to X minutes or until all files done |
 | **RELEASING** | Finishing current file, unmounting SD, releasing mux to host. | ~100ms (brief transition) |
@@ -352,7 +352,11 @@ The web page shows a **progressive, auto-updating activity timeline**:
 
 ## 8. Timing Example
 
-Configuration: `Z=300s, X=5min, Y=10min, B=2, START=8, END=22, MODE=smart`
+Configuration: `Z=125s, X=5min, Y=10min, B=2, START=8, END=22, MODE=smart`
+
+> Z=125s is based on preliminary observations (see 01-FINDINGS.md §6): CPAP writes
+> every ~60s during therapy (max idle ~58s), but idles for 3+ minutes outside therapy.
+> 125s provides a 2× safety margin above therapy writes.
 
 ```
 Timeline (smart mode, morning after therapy):
@@ -361,25 +365,25 @@ Timeline (smart mode, morning after therapy):
 07:00  CPAP writes final summary files
 07:01  Bus goes silent (CPAP idle)
 07:01  ESP in LISTENING state (fresh data eligible anytime)
-07:06  5 minutes of silence confirmed (Z=300s)
-07:06  → ACQUIRING → SD mounted
-07:06  → UPLOADING: uploading last 2 days of DATALOG + root files
-07:11  X=5min timer expires, current file finishes
-07:11  → RELEASING → COOLDOWN
-07:21  Y=10min cooldown complete
-07:21  → LISTENING (check for inactivity again)
-07:26  Z=300s silence confirmed
-07:26  → ACQUIRING → UPLOADING: resume remaining files
-07:29  All fresh files done → COMPLETE
-07:29  Re-scan: no new files → COOLDOWN → LISTENING → ...
+07:03  ~125 seconds of silence confirmed (Z=125s)
+07:03  → ACQUIRING → SD mounted
+07:03  → UPLOADING: uploading last 2 days of DATALOG + root files
+07:08  X=5min timer expires, current file finishes
+07:08  → RELEASING → COOLDOWN
+07:18  Y=10min cooldown complete
+07:18  → LISTENING (check for inactivity again)
+07:20  Z=125s silence confirmed
+07:20  → ACQUIRING → UPLOADING: resume remaining files
+07:23  All fresh files done → COMPLETE
+07:23  Re-scan: no new files → COOLDOWN → LISTENING → ...
 08:00  Upload window opens (START=8)
 08:00  Old data now eligible
-08:05  Z=300s silence confirmed
-08:05  → UPLOADING: old DATALOG folders
-08:10  X=5min timer → RELEASING → COOLDOWN
+08:02  Z=125s silence confirmed
+08:02  → UPLOADING: old DATALOG folders
+08:07  X=5min timer → RELEASING → COOLDOWN
 ...    (cycle continues until all old data uploaded)
-10:30  All files uploaded → IDLE
-10:30  Next activity: tomorrow morning (or when new fresh data detected)
+10:00  All files uploaded → IDLE
+10:00  Next activity: tomorrow morning (or when new fresh data detected)
 ```
 
 ---

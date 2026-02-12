@@ -9,6 +9,7 @@
 #include "version.h"
 
 #include "TrafficMonitor.h"
+#include "UploadFSM.h"
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -40,17 +41,6 @@ CPAPMonitor* cpapMonitor = nullptr;
 // ============================================================================
 // Upload FSM State
 // ============================================================================
-enum class UploadState {
-    IDLE,
-    LISTENING,
-    ACQUIRING,
-    UPLOADING,
-    RELEASING,
-    COOLDOWN,
-    COMPLETE,
-    MONITORING
-};
-
 UploadState currentState = UploadState::IDLE;
 unsigned long stateEnteredAt = 0;
 unsigned long cooldownStartedAt = 0;
@@ -101,22 +91,8 @@ extern volatile bool g_stopMonitorFlag;
 #endif
 
 // ============================================================================
-// FSM Helper: State name for logging
+// FSM Helper
 // ============================================================================
-const char* getStateName(UploadState state) {
-    switch (state) {
-        case UploadState::IDLE: return "IDLE";
-        case UploadState::LISTENING: return "LISTENING";
-        case UploadState::ACQUIRING: return "ACQUIRING";
-        case UploadState::UPLOADING: return "UPLOADING";
-        case UploadState::RELEASING: return "RELEASING";
-        case UploadState::COOLDOWN: return "COOLDOWN";
-        case UploadState::COMPLETE: return "COMPLETE";
-        case UploadState::MONITORING: return "MONITORING";
-        default: return "UNKNOWN";
-    }
-}
-
 void transitionTo(UploadState newState) {
     LOGF("[FSM] %s -> %s", getStateName(currentState), getStateName(newState));
     currentState = newState;
