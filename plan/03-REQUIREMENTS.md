@@ -9,7 +9,7 @@
 | `UPLOAD_MODE` | string | `"scheduled"` | `"scheduled"` or `"smart"` |
 | `UPLOAD_START_HOUR` | int (0-23) | `8` | Start of allowed upload window |
 | `UPLOAD_END_HOUR` | int (0-23) | `22` | End of allowed upload window |
-| `INACTIVITY_SECONDS` | int | `300` | Bus silence required before upload (Z) |
+| `INACTIVITY_SECONDS` | int | `125` | Bus silence required before upload (Z). Default based on preliminary AirSense 11 observations (see 01-FINDINGS.md §6). |
 | `EXCLUSIVE_ACCESS_MINUTES` | int | `5` | Max time ESP holds SD card exclusively (X) |
 | `COOLDOWN_MINUTES` | int | `10` | Time card is released between sessions (Y) |
 
@@ -51,7 +51,7 @@ These are no longer needed and should be **ignored with a warning log** if prese
   "UPLOAD_MODE": "smart",
   "UPLOAD_START_HOUR": 8,
   "UPLOAD_END_HOUR": 22,
-  "INACTIVITY_SECONDS": 300,
+  "INACTIVITY_SECONDS": 125,
   "EXCLUSIVE_ACCESS_MINUTES": 5,
   "COOLDOWN_MINUTES": 10,
   "RECENT_FOLDER_DAYS": 2,

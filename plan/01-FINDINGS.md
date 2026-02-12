@@ -126,3 +126,58 @@ Key insight: **We cannot detect CPAP activity during upload.** Therefore:
 - We should provide adequate cooldown between upload sessions
 - The periodic SD release every 1.5 seconds (current implementation) is eliminated —
   it was both slow AND ineffective (the CPAP re-enumerates on each switch anyway)
+
+---
+
+## 6. Preliminary SD Activity Observations
+
+> **Status**: Preliminary data (Feb 2026). Limited observation window. Values should be
+> refined with more data collection over time.
+
+Using the SD Activity Monitor (`/monitor` web UI) with the corrected GPIO 33 PCNT
+detection, the following bus activity patterns were observed on an **AirSense 11 AutoSet**:
+
+### 6.1 During Active Therapy
+
+The CPAP machine writes to the SD card approximately **every 60 seconds** (slightly
+less per timer). Between writes, the bus is completely silent.
+
+| Metric | Observed Value |
+|---|---|
+| Write interval | ~55–60 seconds |
+| Longest idle between writes | ~57.9 seconds |
+| Consecutive idle during therapy | Never exceeds ~58 seconds |
+| Pulse count per write burst | Variable (hundreds to thousands) |
+
+### 6.2 Outside Therapy (Machine Idle / Standby)
+
+When the CPAP is not running a therapy session, SD card access is **much less frequent**
+— at least 3× longer intervals than during therapy. Idle periods of 3+ minutes are
+typical.
+
+| Metric | Observed Value |
+|---|---|
+| Active samples | 11 (over ~6 min observation) |
+| Idle samples | 364 (over ~6 min observation) |
+| Longest idle streak | 187.4 seconds (3+ minutes) |
+| Typical idle gap | >180 seconds |
+
+### 6.3 Implications for Inactivity Threshold (Z)
+
+The inactivity threshold (Z) must be long enough to distinguish "CPAP is idle between
+therapy writes" from "CPAP is truly done with the card."
+
+| Scenario | Max Observed Idle | Recommended Z |
+|---|---|---|
+| During therapy | ~58 seconds | Must be **above** 58s to avoid false triggers |
+| Outside therapy | 187+ seconds | Z should be **below** 187s to detect idle quickly |
+| **Safe default** | — | **125 seconds** (2× therapy interval, well below standby idle) |
+
+A default of **Z = 125 seconds** provides a comfortable 2× margin above the longest
+observed therapy idle gap (~58s), while being well below the observed standby idle
+periods (~187s). This ensures the FSM will not attempt to take the SD card during
+active therapy, while still detecting non-therapy idle states promptly.
+
+> **Note**: These observations are preliminary and based on limited data from a single
+> AirSense 11 AutoSet. Different CPAP models may have different write patterns. The
+> threshold should be tuned using the SD Activity Monitor for each deployment.

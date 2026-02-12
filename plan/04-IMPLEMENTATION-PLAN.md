@@ -99,7 +99,7 @@ In `loadFromSD()`:
 uploadMode = doc["UPLOAD_MODE"] | "scheduled";
 uploadStartHour = doc["UPLOAD_START_HOUR"] | 8;
 uploadEndHour = doc["UPLOAD_END_HOUR"] | 22;
-inactivitySeconds = doc["INACTIVITY_SECONDS"] | 300;
+inactivitySeconds = doc["INACTIVITY_SECONDS"] | 125;
 exclusiveAccessMinutes = doc["EXCLUSIVE_ACCESS_MINUTES"] | 5;
 cooldownMinutes = doc["COOLDOWN_MINUTES"] | 10;
 
@@ -640,7 +640,7 @@ using JavaScript fetch() for polling.
 | Risk | Mitigation |
 |---|---|
 | GPIO 33 doesn't work as expected | Phase 1 tests this first. Can fall back to GPIO 32 if needed. |
-| PCNT misses activity (false idle) | Glitch filter tuning. Conservative Z default (300s). |
+| PCNT misses activity (false idle) | Glitch filter tuning. Z default (125s) is 2× therapy write interval (~58s). See 01-FINDINGS.md §6. |
 | CPAP confused by long SD card absence | X-minute limit (default 5 min). CPAP tolerates brief removals. |
 | Upload too slow with exclusive access | Should be FASTER — no 1.5s release overhead per file. |
 | Breaking config.json backward compat | Explicit migration logic + deprecation warnings. |
