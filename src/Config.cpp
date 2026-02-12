@@ -29,6 +29,14 @@ Config::Config() :
     recentFolderDays(2),  // Default: re-check today + yesterday
     cloudInsecureTls(false),  // Default: use root CA validation
     
+    // Upload FSM defaults
+    uploadMode("scheduled"),
+    uploadStartHour(8),
+    uploadEndHour(22),
+    inactivitySeconds(300),
+    exclusiveAccessMinutes(5),
+    cooldownMinutes(10),
+    
     _hasSmbEndpoint(false),
     _hasCloudEndpoint(false),
     _hasWebdavEndpoint(false),
@@ -491,7 +499,7 @@ bool Config::loadFromSD(fs::FS &sd) {
     gmtOffsetHours = doc["GMT_OFFSET_HOURS"] | 0;
     bootDelaySeconds = doc["BOOT_DELAY_SECONDS"] | 30;
     sdReleaseIntervalSeconds = doc["SD_RELEASE_INTERVAL_SECONDS"] | 2;
-    sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 1500;
+    sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 500;
     logToSdCard = doc["LOG_TO_SD_CARD"] | false;
     
     // Cloud upload settings
@@ -521,6 +529,89 @@ bool Config::loadFromSD(fs::FS &sd) {
         LOG_WARN("RECENT_FOLDER_DAYS cannot be negative, setting to 2");
         recentFolderDays = 2;
     }
+    
+    // Upload FSM settings
+    uploadMode = doc["UPLOAD_MODE"] | "scheduled";
+    uploadStartHour = doc["UPLOAD_START_HOUR"] | 8;
+    uploadEndHour = doc["UPLOAD_END_HOUR"] | 22;
+    inactivitySeconds = doc["INACTIVITY_SECONDS"] | 300;
+    exclusiveAccessMinutes = doc["EXCLUSIVE_ACCESS_MINUTES"] | 5;
+    cooldownMinutes = doc["COOLDOWN_MINUTES"] | 10;
+    
+    // Backward compat: UPLOAD_HOUR → UPLOAD_START_HOUR
+    if (!doc.containsKey("UPLOAD_START_HOUR") && doc.containsKey("UPLOAD_HOUR")) {
+        uploadStartHour = doc["UPLOAD_HOUR"] | 8;
+        uploadEndHour = uploadStartHour + 2;  // 2-hour window
+        LOG_WARN("UPLOAD_HOUR is deprecated. Using UPLOAD_START_HOUR/END_HOUR instead.");
+    }
+    
+    // Backward compat: UPLOAD_INTERVAL_MINUTES > 0 → smart mode
+    if (!doc.containsKey("UPLOAD_MODE") && (doc["UPLOAD_INTERVAL_MINUTES"] | 0) > 0) {
+        uploadMode = "smart";
+        LOG_WARN("UPLOAD_INTERVAL_MINUTES is deprecated. Setting UPLOAD_MODE=smart.");
+    }
+    
+    // Backward compat: SESSION_DURATION_SECONDS → EXCLUSIVE_ACCESS_MINUTES
+    if (!doc.containsKey("EXCLUSIVE_ACCESS_MINUTES") && doc.containsKey("SESSION_DURATION_SECONDS")) {
+        int secs = doc["SESSION_DURATION_SECONDS"] | 300;
+        exclusiveAccessMinutes = max(1, secs / 60);
+        LOG_WARN("SESSION_DURATION_SECONDS is deprecated. Using EXCLUSIVE_ACCESS_MINUTES instead.");
+    }
+    
+    // Deprecation warnings for removed params
+    if (doc.containsKey("SD_RELEASE_INTERVAL_SECONDS")) {
+        LOG_WARN("SD_RELEASE_INTERVAL_SECONDS is deprecated and ignored (exclusive access mode).");
+    }
+    if (doc.containsKey("SD_RELEASE_WAIT_MS")) {
+        LOG_WARN("SD_RELEASE_WAIT_MS is deprecated and ignored (exclusive access mode).");
+    }
+    
+    // Validate upload mode
+    if (uploadMode != "scheduled" && uploadMode != "smart") {
+        LOG_WARNF("Invalid UPLOAD_MODE '%s', defaulting to 'scheduled'", uploadMode.c_str());
+        uploadMode = "scheduled";
+    }
+    
+    // Validate hours (0-23)
+    if (uploadStartHour < 0 || uploadStartHour > 23) {
+        LOG_WARN("UPLOAD_START_HOUR must be 0-23, setting to 8");
+        uploadStartHour = 8;
+    }
+    if (uploadEndHour < 0 || uploadEndHour > 23) {
+        LOG_WARN("UPLOAD_END_HOUR must be 0-23, setting to 22");
+        uploadEndHour = 22;
+    }
+    
+    // Validate inactivity seconds (minimum 10s, maximum 3600s)
+    if (inactivitySeconds < 10) {
+        LOG_WARN("INACTIVITY_SECONDS below minimum (10s), setting to 10");
+        inactivitySeconds = 10;
+    } else if (inactivitySeconds > 3600) {
+        LOG_WARN("INACTIVITY_SECONDS above maximum (3600s), setting to 3600");
+        inactivitySeconds = 3600;
+    }
+    
+    // Validate exclusive access minutes (minimum 1, maximum 30)
+    if (exclusiveAccessMinutes < 1) {
+        LOG_WARN("EXCLUSIVE_ACCESS_MINUTES below minimum (1), setting to 1");
+        exclusiveAccessMinutes = 1;
+    } else if (exclusiveAccessMinutes > 30) {
+        LOG_WARN("EXCLUSIVE_ACCESS_MINUTES above maximum (30), setting to 30");
+        exclusiveAccessMinutes = 30;
+    }
+    
+    // Validate cooldown minutes (minimum 1, maximum 60)
+    if (cooldownMinutes < 1) {
+        LOG_WARN("COOLDOWN_MINUTES below minimum (1), setting to 1");
+        cooldownMinutes = 1;
+    } else if (cooldownMinutes > 60) {
+        LOG_WARN("COOLDOWN_MINUTES above maximum (60), setting to 60");
+        cooldownMinutes = 60;
+    }
+    
+    LOGF("Upload FSM: mode=%s, window=%d-%d, inactivity=%ds, exclusive=%dmin, cooldown=%dmin",
+         uploadMode.c_str(), uploadStartHour, uploadEndHour,
+         inactivitySeconds, exclusiveAccessMinutes, cooldownMinutes);
     
     // Power management settings with validation
     cpuSpeedMhz = doc["CPU_SPEED_MHZ"] | 240;
@@ -766,6 +857,15 @@ bool Config::hasWebdavEndpoint() const { return _hasWebdavEndpoint; }
 int Config::getCpuSpeedMhz() const { return cpuSpeedMhz; }
 WifiTxPower Config::getWifiTxPower() const { return wifiTxPower; }
 WifiPowerSaving Config::getWifiPowerSaving() const { return wifiPowerSaving; }
+
+// Upload FSM getters
+const String& Config::getUploadMode() const { return uploadMode; }
+int Config::getUploadStartHour() const { return uploadStartHour; }
+int Config::getUploadEndHour() const { return uploadEndHour; }
+int Config::getInactivitySeconds() const { return inactivitySeconds; }
+int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
+int Config::getCooldownMinutes() const { return cooldownMinutes; }
+bool Config::isSmartMode() const { return uploadMode == "smart"; }
 
 // Helper methods for enum conversion
 WifiTxPower Config::parseWifiTxPower(const String& str) {

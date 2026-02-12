@@ -4,10 +4,7 @@ Automatically upload CPAP therapy data from your SD card to network storage. Tes
 
 **Features:**
 - Automatic daily uploads to Windows shares, NAS, or Samba servers
-- **Direct upload to SleepHQ** cloud service for sleep data analysis
-- **Dual-backend support** — upload to both local NAS and SleepHQ simultaneously
 - **Over-The-Air (OTA) firmware updates** via web interface
-- Interval-based uploads (every N minutes) or daily scheduling
 - Secure credential storage in ESP32 flash memory (optional)
 - Respects CPAP machine access to SD card
 - Tracks uploaded files (no duplicates)
@@ -64,9 +61,8 @@ Insert the SD card and power on. The device will automatically upload new CPAP d
 
 ## Configuration Example
 
-Create `config.json` on your SD card. See [Configuration Reference](docs/CONFIGURATION.md) for all options.
+Create `config.json` on your SD card:
 
-### SMB Upload (NAS/Windows share)
 ```json
 {
   "WIFI_SSID": "YourNetworkName",
@@ -76,36 +72,10 @@ Create `config.json` on your SD card. See [Configuration Reference](docs/CONFIGU
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
   "UPLOAD_HOUR": 12,
-  "GMT_OFFSET_HOURS": -8
-}
-```
-
-### SleepHQ Cloud Upload
-```json
-{
-  "WIFI_SSID": "YourNetworkName",
-  "WIFI_PASS": "YourPassword",
-  "ENDPOINT_TYPE": "CLOUD",
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "UPLOAD_HOUR": 14,
-  "GMT_OFFSET_HOURS": -8
-}
-```
-
-### Dual Backend (SMB + SleepHQ)
-```json
-{
-  "WIFI_SSID": "YourNetworkName",
-  "WIFI_PASS": "YourPassword",
-  "ENDPOINT": "//192.168.1.100/cpap_backups",
-  "ENDPOINT_TYPE": "SMB,CLOUD",
-  "ENDPOINT_USER": "username",
-  "ENDPOINT_PASS": "password",
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "UPLOAD_HOUR": 14,
-  "GMT_OFFSET_HOURS": -8
+  "GMT_OFFSET_HOURS": -8,
+  "CPU_SPEED_MHZ": 240,
+  "WIFI_TX_PWR": "high",
+  "WIFI_PWR_SAVING": "none"
 }
 ```
 
@@ -300,39 +270,34 @@ The device respects your CPAP machine's need for SD card access by keeping uploa
 
 ## Project Status
 
-**Current Version:** v0.5.0-pre (development)
+**Current Version:** v0.4.3-pre (development)
 
-**Status:** ✅ Production Ready + Cloud Upload
+**Status:** ✅ Production Ready + Power Management
 - Hardware tested and validated
 - Integration tested with real CPAP data
-- All unit tests passing (175 tests)
+- All unit tests passing (145 tests)
 - SMB/CIFS upload fully implemented
-- SleepHQ cloud upload fully implemented (OAuth, multipart, TLS)
-- Dual-backend support (SMB + Cloud simultaneously)
 - Web interface remains responsive during uploads
 - Automatic retry mechanism with progress tracking
 - Automatic directory creation verified and working
-- Configurable power management for reduced current consumption
+- **NEW**: Configurable power management for reduced current consumption
 
 **Supported Upload Methods:**
 - ✅ SMB/CIFS (Windows shares, NAS, Samba)
-- ✅ SleepHQ direct upload (OAuth, HTTPS, content hashing)
-- ✅ Dual-backend (SMB + SleepHQ simultaneously)
 - ⏳ WebDAV (planned)
+- ⏳ SleepHQ direct upload (planned)
 
 ## Future Improvements
 
 - Implement FreeRTOS tasks for true concurrent web server operation during uploads
 - Add WebDAV upload support
+- Add SleepHQ direct upload support
 
 ## Support & Documentation
 
-- **Configuration Reference:** [docs/CONFIGURATION.md](docs/CONFIGURATION.md) - All config.json options explained
-- **Upload Flow Diagrams:** [docs/UPLOAD_FLOW.md](docs/UPLOAD_FLOW.md) - Visual reference for upload lifecycle
 - **User Guide:** [release/README.md](release/README.md) - Setup and usage instructions
 - **Developer Guide:** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) - Build and contribute
-- **Feature Flags:** [docs/FEATURE_FLAGS.md](docs/FEATURE_FLAGS.md) - Build-time backend selection
-- **Troubleshooting:** [docs/BUILD_TROUBLESHOOTING.md](docs/BUILD_TROUBLESHOOTING.md) - Common build issues
+- **Troubleshooting:** See user guide or developer guide
 - **Issues:** Report bugs or request features via GitHub issues
 
 ## License

@@ -1,0 +1,128 @@
+# Hardware Research Findings
+
+## 1. CS_SENSE Pin Verification
+
+### Background
+
+The FYSETC SD-WIFI-PRO board uses a hardware multiplexer (controlled by GPIO 26) to share
+the SD card bus between the ESP32 and the host device (CPAP machine). A separate GPIO is
+routed from the host-side SD golden finger contacts to allow the ESP32 to **monitor bus
+activity while the mux is in host mode**.
+
+### The Discrepancy
+
+| Source | CS_SENSE GPIO | Basis |
+|---|---|---|
+| FYSETC firmware (`SdWiFiBrowser/pins.h`) | 32 | Original code (likely a bug) |
+| Our firmware (`pins_config.h`) | 32 | Copied from FYSETC |
+| Reddit user IBNobody (reverse-engineered PCB) | **33** | Physical trace inspection |
+| FYSETC schematic PDF (`SD-WIFI-PRO V1.0.pdf`) | **33** | Official schematic |
+
+### Resolution: GPIO 33 is correct
+
+Verified from the official FYSETC schematic PDF (from `github.com/FYSETC/SD-WIFI-PRO`):
+
+- The schematic shows **GPIO 33** (`GPIO 33:ADC1_5`) connected via pull-up resistors to
+  the host-side SD golden finger interface
+- This is separate from the SDIO Slot 2 DAT3 pin (GPIO 13) used for ESP32's own SD access
+- The FYSETC firmware has a bug: `#define CS_SENSE 32` should be `33`
+- The bug was never caught because no firmware properly used CS_SENSE for meaningful detection
+
+### Impact
+
+Our firmware has been reading GPIO 32 (unused/floating) instead of GPIO 33 (actual host
+bus activity). This explains:
+- Why CS_SENSE never showed CPAP activity in our logs
+- Why `ENABLE_CPAP_MONITOR` was disabled citing "CS_SENSE hardware issue"
+- Why the CPAPMonitor stub says `<p>CPAP monitoring disabled (CS_SENSE hardware issue)</p>`
+
+---
+
+## 2. Why digitalRead() Fails for Bus Activity Detection
+
+### The Problem
+
+In SDIO 4-bit mode, the SD card's DAT3 line (which CS_SENSE monitors on the host side)
+carries data at **MHz speeds**. `digitalRead()` samples at ~1 µs intervals, which is far
+too slow to reliably catch bus activity. A busy bus can appear idle between samples.
+
+Current code in `SDCardManager::takeControl()`:
+```cpp
+if (digitalRead(CS_SENSE) == LOW) {
+    LOG("CPAP machine is using SD card, waiting...");
+    return false;
+}
+```
+
+This is fundamentally unreliable — it can miss activity that happens between polls.
+
+### Solution: ESP32 PCNT Peripheral
+
+The ESP32 has a hardware **Pulse Counter (PCNT)** peripheral that counts signal edges in
+hardware, independent of CPU timing. By counting both rising and falling edges on GPIO 33,
+we can detect any bus activity within a sampling window — even brief microsecond-level
+pulses.
+
+Key PCNT configuration:
+- Count **both** rising and falling edges (catches any transition)
+- Hardware glitch filter (~100ns) to ignore electrical noise
+- Sample in windows (e.g., 100ms): if count > 0, bus is active
+- Counter range: 0 to 32767 before overflow (more than sufficient)
+- Zero CPU overhead during counting (hardware peripheral)
+
+---
+
+## 3. Verified Pin Summary
+
+| Function | GPIO | Notes |
+|---|---|---|
+| **SD_SWITCH** | 26 | Mux control: HIGH = Host, LOW = ESP |
+| **CS_SENSE** | **33** | Host-side bus activity monitor (CONFIRMED) |
+| SD_CMD | 15 | SDIO Command (MOSI in SPI mode) |
+| SD_CLK | 14 | SDIO Clock |
+| SD_D0 | 2 | SDIO Data 0 (MISO in SPI mode) |
+| SD_D1 | 4 | SDIO Data 1 |
+| SD_D2 | 12 | SDIO Data 2 |
+| SD_D3 | 13 | SDIO Data 3 / CS in SPI mode |
+| SD_POWER | 27 | SD card power control (if available) |
+
+---
+
+## 4. Key Hardware Constraints
+
+1. **Mux blindness**: When ESP has SD control (GPIO 26 = LOW), it **cannot** monitor host
+   activity. The mux physically disconnects the host from the bus. This means we cannot
+   detect if the CPAP tries to access the card during an upload.
+
+2. **No concurrent access**: Only one side (ESP or host) can access the SD card at a time.
+   The mux is a hard either/or switch.
+
+3. **Host detects removal**: When ESP takes control, the CPAP sees the card as "removed."
+   When released, it sees "insertion." This triggers card re-enumeration on the CPAP side.
+
+4. **Card re-initialization**: After each mux switch, the accessing side must re-initialize
+   the SD card (`SD_MMC.begin()`). This adds ~500ms overhead per switch.
+
+5. **Power from host**: The SD-WIFI-PRO is powered by the CPAP's SD card slot. WiFi
+   transmission draws significant current but has been stable in testing.
+
+---
+
+## 5. Implications for Architecture
+
+Given these constraints, the **"Listen then Commit"** approach is the only viable strategy:
+
+1. **Listen** (PCNT on GPIO 33): Monitor bus activity while mux is in host mode.
+   Wait for sustained silence (configurable duration).
+
+2. **Commit** (exclusive access): Take full control of the SD card. Upload as fast as
+   possible without any periodic releases. The CPAP cannot access the card during this time.
+
+3. **Release**: Give the card back. Wait a cooldown period. Then listen again.
+
+Key insight: **We cannot detect CPAP activity during upload.** Therefore:
+- We must be confident the CPAP is idle BEFORE taking control
+- We should limit how long we hold the card (configurable max time)
+- We should provide adequate cooldown between upload sessions
+- The periodic SD release every 1.5 seconds (current implementation) is eliminated —
+  it was both slow AND ineffective (the CPAP re-enumerates on each switch anyway)

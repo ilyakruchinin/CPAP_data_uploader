@@ -12,6 +12,10 @@ volatile bool g_deepScanFlag = false;
 // Global scan status flag
 volatile bool g_scanInProgress = false;
 
+// Monitoring trigger flags
+volatile bool g_monitorActivityFlag = false;
+volatile bool g_stopMonitorFlag = false;
+
 // External retry timing variables (defined in main.cpp)
 extern unsigned long nextUploadRetryTime;
 extern bool budgetExhaustedRetry;
@@ -27,7 +31,8 @@ TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
       budgetManager(budget),
       scheduleManager(schedule),
       wifiManager(wifi),
-      cpapMonitor(monitor)
+      cpapMonitor(monitor),
+      trafficMonitor(nullptr)
 #ifdef ENABLE_OTA_UPDATES
       , otaManager(nullptr)
 #endif
@@ -58,6 +63,10 @@ bool TestWebServer::begin() {
     server->on("/reset-state", [this]() { this->handleResetState(); });
     server->on("/config", [this]() { this->handleConfig(); });
     server->on("/logs", [this]() { this->handleLogs(); });
+    server->on("/monitor", [this]() { this->handleMonitorPage(); });
+    server->on("/api/monitor-start", [this]() { this->handleMonitorStart(); });
+    server->on("/api/monitor-stop", [this]() { this->handleMonitorStop(); });
+    server->on("/api/sd-activity", [this]() { this->handleSdActivity(); });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -268,7 +277,7 @@ void TestWebServer::handleRoot() {
             html += "<div style='background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 10px 0;'>";
             html += "<p><strong>Folder:</strong> " + retryFolder + "</p>";
             html += "<p><strong>Attempt:</strong> " + String(retryCount + 1) + " of " + String(maxRetries) + "</p>";
-            html += "<p><strong>Reason:</strong> Upload session time budget exhausted before completing all files in this folder.</p>";
+            html += "<p><strong>Reason:</strong> Upload session time budget exhausted before completing all files.</p>";
             
             // Show retry wait time if waiting
             if (budgetExhaustedRetry && nextUploadRetryTime > millis()) {
@@ -690,13 +699,15 @@ String TestWebServer::getCurrentTimeString() {
     return String(buffer);
 }
 
-// Helper: Get count of pending DATALOG folders (estimate)
-// Note: This requires SD card access to count files within folders,
-// which we don't have here. Return -1 to indicate "unknown".
+// Helper: Get count of pending files (estimate)
 int TestWebServer::getPendingFilesCount() {
     if (!stateManager) {
         return 0;
     }
+    
+    // Count files in incomplete DATALOG folders
+    // Note: This requires SD card access, which we don't have here
+    // Return -1 to indicate "unknown" rather than misleading 0
     return -1;
 }
 
@@ -738,6 +749,11 @@ void TestWebServer::updateManagers(UploadStateManager* state, TimeBudgetManager*
 // Set WiFi manager reference
 void TestWebServer::setWiFiManager(WiFiManager* wifi) {
     wifiManager = wifi;
+}
+
+// Set TrafficMonitor reference
+void TestWebServer::setTrafficMonitor(TrafficMonitor* tm) {
+    trafficMonitor = tm;
 }
 
 // Helper: Escape special characters for JSON string
@@ -1109,3 +1125,142 @@ void TestWebServer::handleOTAURL() {
 }
 
 #endif // ENABLE_OTA_UPDATES
+
+// ============================================================================
+// SD Activity Monitor Handlers
+// ============================================================================
+
+void TestWebServer::handleMonitorStart() {
+    addCorsHeaders(server);
+    g_monitorActivityFlag = true;
+    server->send(200, "application/json", "{\"success\":true,\"message\":\"Monitoring started\"}");
+}
+
+void TestWebServer::handleMonitorStop() {
+    addCorsHeaders(server);
+    g_stopMonitorFlag = true;
+    server->send(200, "application/json", "{\"success\":true,\"message\":\"Monitoring stopped\"}");
+}
+
+void TestWebServer::handleSdActivity() {
+    addCorsHeaders(server);
+    
+    if (!trafficMonitor) {
+        server->send(500, "application/json", "{\"error\":\"TrafficMonitor not available\"}");
+        return;
+    }
+    
+    // Build JSON with current stats and recent samples
+    String json = "{";
+    json += "\"last_pulse_count\":" + String(trafficMonitor->getLastPulseCount()) + ",";
+    json += "\"consecutive_idle_ms\":" + String(trafficMonitor->getConsecutiveIdleMs()) + ",";
+    json += "\"longest_idle_ms\":" + String(trafficMonitor->getLongestIdleMs()) + ",";
+    json += "\"total_active_samples\":" + String(trafficMonitor->getTotalActiveSamples()) + ",";
+    json += "\"total_idle_samples\":" + String(trafficMonitor->getTotalIdleSamples()) + ",";
+    json += "\"is_busy\":" + String(trafficMonitor->isBusy() ? "true" : "false") + ",";
+    json += "\"sample_count\":" + String(trafficMonitor->getSampleCount()) + ",";
+    
+    // Include the last N samples from the circular buffer
+    json += "\"samples\":[";
+    int count = trafficMonitor->getSampleCount();
+    int head = trafficMonitor->getSampleHead();
+    int maxSamples = TrafficMonitor::MAX_SAMPLES;
+    const ActivitySample* buffer = trafficMonitor->getSampleBuffer();
+    
+    // Output samples oldest-first (from tail to head)
+    int start = (count < maxSamples) ? 0 : head;
+    int outputCount = min(count, 60);  // Limit to last 60 seconds for web response
+    int skip = count - outputCount;
+    
+    bool first = true;
+    for (int i = 0; i < count; i++) {
+        if (i < skip) continue;
+        int idx = (start + i) % maxSamples;
+        if (!first) json += ",";
+        json += "{\"t\":" + String(buffer[idx].timestamp);
+        json += ",\"p\":" + String(buffer[idx].pulseCount);
+        json += ",\"a\":" + String(buffer[idx].active ? 1 : 0) + "}";
+        first = false;
+    }
+    
+    json += "]}";
+    
+    server->send(200, "application/json", json);
+}
+
+void TestWebServer::handleMonitorPage() {
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<title>SD Activity Monitor - CPAP Auto-Uploader</title>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<style>";
+    html += "body{font-family:monospace;background:#1a1a2e;color:#e0e0e0;margin:20px}";
+    html += "h1{color:#00d4ff}";
+    html += ".stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:20px 0}";
+    html += ".stat{background:#16213e;padding:15px;border-radius:8px;text-align:center}";
+    html += ".stat .value{font-size:2em;color:#00d4ff;display:block;margin:5px 0}";
+    html += ".stat .label{color:#888;font-size:0.9em}";
+    html += ".bar-chart{background:#16213e;padding:15px;border-radius:8px;margin:20px 0;overflow-x:auto}";
+    html += ".bar-row{display:flex;align-items:center;height:20px;margin:2px 0}";
+    html += ".bar-label{width:60px;text-align:right;padding-right:8px;font-size:0.8em;color:#888}";
+    html += ".bar{height:16px;border-radius:2px;min-width:1px;transition:width 0.3s}";
+    html += ".bar.active{background:#ff4444}";
+    html += ".bar.idle{background:#16213e}";
+    html += ".indicator{display:inline-block;width:20px;height:20px;border-radius:50%;margin-left:10px;vertical-align:middle}";
+    html += ".indicator.busy{background:#ff4444;box-shadow:0 0 10px #ff4444}";
+    html += ".indicator.idle{background:#44ff44;box-shadow:0 0 10px #44ff44}";
+    html += "button{background:#00d4ff;color:#000;border:none;padding:12px 24px;border-radius:6px;";
+    html += "font-size:1em;cursor:pointer;margin:5px}";
+    html += "button:hover{background:#00b4d8}";
+    html += "button.stop{background:#ff4444}button.stop:hover{background:#cc3333}";
+    html += "a{color:#00d4ff}";
+    html += "</style></head><body>";
+    
+    html += "<h1>SD Activity Monitor <span id='indicator' class='indicator idle'></span></h1>";
+    html += "<p><a href='/'>← Back to Status</a></p>";
+    
+    html += "<div style='margin:20px 0'>";
+    html += "<button onclick='startMonitor()'>Start Monitor</button>";
+    html += "<button class='stop' onclick='stopMonitor()'>Stop Monitor</button>";
+    html += "</div>";
+    
+    html += "<div class='stats'>";
+    html += "<div class='stat'><span class='label'>Last Pulse Count</span><span class='value' id='pulses'>--</span></div>";
+    html += "<div class='stat'><span class='label'>Consecutive Idle</span><span class='value' id='idle'>--</span></div>";
+    html += "<div class='stat'><span class='label'>Longest Idle</span><span class='value' id='longest'>--</span></div>";
+    html += "<div class='stat'><span class='label'>Active / Idle Samples</span><span class='value' id='ratio'>--</span></div>";
+    html += "</div>";
+    
+    html += "<h2>Activity Timeline (1 bar = 1 second)</h2>";
+    html += "<div class='bar-chart' id='chart'><em>Waiting for data...</em></div>";
+    
+    html += "<script>";
+    html += "let polling=null;";
+    html += "function startMonitor(){fetch('/api/monitor-start').then(()=>{if(!polling)polling=setInterval(fetchData,1000);})}";
+    html += "function stopMonitor(){fetch('/api/monitor-stop');if(polling){clearInterval(polling);polling=null;}}";
+    html += "function fetchData(){fetch('/api/sd-activity').then(r=>r.json()).then(d=>{";
+    html += "document.getElementById('pulses').textContent=d.last_pulse_count;";
+    html += "document.getElementById('idle').textContent=(d.consecutive_idle_ms/1000).toFixed(1)+'s';";
+    html += "document.getElementById('longest').textContent=(d.longest_idle_ms/1000).toFixed(1)+'s';";
+    html += "document.getElementById('ratio').textContent=d.total_active_samples+' / '+d.total_idle_samples;";
+    html += "let ind=document.getElementById('indicator');";
+    html += "ind.className='indicator '+(d.is_busy?'busy':'idle');";
+    html += "let chart=document.getElementById('chart');";
+    html += "if(d.samples&&d.samples.length>0){";
+    html += "let html='';";
+    html += "d.samples.forEach(s=>{";
+    html += "let w=Math.min(Math.max(s.p/10,1),300);";
+    html += "let cls=s.a?'active':'idle';";
+    html += "let sec=s.t%3600;let m=Math.floor(sec/60);let ss=sec%60;";
+    html += "let lbl=String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');";
+    html += "html+='<div class=\"bar-row\"><span class=\"bar-label\">'+lbl+'</span>';";
+    html += "html+='<div class=\"bar '+cls+'\" style=\"width:'+w+'px\" title=\"'+s.p+' pulses\"></div>';";
+    html += "html+=' <small>'+s.p+'</small></div>';";
+    html += "});chart.innerHTML=html;}";
+    html += "}).catch(e=>console.error('Fetch error:',e));}";
+    html += "startMonitor();";  // Auto-start on page load
+    html += "</script>";
+    
+    html += "</body></html>";
+    
+    server->send(200, "text/html", html);
+}

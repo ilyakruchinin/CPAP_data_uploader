@@ -58,6 +58,14 @@ private:
     int recentFolderDays;
     bool cloudInsecureTls;
     
+    // Upload FSM settings
+    String uploadMode;             // "scheduled" or "smart"
+    int uploadStartHour;           // 0-23, start of upload window
+    int uploadEndHour;             // 0-23, end of upload window
+    int inactivitySeconds;         // Z: seconds of bus silence before upload
+    int exclusiveAccessMinutes;    // X: max minutes of exclusive SD access
+    int cooldownMinutes;           // Y: minutes to release SD between upload cycles
+    
     // Cached endpoint type flags (computed once during loadFromSD)
     bool _hasSmbEndpoint;
     bool _hasCloudEndpoint;
@@ -137,6 +145,15 @@ public:
     bool hasCloudEndpoint() const;
     bool hasSmbEndpoint() const;
     bool hasWebdavEndpoint() const;
+    
+    // Upload FSM getters
+    const String& getUploadMode() const;
+    int getUploadStartHour() const;
+    int getUploadEndHour() const;
+    int getInactivitySeconds() const;
+    int getExclusiveAccessMinutes() const;
+    int getCooldownMinutes() const;
+    bool isSmartMode() const;
     
     // Power management getters
     int getCpuSpeedMhz() const;

@@ -18,8 +18,7 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
 #endif
       lastSdReleaseTime(0),
       cloudImportCreated(false),
-      cloudImportFailed(false),
-      companionFilesUploaded(false)
+      cloudImportFailed(false)
 #ifdef ENABLE_SMB_UPLOAD
       , smbUploader(nullptr)
 #endif
@@ -49,30 +48,25 @@ FileUploader::~FileUploader() {
 }
 
 // Initialize all components and load upload state
-bool FileUploader::begin(fs::FS &sd, SDCardManager* sdManager) {
+bool FileUploader::begin(fs::FS &sd) {
     LOG("[FileUploader] Initializing components...");
     
-    // Initialize UploadStateManager — needs SD for state file
+    // Initialize UploadStateManager
     stateManager = new UploadStateManager();
     if (!stateManager->begin(sd)) {
         LOG("[FileUploader] WARNING: Failed to load upload state, starting fresh");
         // Continue anyway - stateManager will work with empty state
     }
     
-    // Release SD — everything below is in-memory or network (NTP sync).
-    // NTP sync can take 20-30 seconds; CPAP needs SD access during this time.
-    if (sdManager && sdManager->hasControl()) {
-        sdManager->releaseControl();
-        LOG_DEBUG("[FileUploader] SD released before NTP sync");
-    }
-    
     // Initialize TimeBudgetManager
     budgetManager = new TimeBudgetManager();
     
-    // Initialize ScheduleManager — includes NTP sync (network-only, ~20s)
+    // Initialize ScheduleManager with new FSM-aware overload
     scheduleManager = new ScheduleManager();
     if (!scheduleManager->begin(
-            config->getUploadHour(),
+            config->getUploadMode(),
+            config->getUploadStartHour(),
+            config->getUploadEndHour(),
             config->getGmtOffsetHours())) {
         LOG("[FileUploader] ERROR: Failed to initialize ScheduleManager");
         return false;
@@ -165,7 +159,7 @@ bool FileUploader::checkAndReleaseSD(SDCardManager* sdManager) {
         return true;  // Not time yet, continue
     }
     
-    LOG("[FileUploader] Periodic SD card release - giving CPAP priority access");
+    LOG_DEBUG("[FileUploader] Periodic SD card release - giving CPAP priority access");
     
     // Pause active time tracking (only if an upload session is active)
     bool hasActiveSession = budgetManager->getRemainingBudgetMs() > 0 || budgetManager->getActiveTimeMs() > 0;
@@ -178,7 +172,7 @@ bool FileUploader::checkAndReleaseSD(SDCardManager* sdManager) {
     
     // Wait configured time, handling web requests during the wait
     unsigned long waitMs = config->getSdReleaseWaitMs();
-    LOGF("[FileUploader] CPAP has %lu ms to use SD card before retake...", waitMs);
+    LOG_DEBUGF("[FileUploader] Waiting %lu ms before retaking control...", waitMs);
     
 #ifdef ENABLE_TEST_WEBSERVER
     // Handle web requests during wait to keep interface responsive
@@ -196,10 +190,10 @@ bool FileUploader::checkAndReleaseSD(SDCardManager* sdManager) {
 #endif
     
     // Retake control
-    LOG("[FileUploader] Attempting to retake SD card control...");
+    LOG_DEBUG("[FileUploader] Attempting to retake SD card control...");
     if (!sdManager->takeControl()) {
         LOG_ERROR("[FileUploader] Failed to retake SD card control");
-        LOG_WARN("[FileUploader] CPAP machine may be actively using SD card - aborting to avoid data corruption");
+        LOG_WARN("[FileUploader] CPAP machine may be actively using SD card");
         return false;  // Abort upload
     }
     
@@ -211,71 +205,160 @@ bool FileUploader::checkAndReleaseSD(SDCardManager* sdManager) {
     // Reset release timer
     lastSdReleaseTime = millis();
     
-    LOG("[FileUploader] SD card control reacquired, resuming upload");
+    LOG_DEBUG("[FileUploader] SD card control reacquired, resuming upload");
     return true;
 }
 
-// Ensure SD card is held (retake if a backend released it during network I/O),
-// then give CPAP a guaranteed access window between file uploads.
-// This is called AFTER each file upload completes, before the next file.
-bool FileUploader::ensureSdAndReleaseBetweenFiles(SDCardManager* sdManager) {
-    // If SD was released by a backend (e.g. SleepHQ during HTTP POST),
-    // CPAP already had access during that time. Just retake.
-    if (!sdManager->hasControl()) {
-        LOG_DEBUG("[FileUploader] Retaking SD card after backend released it");
-        if (!sdManager->takeControl()) {
-            LOG_ERROR("[FileUploader] Failed to retake SD card after backend release");
-            return false;
-        }
+// ============================================================================
+// New FSM-driven exclusive access upload
+// ============================================================================
+
+UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, int maxMinutes, DataFilter filter) {
+    fs::FS &sd = sdManager->getFS();
+    unsigned long sessionStart = millis();
+    unsigned long maxMs = (unsigned long)maxMinutes * 60UL * 1000UL;
+    
+    LOGF("[FileUploader] Exclusive access upload: maxMinutes=%d, filter=%d", maxMinutes, (int)filter);
+    
+    // Check WiFi connection first
+    if (!wifiManager || !wifiManager->isConnected()) {
+        LOG_ERROR("[FileUploader] WiFi not connected - cannot upload");
+        return UploadResult::ERROR;
     }
     
-    // Pause budget during CPAP window
-    bool hasActiveSession = budgetManager->getRemainingBudgetMs() > 0 || budgetManager->getActiveTimeMs() > 0;
-    if (hasActiveSession) {
-        budgetManager->pauseActiveTime();
-    }
+    // Initialize cloud import session (lazy — created on first actual upload)
+    cloudImportCreated = false;
+    cloudImportFailed = false;
     
-    // Release SD card to give CPAP a guaranteed window between files
-    sdManager->releaseControl();
+    bool anyUploaded = false;
+    bool timerExpired = false;
     
-    unsigned long waitMs = config->getSdReleaseWaitMs();
-    LOG_DEBUGF("[FileUploader] CPAP access window: %lu ms between files", waitMs);
+    // Lambda to check if X-minute timer expired
+    auto isTimerExpired = [&]() -> bool {
+        return (millis() - sessionStart) >= maxMs;
+    };
     
+    // ── Phase 1: Fresh DATALOG folders (newest first) ──
+    if (!timerExpired && (filter == DataFilter::FRESH_ONLY || filter == DataFilter::ALL_DATA)) {
+        LOG("[FileUploader] Phase 1: Fresh DATALOG folders");
+        std::vector<String> allFolders = scanDatalogFolders(sd);
+        
+        for (const String& folderName : allFolders) {
+            if (!isRecentFolder(folderName)) continue;  // Skip old folders in this phase
+            
+            if (isTimerExpired()) {
+                LOG("[FileUploader] X-minute timer expired during fresh DATALOG phase");
+                timerExpired = true;
+                break;
+            }
+            
+            if (uploadDatalogFolder(sdManager, folderName)) {
+                anyUploaded = true;
+            } else {
+                LOGF("[FileUploader] Folder upload interrupted: %s", folderName.c_str());
+                break;
+            }
+            
 #ifdef ENABLE_TEST_WEBSERVER
-    if (webServer) {
-        unsigned long waitStart = millis();
-        while (millis() - waitStart < waitMs) {
-            webServer->handleClient();
-            delay(10);
+            if (webServer) webServer->handleClient();
+#endif
         }
-    } else {
-        delay(waitMs);
     }
-#else
-    delay(waitMs);
+    
+    // ── Phase 2: Old DATALOG folders (newest first, only if in window) ──
+    if (!timerExpired && (filter == DataFilter::OLD_ONLY || filter == DataFilter::ALL_DATA)) {
+        if (scheduleManager && scheduleManager->canUploadOldData()) {
+            LOG("[FileUploader] Phase 2: Old DATALOG folders");
+            std::vector<String> allFolders = scanDatalogFolders(sd);
+            
+            for (const String& folderName : allFolders) {
+                if (isRecentFolder(folderName)) continue;  // Skip fresh folders in this phase
+                
+                if (isTimerExpired()) {
+                    LOG("[FileUploader] X-minute timer expired during old DATALOG phase");
+                    timerExpired = true;
+                    break;
+                }
+                
+                if (uploadDatalogFolder(sdManager, folderName)) {
+                    anyUploaded = true;
+                } else {
+                    LOGF("[FileUploader] Folder upload interrupted: %s", folderName.c_str());
+                    break;
+                }
+                
+#ifdef ENABLE_TEST_WEBSERVER
+                if (webServer) webServer->handleClient();
+#endif
+            }
+        } else {
+            LOG_DEBUG("[FileUploader] Skipping old DATALOG - not in upload window");
+        }
+    }
+    
+    // ── Phase 3: Root/SETTINGS files *** MANDATORY — NEVER SKIPPED *** ──
+    {
+        LOG("[FileUploader] Phase 3: Root/SETTINGS files (MANDATORY)");
+        std::vector<String> rootSettingsFiles = scanRootAndSettingsFiles(sd);
+        
+        for (const String& filePath : rootSettingsFiles) {
+            if (uploadSingleFile(sdManager, filePath)) {
+                anyUploaded = true;
+            }
+            
+#ifdef ENABLE_TEST_WEBSERVER
+            if (webServer) webServer->handleClient();
+#endif
+        }
+    }
+    
+    // Process cloud import if active
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (sleephqUploader && config->hasCloudEndpoint()) {
+        if (!sleephqUploader->getCurrentImportId().isEmpty()) {
+            if (!sleephqUploader->processImport()) {
+                LOG_WARN("[FileUploader] Failed to process cloud import");
+            }
+        }
+    }
 #endif
     
-    // Retake SD for next file
-    if (!sdManager->takeControl()) {
-        LOG_ERROR("[FileUploader] Failed to retake SD card after inter-file CPAP window");
-        if (hasActiveSession) {
-            budgetManager->resumeActiveTime();
+    // Save upload state
+    if (!stateManager->save(sd)) {
+        LOG_ERROR("[FileUploader] Failed to save upload state");
+    }
+    
+    // Determine result
+    unsigned long elapsed = millis() - sessionStart;
+    LOGF("[FileUploader] Exclusive access session ended: %lu seconds elapsed", elapsed / 1000);
+    
+    if (timerExpired) {
+        // Check if there are still incomplete folders
+        bool hasIncomplete = (stateManager->getIncompleteFoldersCount() > 0);
+        if (hasIncomplete) {
+            LOG("[FileUploader] Timer expired with incomplete folders remaining (TIMEOUT)");
+            return UploadResult::TIMEOUT;
         }
-        return false;
+        // Timer expired but everything was uploaded
+        LOG("[FileUploader] Timer expired but all files uploaded (COMPLETE)");
     }
     
-    if (hasActiveSession) {
-        budgetManager->resumeActiveTime();
+    // Mark day completed if all folders done (for scheduled mode)
+    if (stateManager->getIncompleteFoldersCount() == 0) {
+        time_t now;
+        time(&now);
+        stateManager->setLastUploadTimestamp((unsigned long)now);
+        if (scheduleManager) {
+            scheduleManager->markDayCompleted();
+        }
+        LOG("[FileUploader] All folders completed - upload session marked as done");
+        return UploadResult::COMPLETE;
     }
     
-    // Reset the periodic release timer so checkAndReleaseSD doesn't
-    // trigger immediately after this inter-file release
-    lastSdReleaseTime = millis();
-    
-    return true;
+    return UploadResult::TIMEOUT;
 }
 
-// Main upload orchestration
+// Main upload orchestration (legacy — used by existing main.cpp until FSM migration)
 bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
     fs::FS &sd = sdManager->getFS();
     LOG("[FileUploader] Starting upload orchestration...");
@@ -304,9 +387,6 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
     }
     LOG("[FileUploader] Upload time - starting session");
     
-    // Reset SD card statistics for this session
-    sdManager->resetStatistics();
-    
     // Start upload session with time budget
     if (!startUploadSession(sd)) {
         LOG_ERROR("[FileUploader] Failed to start upload session");
@@ -320,15 +400,7 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
     std::vector<String> datalogFolders = scanDatalogFolders(sd);
     
     // Update total folders count for progress tracking
-    // Note: datalogFolders may include recent completed folders (RECENT_FOLDER_DAYS)
-    // that are re-scanned for changes. Exclude those to avoid double-counting.
-    int newInScan = 0;
-    for (const String& f : datalogFolders) {
-        if (!stateManager->isFolderCompleted(f) && !stateManager->isPendingFolder(f)) {
-            newInScan++;
-        }
-    }
-    stateManager->setTotalFoldersCount(newInScan + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
+    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
     
     for (const String& folderName : datalogFolders) {
         // Check if we still have budget
@@ -361,227 +433,42 @@ bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
 #endif
     }
     
-    // Free TLS connection between phases — the ~32KB TLS buffers + 49KB batch
-    // buffer can't coexist with SD_MMC FAT mount buffers. Phase 2 will reconnect.
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (sleephqUploader) {
-        sleephqUploader->disconnectTls();
-    }
-#endif
-    
     // Phase 2: Process root and SETTINGS files (if budget remains)
     if (budgetManager->hasBudget()) {
         LOG("[FileUploader] Phase 2: Processing root and SETTINGS files");
+        std::vector<String> rootSettingsFiles = scanRootAndSettingsFiles(sd);
         
-        // Ensure SD is mounted — Phase 1 may have lost SD (transient mount failure).
-        // Without SD, scanRootAndSettingsFiles finds 0 files and the import
-        // gets processed without mandatory companion files → SleepHQ rejects it.
-        bool phase2SdOk = sdManager->hasControl();
-        if (!phase2SdOk) {
-            LOG_WARN("[FileUploader] SD not held after Phase 1, retaking for Phase 2...");
-            if (sdManager->takeControl()) {
-                phase2SdOk = true;
-            } else {
-                delay(1000);  // Transient mount failures often clear after brief wait
-                if (sdManager->takeControl()) {
-                    phase2SdOk = true;
-                }
-            }
-            if (phase2SdOk) {
-                LOG("[FileUploader] SD retaken for Phase 2");
-            } else {
-                LOG_ERROR("[FileUploader] Cannot retake SD for Phase 2, skipping root/SETTINGS files");
-            }
-        }
-        
-        if (phase2SdOk) do {
-        // When a cloud import is active, force-include all root/SETTINGS files
-        // even if unchanged locally. SleepHQ requires STR.edf, Identification.*,
-        // and SETTINGS/ alongside DATALOG data to process an import.
-        bool forceForCloud = cloudImportCreated;
-        std::vector<String> rootSettingsFiles = scanRootAndSettingsFiles(sd, forceForCloud);
-        
-        if (!forceForCloud && !rootSettingsFiles.empty() && config->hasCloudEndpoint()) {
-            LOG("[FileUploader] Root files changed - force-including all companion files for cloud import");
-            forceForCloud = true;
-            rootSettingsFiles = scanRootAndSettingsFiles(sd, true);
-        }
-        
-        LOGF("[FileUploader] %s%d root/SETTINGS files to upload%s",
-             forceForCloud ? "Cloud import active - including all " : "Found ",
-             (int)rootSettingsFiles.size(),
-             forceForCloud ? " (forced for cloud import)" : "");
-        
-        // ─── Batch optimization for root/SETTINGS (cloud-only) ─────────
-        bool rootBatchMode = false;
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-        rootBatchMode = sleephqUploader && config->hasCloudEndpoint() && !cloudImportFailed && forceForCloud;
-#endif
-#ifdef ENABLE_SMB_UPLOAD
-        if (smbUploader && config->hasSmbEndpoint()) rootBatchMode = false;
-#endif
-#ifdef ENABLE_WEBDAV_UPLOAD
-        if (webdavUploader && config->hasWebdavEndpoint()) rootBatchMode = false;
-#endif
-        
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-        if (rootBatchMode) {
-            if (!ensureCloudImport(sdManager)) {
-                LOG_WARN("[FileUploader] Cloud not available, using per-file for root files");
-                rootBatchMode = false;
-            }
-        }
-        if (rootBatchMode) {
-            const size_t ROOT_BATCH_SIZE = 49152;
-            uint8_t* rootBuf = (uint8_t*)malloc(ROOT_BATCH_SIZE);
-            if (!rootBuf) {
-                LOG_WARN("[FileUploader] Root batch buffer alloc failed, using per-file");
-                rootBatchMode = false;
-            } else {
-                struct RootBatchEntry {
-                    String filePath;
-                    String fileName;
-                    size_t offset;
-                    size_t size;
-                };
-                std::vector<RootBatchEntry> rootBatch;
-                size_t rootOffset = 0;
-                std::vector<String> largeFiles;
-                
-                // Phase A: Batch-read small files
-                for (const String& fp : rootSettingsFiles) {
-                    File f = sd.open(fp, FILE_READ);
-                    if (!f) continue;
-                    size_t fsize = f.size();
-                    if (fsize == 0) { f.close(); continue; }
-                    
-                    String fn = fp;
-                    int sl = fn.lastIndexOf('/');
-                    if (sl >= 0) fn = fn.substring(sl + 1);
-                    
-                    if (fsize + rootOffset <= ROOT_BATCH_SIZE) {
-                        size_t br = f.read(rootBuf + rootOffset, fsize);
-                        f.close();
-                        if (br == fsize) {
-                            LOGF("[FileUploader] Batched root: %s (%u bytes)", fn.c_str(), fsize);
-                            rootBatch.push_back({fp, fn, rootOffset, fsize});
-                            rootOffset += fsize;
-                        }
-                    } else {
-                        f.close();
-                        largeFiles.push_back(fp);
-                    }
-                }
-                
-                // Phase B: Release SD, upload batch from RAM
-                if (!rootBatch.empty()) {
-                    LOGF("[FileUploader] Uploading root batch: %d files, %u bytes",
-                         (int)rootBatch.size(), (unsigned)rootOffset);
-                    if (sdManager->hasControl()) sdManager->releaseControl();
-                    
-                    if (!ensureCloudImport(sdManager)) {
-                        LOG_WARN("[FileUploader] Cloud import not available");
-                    }
-                    
-                    int rootUploaded = 0;
-                    for (size_t ri = 0; ri < rootBatch.size(); ri++) {
-                        auto& entry = rootBatch[ri];
-                        unsigned long cBytes = 0;
-                        if (sleephqUploader->uploadFromBuffer(
-                                rootBuf + entry.offset, entry.size,
-                                entry.fileName, entry.filePath, cBytes)) {
-                            anyUploaded = true;
-                            rootUploaded++;
-                        } else {
-                            LOG_ERRORF("[FileUploader] Root batch upload failed: %s", entry.filePath.c_str());
-                            break;
-                        }
-                    }
-                    
-                    // Phase C: Pre-calculate checksums from buffer, then free buffer
-                    // BEFORE remounting SD. Same heap pressure fix as DATALOG batch:
-                    // 49KB buffer + 32KB TLS = insufficient heap for FAT mount.
-                    std::vector<String> rootChecksums;
-                    for (int ri = 0; ri < rootUploaded; ri++) {
-                        auto& entry = rootBatch[ri];
-                        rootChecksums.push_back(
-                            stateManager->calculateChecksumFromBuffer(
-                                rootBuf + entry.offset, entry.size));
-                    }
-                    free(rootBuf);
-                    rootBuf = nullptr;
-                    
-                    if (!sdManager->hasControl()) {
-                        if (!sdManager->takeControl()) {
-                            LOG_ERROR("[FileUploader] Failed to retake SD after root batch");
-                            if (rootUploaded > 0) companionFilesUploaded = true;
-                            break;  // break out of do-while
-                        }
-                    }
-                    
-                    for (int ri = 0; ri < rootUploaded; ri++) {
-                        auto& entry = rootBatch[ri];
-                        if (!rootChecksums[ri].isEmpty()) {
-                            stateManager->markFileUploaded(entry.filePath, rootChecksums[ri]);
-                        }
-                        LOGF("[FileUploader] Successfully uploaded: %s (%u bytes)", entry.filePath.c_str(), entry.size);
-                    }
-                    if (rootUploaded > 0) {
-                        companionFilesUploaded = true;
-                        stateManager->save(sd);
-                    }
-                }
-                
-                if (rootBuf) free(rootBuf);
-                
-                // Phase D: Handle large files via per-file path
-                for (const String& fp : largeFiles) {
-                    if (!budgetManager->hasBudget()) break;
-                    if (!checkAndReleaseSD(sdManager)) break;
-                    if (uploadSingleFile(sdManager, fp, forceForCloud)) {
-                        anyUploaded = true;
-                    }
-                }
-                
-                break;  // break out of do-while (batch path done)
-            }
-        }
-#endif
-        
-        // Per-file fallback (multi-backend or no cloud)
         for (const String& filePath : rootSettingsFiles) {
+            // Check if we still have budget
             if (!budgetManager->hasBudget()) {
                 LOG("[FileUploader] Time budget exhausted during root/SETTINGS processing");
                 break;
             }
             
+            // Check for periodic SD card release
             if (!checkAndReleaseSD(sdManager)) {
                 LOG_ERROR("[FileUploader] Failed to retake SD card control, aborting upload");
                 break;
             }
             
-            if (uploadSingleFile(sdManager, filePath, forceForCloud)) {
+            // Upload the file
+            if (uploadSingleFile(sdManager, filePath)) {
                 anyUploaded = true;
-                if (forceForCloud) companionFilesUploaded = true;
             }
             
 #ifdef ENABLE_TEST_WEBSERVER
+            // Handle web requests between file uploads
             if (webServer) {
                 webServer->handleClient();
             }
 #endif
         }
-        
-        } while (0);  // end Phase 2 do-while block
     } else {
         LOG("[FileUploader] Skipping root/SETTINGS files - no budget remaining");
     }
     
-    // Print SD card statistics before ending session
-    sdManager->printStatistics();
-    
     // End upload session and save state
-    endUploadSession(sd, sdManager);
+    endUploadSession(sd);
     
     // Return true only if all folders are completed
     bool allComplete = (stateManager->getIncompleteFoldersCount() == 0);
@@ -600,21 +487,13 @@ bool FileUploader::scanPendingFolders(SDCardManager* sdManager) {
     std::vector<String> datalogFolders = scanDatalogFolders(sd);
     
     // Update total folders count for progress tracking
-    // Note: datalogFolders may include recent completed folders (RECENT_FOLDER_DAYS)
-    // that are re-scanned for changes. Exclude those to avoid double-counting.
-    int newInScan = 0;
-    for (const String& f : datalogFolders) {
-        if (!stateManager->isFolderCompleted(f) && !stateManager->isPendingFolder(f)) {
-            newInScan++;
-        }
-    }
-    stateManager->setTotalFoldersCount(newInScan + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
+    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
     
-    LOG_DEBUGF("[FileUploader] Found %d incomplete folders", newInScan);
+    LOG_DEBUGF("[FileUploader] Found %d incomplete folders", datalogFolders.size());
     LOG_DEBUGF("[FileUploader] Total folders: %d (completed: %d, incomplete: %d, pending: %d)", 
-         stateManager->getCompletedFoldersCount() + newInScan + stateManager->getPendingFoldersCount(),
+         stateManager->getCompletedFoldersCount() + datalogFolders.size() + stateManager->getPendingFoldersCount(),
          stateManager->getCompletedFoldersCount(),
-         newInScan,
+         datalogFolders.size(),
          stateManager->getPendingFoldersCount());
     
     return true;
@@ -657,61 +536,7 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
         }
     }
     
-    // Diagnostic: log current date and check for today's/yesterday's folders
-    {
-        time_t now = time(nullptr);
-        if (now > 24 * 3600) {
-            struct tm nowTm;
-            localtime_r(&now, &nowTm);
-            char todayStr[9];
-            snprintf(todayStr, sizeof(todayStr), "%04d%02d%02d",
-                     nowTm.tm_year + 1900, nowTm.tm_mon + 1, nowTm.tm_mday);
-            
-            time_t yesterday = now - 86400L;
-            struct tm yesterdayTm;
-            localtime_r(&yesterday, &yesterdayTm);
-            char yesterdayStr[9];
-            snprintf(yesterdayStr, sizeof(yesterdayStr), "%04d%02d%02d",
-                     yesterdayTm.tm_year + 1900, yesterdayTm.tm_mon + 1, yesterdayTm.tm_mday);
-            
-            LOGF("[FileUploader] Current local date: %s, yesterday: %s", todayStr, yesterdayStr);
-            
-            String todayPath = "/DATALOG/" + String(todayStr);
-            String yesterdayPath = "/DATALOG/" + String(yesterdayStr);
-            LOGF("[FileUploader] Today's folder %s: %s", todayStr, 
-                 sd.exists(todayPath) ? "EXISTS" : "NOT FOUND");
-            LOGF("[FileUploader] Yesterday's folder %s: %s", yesterdayStr,
-                 sd.exists(yesterdayPath) ? "EXISTS" : "NOT FOUND");
-        }
-    }
-    
-    // Diagnostic: raw listing of ALL entries in /DATALOG
-    {
-        File diagRoot = sd.open("/DATALOG");
-        if (diagRoot && diagRoot.isDirectory()) {
-            String allEntries = "";
-            int entryCount = 0;
-            File entry = diagRoot.openNextFile();
-            while (entry) {
-                String name = String(entry.name());
-                int lastSlash = name.lastIndexOf('/');
-                if (lastSlash >= 0) name = name.substring(lastSlash + 1);
-                if (entryCount > 0) allEntries += ", ";
-                allEntries += name;
-                if (!entry.isDirectory()) allEntries += "(file)";
-                entryCount++;
-                entry.close();
-                entry = diagRoot.openNextFile();
-            }
-            diagRoot.close();
-            LOGF("[FileUploader] Raw /DATALOG listing (%d entries): %s", entryCount, allEntries.c_str());
-        }
-    }
-    
     // Scan for folders
-    int totalDirsOnCard = 0;
-    int skippedOld = 0;
-    int skippedCompleted = 0;
     File file = root.openNextFile();
     while (file) {
         if (file.isDirectory()) {
@@ -723,11 +548,8 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
                 folderName = folderName.substring(lastSlash + 1);
             }
             
-            totalDirsOnCard++;
-            
             // Apply MAX_DAYS filter (folder names are in YYYYMMDD format)
             if (!maxDaysCutoff.isEmpty() && folderName < maxDaysCutoff) {
-                skippedOld++;
                 LOG_DEBUGF("[FileUploader] Skipping old folder (MAX_DAYS): %s", folderName.c_str());
                 file.close();
                 file = root.openNextFile();
@@ -744,9 +566,8 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
                     // Recent completed folders are re-scanned to detect files
                     // that changed (e.g. CPAP still writing to today's data)
                     folders.push_back(folderName);
-                    LOGF("[FileUploader] Re-checking recent completed folder: %s", folderName.c_str());
+                    LOG_DEBUGF("[FileUploader] Re-checking recent completed folder: %s", folderName.c_str());
                 } else {
-                    skippedCompleted++;
                     LOG_DEBUGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
                 }
             } else if (stateManager->isPendingFolder(folderName)) {
@@ -774,17 +595,13 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
             } else {
                 // Regular incomplete folder
                 folders.push_back(folderName);
-                LOGF("[FileUploader] Found NEW incomplete DATALOG folder: %s", folderName.c_str());
+                LOG_DEBUGF("[FileUploader] Found incomplete DATALOG folder: %s", folderName.c_str());
             }
         }
         file.close();
         file = root.openNextFile();
     }
     root.close();
-    
-    // Log SD card folder summary for diagnostics
-    LOGF("[FileUploader] SD card: %d total dirs in /DATALOG, %d skipped (old), %d skipped (completed non-recent), %d to process",
-         totalDirsOnCard, skippedOld, skippedCompleted, (int)folders.size());
     
     // Sort folders by date (newest first) - folders are in YYYYMMDD format
     std::sort(folders.begin(), folders.end(), [](const String& a, const String& b) {
@@ -795,7 +612,7 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
         LOG("[FileUploader] No incomplete DATALOG folders found");
         LOG_DEBUG("[FileUploader] Either all folders are uploaded or DATALOG is empty");
     } else {
-        LOGF("[FileUploader] Processing %d folders (newest first)", (int)folders.size());
+        LOG_DEBUGF("[FileUploader] Found %d incomplete DATALOG folders", folders.size());
     }
     
     return folders;
@@ -820,9 +637,7 @@ std::vector<String> FileUploader::scanFolderFiles(fs::FS &sd, const String& fold
         return files;
     }
     
-    // Scan for .edf files (also log ALL files for diagnostics)
-    int totalFiles = 0;
-    String allFileNames = "";
+    // Scan for .edf files
     File file = folder.openNextFile();
     while (file) {
         if (!file.isDirectory()) {
@@ -834,11 +649,6 @@ std::vector<String> FileUploader::scanFolderFiles(fs::FS &sd, const String& fold
                 fileName = fileName.substring(lastSlash + 1);
             }
             
-            // Log all files for diagnostics
-            if (totalFiles > 0) allFileNames += ", ";
-            allFileNames += fileName + "(" + String(file.size()) + ")";
-            totalFiles++;
-            
             // Check if it's an .edf file
             if (fileName.endsWith(".edf") || fileName.endsWith(".EDF")) {
                 files.push_back(fileName);
@@ -849,22 +659,14 @@ std::vector<String> FileUploader::scanFolderFiles(fs::FS &sd, const String& fold
     }
     folder.close();
     
-    LOGF("[FileUploader] %s: %d total files, %d .edf: [%s]", 
-         folderPath.c_str(), totalFiles, (int)files.size(), allFileNames.c_str());
+    LOG_DEBUGF("[FileUploader] Found %d .edf files in %s", files.size(), folderPath.c_str());
     
     return files;
 }
 
 // Scan root and SETTINGS files that need tracking
-// When forceAll is true, include all existing files regardless of checksum state.
-// This is needed for cloud imports where SleepHQ requires companion files
-// (STR.edf, Identification.*, SETTINGS/) alongside DATALOG data.
-std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd, bool forceAll) {
+std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
     std::vector<String> files;
-    
-    if (forceAll) {
-        LOG("[FileUploader] Cloud import active - including all root/SETTINGS files");
-    }
     
     // Root files to track
     std::vector<String> rootFiles = {
@@ -877,9 +679,10 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd, bool forc
     
     for (const String& file : rootFiles) {
         if (sd.exists(file)) {
-            if (forceAll || stateManager->hasFileChanged(sd, file)) {
+            // Check if file has changed
+            if (stateManager->hasFileChanged(sd, file)) {
                 files.push_back(file);
-                LOG_DEBUGF("[FileUploader] Root file %s: %s", forceAll ? "included" : "changed", file.c_str());
+                LOG_DEBUGF("[FileUploader] Root file changed: %s", file.c_str());
             }
         }
     }
@@ -898,9 +701,9 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd, bool forc
                 }
                 String settingsPath = "/SETTINGS/" + settingsFileName;
                 
-                if (forceAll || stateManager->hasFileChanged(sd, settingsPath)) {
+                if (stateManager->hasFileChanged(sd, settingsPath)) {
                     files.push_back(settingsPath);
-                    LOG_DEBUGF("[FileUploader] SETTINGS file %s: %s", forceAll ? "included" : "changed", settingsPath.c_str());
+                    LOG_DEBUGF("[FileUploader] SETTINGS file changed: %s", settingsPath.c_str());
                 }
             }
             settingsFile.close();
@@ -911,7 +714,7 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd, bool forc
         LOG_DEBUG("[FileUploader] /SETTINGS directory not found or not accessible");
     }
     
-    LOGF("[FileUploader] Found %d root/SETTINGS files to upload%s", files.size(), forceAll ? " (forced for cloud import)" : "");
+    LOG_DEBUGF("[FileUploader] Found %d changed root/SETTINGS files", files.size());
     
     return files;
 }
@@ -937,50 +740,30 @@ bool FileUploader::isRecentFolder(const String& folderName) const {
 
 // Lazily create a cloud import session on first actual upload
 // Returns true if import is ready (already created or just created)
-bool FileUploader::ensureCloudImport(SDCardManager* sdManager) {
+bool FileUploader::ensureCloudImport() {
 #ifdef ENABLE_SLEEPHQ_UPLOAD
     if (cloudImportCreated) return true;
     if (cloudImportFailed) return false;  // Already failed this session, don't retry
     if (!sleephqUploader || !config->hasCloudEndpoint()) return true;  // No cloud = OK
     
-    // Cloud init is 100% network I/O (OAuth + team/device discovery + import creation).
-    // Release SD so CPAP can write while we spend ~15s on network calls.
-    bool releasedSd = false;
-    if (sdManager && sdManager->hasControl()) {
-        sdManager->releaseControl();
-        releasedSd = true;
-        LOG_DEBUG("[FileUploader] SD released for CPAP during cloud init");
-    }
-    
-    bool ok = true;
     if (!sleephqUploader->isConnected()) {
         LOG("[FileUploader] Connecting cloud uploader for import session...");
         if (!sleephqUploader->begin()) {
             LOG_ERROR("[FileUploader] Failed to initialize cloud uploader");
             LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
             cloudImportFailed = true;
-            ok = false;
+            return false;
         }
     }
-    if (ok && sleephqUploader->isConnected()) {
+    if (sleephqUploader->isConnected()) {
         if (!sleephqUploader->createImport()) {
             LOG_ERROR("[FileUploader] Failed to create cloud import");
             LOG_WARN("[FileUploader] Cloud uploads will be skipped this session");
             cloudImportFailed = true;
-            ok = false;
-        } else {
-            cloudImportCreated = true;
-        }
-    }
-    
-    // Retake SD if we released it
-    if (releasedSd && sdManager && !sdManager->hasControl()) {
-        if (!sdManager->takeControl()) {
-            LOG_ERROR("[FileUploader] Failed to retake SD after cloud init");
             return false;
         }
+        cloudImportCreated = true;
     }
-    
     return cloudImportCreated;
 #else
     return true;
@@ -1016,70 +799,20 @@ bool FileUploader::startUploadSession(fs::FS &sd) {
     // This avoids creating empty imports when no files have changed
     cloudImportCreated = false;
     cloudImportFailed = false;
-    companionFilesUploaded = false;
     
     return true;
 }
 
 // End upload session and save state
-void FileUploader::endUploadSession(fs::FS &sd, SDCardManager* sdManager) {
+void FileUploader::endUploadSession(fs::FS &sd) {
     LOG("[FileUploader] Ending upload session");
     
     // Process cloud import if active
 #ifdef ENABLE_SLEEPHQ_UPLOAD
     if (sleephqUploader && config->hasCloudEndpoint()) {
         if (!sleephqUploader->getCurrentImportId().isEmpty()) {
-            // SleepHQ requires companion files (STR.edf, Identification.*,
-            // SETTINGS/) alongside DATALOG data. If companion files weren't
-            // uploaded in Phase 2 (budget exhausted, SD failure, etc.),
-            // force-upload them now — they're small (~80KB total) and without
-            // them the import will fail with "files missing".
-            if (cloudImportCreated && !companionFilesUploaded) {
-                LOG("[FileUploader] Companion files missing - force-uploading for cloud import");
-                // Ensure SD is mounted for file reads
-                if (sdManager && !sdManager->hasControl()) {
-                    if (!sdManager->takeControl()) {
-                        delay(1000);
-                        sdManager->takeControl();  // Best-effort retry
-                    }
-                }
-                if (sdManager && sdManager->hasControl()) {
-                    std::vector<String> companionFiles = scanRootAndSettingsFiles(sd, true);
-                    for (const String& filePath : companionFiles) {
-                        unsigned long bytes = 0;
-                        if (sleephqUploader->upload(filePath, filePath, sd, bytes)) {
-                            LOGF("[FileUploader] Companion file uploaded: %s (%lu bytes)", filePath.c_str(), bytes);
-                            companionFilesUploaded = true;
-                        } else {
-                            LOG_WARNF("[FileUploader] Failed to upload companion file: %s", filePath.c_str());
-                        }
-                    }
-                } else {
-                    LOG_ERROR("[FileUploader] Cannot mount SD for companion files");
-                }
-            }
-            
-            // Only process import if companion files were uploaded.
-            // Without them, SleepHQ will reject the import. Leave it
-            // unprocessed so the next session can add files and process.
-            if (!cloudImportCreated || companionFilesUploaded) {
-                // Release SD during processImport() — it's a pure network call,
-                // no SD access needed. Avoids holding SD for 5+ seconds.
-                if (sdManager && sdManager->hasControl()) {
-                    sdManager->releaseControl();
-                }
-                
-                if (!sleephqUploader->processImport()) {
-                    LOG_WARN("[FileUploader] Failed to process cloud import");
-                }
-            } else {
-                LOG_WARN("[FileUploader] Skipping processImport - companion files missing, import would fail");
-                LOG("[FileUploader] Import left open for next session to complete");
-            }
-            
-            // Retake SD for state save below
-            if (sdManager && !sdManager->hasControl()) {
-                sdManager->takeControl();
+            if (!sleephqUploader->processImport()) {
+                LOG_WARN("[FileUploader] Failed to process cloud import");
             }
         }
     }
@@ -1220,45 +953,9 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
     // Check if this is a recently completed folder being re-scanned
     bool isRecentRescan = stateManager->isFolderCompleted(folderName) && isRecentFolder(folderName);
     
-https://sleephq.com/api/swagger.json    // Log file count for diagnostics (helps debug overnight detection issues)
-    LOGF("[FileUploader] Folder %s: %d .edf files on SD card%s", 
-         folderName.c_str(), (int)files.size(), isRecentRescan ? " (recent re-scan)" : "");
-    
     // Upload each file
     int uploadedCount = 0;
     int skippedUnchanged = 0;
-    
-    // ─── Batch upload optimization (cloud-only) ─────────────────────────
-    // When only cloud is configured, batch small files into a single 48KB
-    // buffer during one SD hold, then release SD and upload all from RAM.
-    // Eliminates per-file SD mount/unmount overhead (~600ms each).
-    const size_t BATCH_BUF_SIZE = 49152;  // 48KB
-    bool cloudOnlyBatch = false;
-    uint8_t* batchBuf = nullptr;
-    size_t batchOffset = 0;
-    
-    struct BatchEntry {
-        String localPath;
-        String fileName;
-        size_t offset;
-        size_t size;
-    };
-    std::vector<BatchEntry> pendingBatch;
-    
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-    cloudOnlyBatch = sleephqUploader && config->hasCloudEndpoint() && !cloudImportFailed;
-#endif
-#ifdef ENABLE_SMB_UPLOAD
-    if (smbUploader && config->hasSmbEndpoint()) cloudOnlyBatch = false;
-#endif
-#ifdef ENABLE_WEBDAV_UPLOAD
-    if (webdavUploader && config->hasWebdavEndpoint()) cloudOnlyBatch = false;
-#endif
-    
-    // Note: batchBuf allocation is deferred until the first file actually
-    // needs batching. This avoids stealing 48KB from heap before TLS/OAuth
-    // has a chance to run — which would cause "heap too low" failures.
-    
     for (const String& fileName : files) {
         // Check for periodic SD card release before each file
         if (!checkAndReleaseSD(sdManager)) {
@@ -1271,7 +968,16 @@ https://sleephq.com/api/swagger.json    // Log file count for diagnostics (helps
         // Check time budget before uploading
         String localPath = folderPath + "/" + fileName;
         
-        // Get file size (metadata only — no content read)
+        // For recent folder re-scans, check if file has changed via checksum
+        if (isRecentRescan) {
+            if (!stateManager->hasFileChanged(sd, localPath)) {
+                skippedUnchanged++;
+                continue;  // File unchanged since last upload
+            }
+            LOG_DEBUGF("[FileUploader] File changed in recent folder: %s", fileName.c_str());
+        }
+        
+        // Get file size
         File file = sd.open(localPath);
         if (!file) {
             LOG_ERRORF("[FileUploader] Cannot open file for reading: %s", localPath.c_str());
@@ -1281,61 +987,23 @@ https://sleephq.com/api/swagger.json    // Log file count for diagnostics (helps
         }
         
         unsigned long fileSize = file.size();
-        file.close();
         
         // Sanity check file size
         if (fileSize == 0) {
             LOG_WARNF("[FileUploader] File is empty: %s", localPath.c_str());
+            file.close();
             // Mark empty file as processed to avoid re-scanning
-            stateManager->markFileUploadedWithSize(localPath, 0);
+            // Use a special checksum marker for empty files
+            stateManager->markFileUploaded(localPath, "empty_file");
             continue;  // Skip empty files
         }
         
-        // For recent folder re-scans, use size-based change detection.
-        // DATALOG .edf files are append-only — if size hasn't changed,
-        // the file hasn't changed. No content read needed.
-        if (isRecentRescan) {
-            if (!stateManager->hasFileSizeChanged(localPath, fileSize)) {
-                skippedUnchanged++;
-                continue;  // File unchanged since last upload
-            }
-            LOG_DEBUGF("[FileUploader] File size changed in recent folder: %s (%lu bytes)", fileName.c_str(), fileSize);
-        }
+        file.close();
         
         // Check if we have budget for this file
         if (!budgetManager->canUploadFile(fileSize)) {
             LOG("[FileUploader] Insufficient time budget for remaining files");
-            
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-            // Flush any pending batch before exiting
-            if (!pendingBatch.empty()) {
-                LOGF("[FileUploader] Flushing batch before budget exit: %d files", (int)pendingBatch.size());
-                if (sdManager->hasControl()) sdManager->releaseControl();
-                if (ensureCloudImport(sdManager)) {
-                    for (size_t bi = 0; bi < pendingBatch.size(); bi++) {
-                        BatchEntry& entry = pendingBatch[bi];
-                        unsigned long cBytes = 0;
-                        if (!sleephqUploader->uploadFromBuffer(
-                                batchBuf + entry.offset, entry.size,
-                                entry.fileName, entry.localPath, cBytes)) {
-                            break;
-                        }
-                        uploadedCount++;
-                    }
-                }
-                // Free batch buffer BEFORE remounting SD (same reason as mid-loop flush)
-                if (batchBuf) { free(batchBuf); batchBuf = nullptr; }
-                if (!sdManager->hasControl()) sdManager->takeControl();
-                for (auto& entry : pendingBatch) {
-                    stateManager->markFileUploadedWithSize(entry.localPath, entry.size);
-                }
-                pendingBatch.clear();
-                batchOffset = 0;
-            }
-#endif
-            if (batchBuf) { free(batchBuf); batchBuf = nullptr; }
-            
-            LOGF("[FileUploader] Uploaded %d of %d files in DATALOG/%s before budget exhaustion", uploadedCount, (int)files.size(), folderName.c_str());
+            LOGF("[FileUploader] Successfully uploaded %d of %d files before budget exhaustion", uploadedCount, files.size());
             LOG("[FileUploader] This is normal - upload will resume in next session");
             
             // Increment retry count for this folder (partial upload)
@@ -1346,106 +1014,8 @@ https://sleephq.com/api/swagger.json    // Log file count for diagnostics (helps
             return false;  // Session interrupted due to budget
         }
         
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-        // ─── Batch path: accumulate small cloud-only files in RAM ───
-        if (cloudOnlyBatch && fileSize + batchOffset <= BATCH_BUF_SIZE) {
-            if (!ensureCloudImport(sdManager)) {
-                LOG_WARN("[FileUploader] Cloud import not available, disabling batch");
-                cloudOnlyBatch = false;
-            } else {
-                // Lazy allocation: defer 48KB buffer until AFTER cloud/TLS init
-                // succeeds, so TLS handshake has enough heap for its buffers.
-                if (!batchBuf) {
-                    batchBuf = (uint8_t*)malloc(BATCH_BUF_SIZE);
-                    if (!batchBuf) {
-                        LOG_WARN("[FileUploader] Batch buffer alloc failed, using per-file mode");
-                        cloudOnlyBatch = false;
-                    } else {
-                        LOG_DEBUG("[FileUploader] Batch buffer allocated (48KB)");
-                    }
-                }
-            }
-            if (cloudOnlyBatch) {
-                File f = sd.open(localPath, FILE_READ);
-                if (!f) {
-                    LOG_ERRORF("[FileUploader] Cannot read for batch: %s", localPath.c_str());
-                    continue;
-                }
-                size_t bytesRead = f.read(batchBuf + batchOffset, fileSize);
-                f.close();
-                if (bytesRead != fileSize) {
-                    LOG_ERRORF("[FileUploader] Short read batching %s", fileName.c_str());
-                    continue;
-                }
-                
-                LOGF("[FileUploader] Batched: %s (%lu bytes, buf %u/%u)",
-                     fileName.c_str(), fileSize, (unsigned)(batchOffset + fileSize), BATCH_BUF_SIZE);
-                pendingBatch.push_back({localPath, fileName, batchOffset, (size_t)fileSize});
-                batchOffset += fileSize;
-                continue;  // Accumulate more files before uploading
-            }
-        }
-        
-        // ─── Flush pending batch before handling this file individually ──
-        if (!pendingBatch.empty()) {
-            LOGF("[FileUploader] Flushing batch: %d files, %u bytes",
-                 (int)pendingBatch.size(), (unsigned)batchOffset);
-            if (sdManager->hasControl()) sdManager->releaseControl();
-            
-            bool batchOk = true;
-            int batchUp = 0;
-            for (size_t bi = 0; bi < pendingBatch.size(); bi++) {
-                BatchEntry& entry = pendingBatch[bi];
-                unsigned long cBytes = 0;
-                unsigned long bStart = millis();
-                if (!sleephqUploader->uploadFromBuffer(
-                        batchBuf + entry.offset, entry.size,
-                        entry.fileName, entry.localPath, cBytes)) {
-                    LOG_ERRORF("[FileUploader] Batch upload failed: %s", entry.localPath.c_str());
-                    batchOk = false;
-                    break;
-                }
-                unsigned long bTime = millis() - bStart;
-                if (cBytes >= 5120) budgetManager->recordUpload(cBytes, bTime);
-                batchUp++;
-            }
-            
-            // Free batch buffer BEFORE remounting SD — the 49KB buffer + 32KB TLS
-            // leaves insufficient heap for SD_MMC FAT mount (caused 0x101 errors).
-            // DATALOG state marking uses only entry.localPath/size, not buffer data.
-            if (batchBuf) { free(batchBuf); batchBuf = nullptr; }
-            
-            if (!sdManager->hasControl()) {
-                if (!sdManager->takeControl()) {
-                    LOG_ERROR("[FileUploader] Failed to retake SD after batch");
-                    return false;
-                }
-            }
-            for (int bi = 0; bi < batchUp; bi++) {
-                BatchEntry& entry = pendingBatch[bi];
-                stateManager->markFileUploadedWithSize(entry.localPath, entry.size);
-                uploadedCount++;
-                LOGF("[FileUploader] Uploaded: %s (%u bytes)", entry.fileName.c_str(), entry.size);
-            }
-            if (batchUp > 0) stateManager->save(sd);
-            pendingBatch.clear();
-            batchOffset = 0;
-            
-            if (!batchOk) {
-                stateManager->incrementCurrentRetryCount();
-                stateManager->save(sd);
-                return false;
-            }
-            if (!ensureSdAndReleaseBetweenFiles(sdManager)) {
-                stateManager->incrementCurrentRetryCount();
-                stateManager->save(sd);
-                return false;
-            }
-        }
-#endif
-        
         // Lazily create cloud import on first actual upload (avoids empty imports)
-        if (!ensureCloudImport(sdManager)) {
+        if (!ensureCloudImport()) {
             LOG_WARN("[FileUploader] Cloud import not available, skipping cloud uploads this session");
         }
         
@@ -1522,7 +1092,7 @@ https://sleephq.com/api/swagger.json    // Log file count for diagnostics (helps
                 }
             }
             unsigned long cloudBytes = 0;
-            if (!sleephqUploader->upload(localPath, remotePath, sd, cloudBytes, sdManager)) {
+            if (!sleephqUploader->upload(localPath, remotePath, sd, cloudBytes)) {
                 LOG_ERRORF("[FileUploader] Cloud upload failed for: %s", localPath.c_str());
                 uploadSuccess = false;
             } else if (bytesTransferred == 0) {
@@ -1530,14 +1100,6 @@ https://sleephq.com/api/swagger.json    // Log file count for diagnostics (helps
             }
         }
 #endif
-        
-        // Retake SD if a backend released it during network I/O
-        if (!sdManager->hasControl()) {
-            if (!sdManager->takeControl()) {
-                LOG_ERROR("[FileUploader] Failed to retake SD after backend network I/O");
-                return false;
-            }
-        }
         
         if (!anyBackendConfigured) {
             LOG_ERROR("[FileUploader] No uploader available for configured endpoint type");
@@ -1548,7 +1110,7 @@ https://sleephq.com/api/swagger.json    // Log file count for diagnostics (helps
         
         if (!uploadSuccess) {
             LOG_ERRORF("[FileUploader] Failed to upload file: %s", localPath.c_str());
-            LOG_WARNF("[FileUploader] Uploaded %d files in DATALOG/%s before failure", uploadedCount, folderName.c_str());
+            LOG_WARNF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
             
             // Don't mark folder as completed, will retry
             stateManager->incrementCurrentRetryCount();
@@ -1564,87 +1126,22 @@ https://sleephq.com/api/swagger.json    // Log file count for diagnostics (helps
             budgetManager->recordUpload(bytesTransferred, uploadTime);
         }
         
-        // Store file size for size-based change detection on re-scan.
-        // DATALOG files are append-only — size comparison is sufficient,
-        // no need to re-read the file for a hash (saves a full SD read).
-        stateManager->markFileUploadedWithSize(localPath, fileSize);
+        // Store per-file checksum so hasFileChanged() can detect changes on re-scan
+        String checksum = stateManager->calculateChecksum(sd, localPath);
+        if (!checksum.isEmpty()) {
+            stateManager->markFileUploaded(localPath, checksum);
+        }
         
         uploadedCount++;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), bytesTransferred);
         LOG_DEBUGF("[FileUploader] Budget remaining: %lu ms", budgetManager->getRemainingBudgetMs());
-        
-        // Give CPAP a guaranteed SD access window between every file upload
-        if (!ensureSdAndReleaseBetweenFiles(sdManager)) {
-            LOG_ERROR("[FileUploader] Failed to retake SD after inter-file CPAP window");
-            stateManager->incrementCurrentRetryCount();
-            stateManager->save(sd);
-            return false;
-        }
     }
-    
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-    // Flush any remaining batch entries
-    if (!pendingBatch.empty()) {
-        LOGF("[FileUploader] Flushing final batch: %d files, %u bytes",
-             (int)pendingBatch.size(), (unsigned)batchOffset);
-        if (sdManager->hasControl()) sdManager->releaseControl();
-        
-        if (!ensureCloudImport(sdManager)) {
-            LOG_WARN("[FileUploader] Cloud import not available");
-        }
-        
-        bool batchOk = true;
-        int batchUp = 0;
-        for (size_t bi = 0; bi < pendingBatch.size(); bi++) {
-            BatchEntry& entry = pendingBatch[bi];
-            unsigned long cBytes = 0;
-            unsigned long bStart = millis();
-            if (!sleephqUploader->uploadFromBuffer(
-                    batchBuf + entry.offset, entry.size,
-                    entry.fileName, entry.localPath, cBytes)) {
-                LOG_ERRORF("[FileUploader] Batch upload failed: %s", entry.localPath.c_str());
-                batchOk = false;
-                break;
-            }
-            unsigned long bTime = millis() - bStart;
-            if (cBytes >= 5120) budgetManager->recordUpload(cBytes, bTime);
-            batchUp++;
-        }
-        
-        // Free batch buffer BEFORE remounting SD (same reason as mid-loop flush)
-        if (batchBuf) { free(batchBuf); batchBuf = nullptr; }
-        
-        if (!sdManager->hasControl()) {
-            if (!sdManager->takeControl()) {
-                LOG_ERROR("[FileUploader] Failed to retake SD after final batch");
-                return false;
-            }
-        }
-        for (int bi = 0; bi < batchUp; bi++) {
-            BatchEntry& entry = pendingBatch[bi];
-            stateManager->markFileUploadedWithSize(entry.localPath, entry.size);
-            uploadedCount++;
-            LOGF("[FileUploader] Uploaded: %s (%u bytes)", entry.fileName.c_str(), entry.size);
-        }
-        if (batchUp > 0) stateManager->save(sd);
-        pendingBatch.clear();
-        batchOffset = 0;
-        
-        if (!batchOk) {
-            stateManager->incrementCurrentRetryCount();
-            stateManager->save(sd);
-            return false;
-        }
-    }
-#endif
-    
-    if (batchBuf) { free(batchBuf); batchBuf = nullptr; }
     
     // All files processed successfully
     if (isRecentRescan) {
-        LOGF("[FileUploader] Re-scan of %s complete: %d uploaded, %d unchanged", folderName.c_str(), uploadedCount, skippedUnchanged);
+        LOGF("[FileUploader] Re-scan complete: %d uploaded, %d unchanged in folder", uploadedCount, skippedUnchanged);
     } else {
-        LOGF("[FileUploader] Successfully uploaded all %d files in DATALOG/%s", uploadedCount, folderName.c_str());
+        LOGF("[FileUploader] Successfully uploaded all %d files in folder", uploadedCount);
     }
     
     // Mark folder as completed
@@ -1660,9 +1157,7 @@ https://sleephq.com/api/swagger.json    // Log file count for diagnostics (helps
 }
 
 // Upload a single file (for root and SETTINGS files)
-// When forceUpload is true, skip the hasFileChanged check (used for cloud imports
-// where SleepHQ needs companion files even if unchanged locally).
-bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& filePath, bool forceUpload) {
+bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& filePath) {
     fs::FS &sd = sdManager->getFS();
     LOGF("[FileUploader] Uploading single file: %s", filePath.c_str());
     
@@ -1700,14 +1195,13 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     }
     
     // Check if file has changed (checksum comparison)
-    // Skip this check when forceUpload is true (cloud imports need companion files)
-    if (!forceUpload && !stateManager->hasFileChanged(sd, filePath)) {
+    if (!stateManager->hasFileChanged(sd, filePath)) {
         LOG_DEBUG("[FileUploader] File unchanged, skipping upload");
         return true;  // Not an error, just no need to upload
     }
     
     // Lazily create cloud import on first actual upload (avoids empty imports)
-    if (!ensureCloudImport(sdManager)) {
+    if (!ensureCloudImport()) {
         LOG_WARN("[FileUploader] Cloud import not available, skipping cloud uploads this session");
     }
     
@@ -1766,7 +1260,7 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
             }
         }
         unsigned long cloudBytes = 0;
-        if (!sleephqUploader->upload(filePath, filePath, sd, cloudBytes, sdManager)) {
+        if (!sleephqUploader->upload(filePath, filePath, sd, cloudBytes)) {
             LOG_ERRORF("[FileUploader] Cloud upload failed for: %s", filePath.c_str());
             uploadSuccess = false;
         } else if (bytesTransferred == 0) {
@@ -1774,14 +1268,6 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
         }
     }
 #endif
-    
-    // Retake SD if a backend released it during network I/O
-    if (!sdManager->hasControl()) {
-        if (!sdManager->takeControl()) {
-            LOG_ERROR("[FileUploader] Failed to retake SD after backend network I/O");
-            return false;
-        }
-    }
     
     if (!anyBackendConfigured) {
         LOG_ERROR("[FileUploader] No uploader available for configured endpoint type");
