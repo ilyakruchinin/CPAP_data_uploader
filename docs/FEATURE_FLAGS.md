@@ -55,21 +55,22 @@ Enables WebDAV upload support for Nextcloud, ownCloud, and standard WebDAV serve
 
 ### ENABLE_SLEEPHQ_UPLOAD
 
-Enables direct upload to SleepHQ cloud service for CPAP data analysis.
+Enables direct upload to SleepHQ cloud service via REST API with OAuth authentication.
 
-**Status**: TODO - Placeholder implementation only
+**Status**: Implemented
 
-**Binary Size Impact**: +40-60KB (estimated, uses HTTPClient + JSON)
+**Binary Size Impact**: +110KB (includes ISRG Root X1 CA cert for TLS)
 
 **Usage in config.json**:
 ```json
 {
-  "ENDPOINT_TYPE": "SLEEPHQ",
-  "ENDPOINT": "https://api.sleephq.com/v1/upload",
-  "ENDPOINT_USER": "user_id",
-  "ENDPOINT_PASS": "api_key"
+  "ENDPOINT_TYPE": "CLOUD",
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret"
 }
 ```
+
+Can also be combined with SMB: `"ENDPOINT_TYPE": "SMB,CLOUD"`
 
 ## How to Enable/Disable Backends
 
@@ -83,7 +84,7 @@ build_flags =
     -Icomponents/libsmb2/include
     -DENABLE_SMB_UPLOAD          ; Enable SMB/CIFS upload support
     ; -DENABLE_WEBDAV_UPLOAD     ; Enable WebDAV upload support (TODO)
-    ; -DENABLE_SLEEPHQ_UPLOAD    ; Enable SleepHQ direct upload (TODO)
+    ; -DENABLE_SLEEPHQ_UPLOAD    ; Enable SleepHQ cloud upload (HTTPS + OAuth)
 ```
 
 ### Method 2: Command Line Override
@@ -154,8 +155,8 @@ If you configure an endpoint type that wasn't compiled in:
 | No backends | Base size |
 | SMB only | Base + 220-270KB |
 | WebDAV only | Base + 50-80KB (est.) |
-| SleepHQ only | Base + 40-60KB (est.) |
-| All backends | Base + 310-410KB (est.) |
+| SleepHQ only | Base + 110KB |
+| All backends | Base + 330-380KB |
 
 **Recommendation**: Enable only the backend(s) you need to maximize available flash space for future features.
 

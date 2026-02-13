@@ -264,7 +264,7 @@ MONITORING ──(web "Stop Monitor" button)──────────► ID
 ```
 
 When entering MONITORING:
-- If currently UPLOADING → finish current file, release SD card, then enter MONITORING
+- If currently UPLOADING → finish current file + mandatory root/SETTINGS files, release SD card, then enter MONITORING
 - If currently ACQUIRING → release SD card, enter MONITORING
 - All other states → enter MONITORING immediately
 - TrafficMonitor continues sampling (it's always running in the main loop)

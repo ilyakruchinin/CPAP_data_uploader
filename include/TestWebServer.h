@@ -5,7 +5,6 @@
 #include <WebServer.h>
 #include "Config.h"
 #include "UploadStateManager.h"
-#include "TimeBudgetManager.h"
 #include "ScheduleManager.h"
 #include "WiFiManager.h"
 #include "CPAPMonitor.h"
@@ -18,9 +17,6 @@
 // Global trigger flags for upload and state reset
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
-extern volatile bool g_scanNowFlag;
-extern volatile bool g_deltaScanFlag;
-extern volatile bool g_deepScanFlag;
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
 
@@ -29,7 +25,6 @@ private:
     WebServer* server;
     Config* config;
     UploadStateManager* stateManager;
-    TimeBudgetManager* budgetManager;
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
     CPAPMonitor* cpapMonitor;
@@ -42,9 +37,6 @@ private:
     // Request handlers
     void handleRoot();
     void handleTriggerUpload();
-    void handleScanNow();
-    void handleDeltaScan();
-    void handleDeepScan();
     void handleStatus();
     void handleResetState();
     void handleConfig();
@@ -69,14 +61,13 @@ private:
     int getPendingFilesCount();
     int getPendingFoldersCount();
     String escapeJson(const String& str);
-    bool handleScanInProgress(const String& scanType);
     
     // Static helper methods
     static void addCorsHeaders(WebServer* server);
 
 public:
     TestWebServer(Config* cfg, UploadStateManager* state, 
-                  TimeBudgetManager* budget, ScheduleManager* schedule, 
+                  ScheduleManager* schedule, 
                   WiFiManager* wifi = nullptr, CPAPMonitor* monitor = nullptr);
     ~TestWebServer();
     
@@ -84,7 +75,7 @@ public:
     void handleClient();
     
     // Update manager references (needed after uploader recreation)
-    void updateManagers(UploadStateManager* state, TimeBudgetManager* budget, ScheduleManager* schedule);
+    void updateManagers(UploadStateManager* state, ScheduleManager* schedule);
     void setWiFiManager(WiFiManager* wifi);
     void setTrafficMonitor(TrafficMonitor* tm);
     

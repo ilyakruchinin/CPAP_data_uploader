@@ -11,13 +11,8 @@ const char* Config::CENSORED_VALUE = "***STORED_IN_FLASH***";
 const size_t Config::JSON_FILE_MAX_SIZE;
 
 Config::Config() : 
-    uploadHour(12),  // Default: noon
-    sessionDurationSeconds(300),  // Default: 300 seconds (5 minutes)
-    maxRetryAttempts(3),  // Default: 3 attempts
     gmtOffsetHours(0),  // Default: UTC
     bootDelaySeconds(30),  // Default: 30 seconds
-    sdReleaseIntervalSeconds(2),  // Default: 2 seconds
-    sdReleaseWaitMs(500),  // Default: 500ms
     logToSdCard(false),  // Default: do not log to SD card (debugging only)
     isValid(false),
     
@@ -25,7 +20,6 @@ Config::Config() :
     cloudBaseUrl("https://sleephq.com"),
     cloudDeviceId(0),
     maxDays(0),  // Default: all days
-    uploadIntervalMinutes(0),  // Default: use daily schedule
     recentFolderDays(2),  // Default: re-check today + yesterday
     cloudInsecureTls(false),  // Default: use root CA validation
     
@@ -492,14 +486,9 @@ bool Config::loadFromSD(fs::FS &sd) {
     endpointType = doc["ENDPOINT_TYPE"] | "";
     endpointUser = doc["ENDPOINT_USER"] | "";
     
-    // Parse new configuration fields with defaults
-    uploadHour = doc["UPLOAD_HOUR"] | 12;
-    sessionDurationSeconds = doc["SESSION_DURATION_SECONDS"] | 300;
-    maxRetryAttempts = doc["MAX_RETRY_ATTEMPTS"] | 3;
+    // Parse configuration fields with defaults
     gmtOffsetHours = doc["GMT_OFFSET_HOURS"] | 0;
     bootDelaySeconds = doc["BOOT_DELAY_SECONDS"] | 30;
-    sdReleaseIntervalSeconds = doc["SD_RELEASE_INTERVAL_SECONDS"] | 2;
-    sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 500;
     logToSdCard = doc["LOG_TO_SD_CARD"] | false;
     
     // Cloud upload settings
@@ -508,7 +497,6 @@ bool Config::loadFromSD(fs::FS &sd) {
     cloudBaseUrl = doc["CLOUD_BASE_URL"] | "https://sleephq.com";
     cloudDeviceId = doc["CLOUD_DEVICE_ID"] | 0;
     maxDays = doc["MAX_DAYS"] | 0;
-    uploadIntervalMinutes = doc["UPLOAD_INTERVAL_MINUTES"] | 0;
     recentFolderDays = doc["RECENT_FOLDER_DAYS"] | 2;
     cloudInsecureTls = doc["CLOUD_INSECURE_TLS"] | false;
     
@@ -516,12 +504,6 @@ bool Config::loadFromSD(fs::FS &sd) {
     if (maxDays < 0) {
         LOG_WARN("MAX_DAYS cannot be negative, setting to 0 (all days)");
         maxDays = 0;
-    }
-    
-    // Validate UPLOAD_INTERVAL_MINUTES
-    if (uploadIntervalMinutes < 0) {
-        LOG_WARN("UPLOAD_INTERVAL_MINUTES cannot be negative, setting to 0 (daily schedule)");
-        uploadIntervalMinutes = 0;
     }
     
     // Validate RECENT_FOLDER_DAYS
@@ -537,34 +519,6 @@ bool Config::loadFromSD(fs::FS &sd) {
     inactivitySeconds = doc["INACTIVITY_SECONDS"] | 125;
     exclusiveAccessMinutes = doc["EXCLUSIVE_ACCESS_MINUTES"] | 5;
     cooldownMinutes = doc["COOLDOWN_MINUTES"] | 10;
-    
-    // Backward compat: UPLOAD_HOUR → UPLOAD_START_HOUR
-    if (!doc.containsKey("UPLOAD_START_HOUR") && doc.containsKey("UPLOAD_HOUR")) {
-        uploadStartHour = doc["UPLOAD_HOUR"] | 8;
-        uploadEndHour = uploadStartHour + 2;  // 2-hour window
-        LOG_WARN("UPLOAD_HOUR is deprecated. Using UPLOAD_START_HOUR/END_HOUR instead.");
-    }
-    
-    // Backward compat: UPLOAD_INTERVAL_MINUTES > 0 → smart mode
-    if (!doc.containsKey("UPLOAD_MODE") && (doc["UPLOAD_INTERVAL_MINUTES"] | 0) > 0) {
-        uploadMode = "smart";
-        LOG_WARN("UPLOAD_INTERVAL_MINUTES is deprecated. Setting UPLOAD_MODE=smart.");
-    }
-    
-    // Backward compat: SESSION_DURATION_SECONDS → EXCLUSIVE_ACCESS_MINUTES
-    if (!doc.containsKey("EXCLUSIVE_ACCESS_MINUTES") && doc.containsKey("SESSION_DURATION_SECONDS")) {
-        int secs = doc["SESSION_DURATION_SECONDS"] | 300;
-        exclusiveAccessMinutes = max(1, secs / 60);
-        LOG_WARN("SESSION_DURATION_SECONDS is deprecated. Using EXCLUSIVE_ACCESS_MINUTES instead.");
-    }
-    
-    // Deprecation warnings for removed params
-    if (doc.containsKey("SD_RELEASE_INTERVAL_SECONDS")) {
-        LOG_WARN("SD_RELEASE_INTERVAL_SECONDS is deprecated and ignored (exclusive access mode).");
-    }
-    if (doc.containsKey("SD_RELEASE_WAIT_MS")) {
-        LOG_WARN("SD_RELEASE_WAIT_MS is deprecated and ignored (exclusive access mode).");
-    }
     
     // Validate upload mode
     if (uploadMode != "scheduled" && uploadMode != "smart") {
@@ -802,9 +756,6 @@ bool Config::loadFromSD(fs::FS &sd) {
         if (maxDays > 0) {
             LOGF("MAX_DAYS: %d (only upload last %d days of data)", maxDays, maxDays);
         }
-        if (uploadIntervalMinutes > 0) {
-            LOGF("Upload interval: every %d minutes", uploadIntervalMinutes);
-        }
         if (recentFolderDays > 0) {
             LOGF("Recent folder re-check: %d days", recentFolderDays);
         }
@@ -824,13 +775,8 @@ const String& Config::getEndpoint() const { return endpoint; }
 const String& Config::getEndpointType() const { return endpointType; }
 const String& Config::getEndpointUser() const { return endpointUser; }
 const String& Config::getEndpointPassword() const { return endpointPassword; }
-int Config::getUploadHour() const { return uploadHour; }
-int Config::getSessionDurationSeconds() const { return sessionDurationSeconds; }
-int Config::getMaxRetryAttempts() const { return maxRetryAttempts; }
 int Config::getGmtOffsetHours() const { return gmtOffsetHours; }
 int Config::getBootDelaySeconds() const { return bootDelaySeconds; }
-int Config::getSdReleaseIntervalSeconds() const { return sdReleaseIntervalSeconds; }
-int Config::getSdReleaseWaitMs() const { return sdReleaseWaitMs; }
 bool Config::getLogToSdCard() const { return logToSdCard; }
 bool Config::valid() const { return isValid; }
 
@@ -845,7 +791,6 @@ const String& Config::getCloudTeamId() const { return cloudTeamId; }
 const String& Config::getCloudBaseUrl() const { return cloudBaseUrl; }
 int Config::getCloudDeviceId() const { return cloudDeviceId; }
 int Config::getMaxDays() const { return maxDays; }
-int Config::getUploadIntervalMinutes() const { return uploadIntervalMinutes; }
 int Config::getRecentFolderDays() const { return recentFolderDays; }
 bool Config::getCloudInsecureTls() const { return cloudInsecureTls; }
 
