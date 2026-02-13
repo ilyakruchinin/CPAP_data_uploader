@@ -6,7 +6,6 @@
 #include <vector>
 #include "Config.h"
 #include "UploadStateManager.h"
-#include "TimeBudgetManager.h"
 #include "ScheduleManager.h"
 #include "WiFiManager.h"
 #include "SDCardManager.h"
@@ -47,19 +46,12 @@ class FileUploader {
 private:
     Config* config;
     UploadStateManager* stateManager;
-    TimeBudgetManager* budgetManager;
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
     
 #ifdef ENABLE_TEST_WEBSERVER
     TestWebServer* webServer;  // Optional web server for handling requests during uploads
 #endif
-    
-    // Periodic SD card release tracking (legacy — used by uploadNewFiles, delta/deep scan)
-    unsigned long lastSdReleaseTime;
-    
-    // Helper method for periodic SD card release (legacy — not used in exclusive access mode)
-    bool checkAndReleaseSD(class SDCardManager* sdManager);
     
     // Uploader instances (only compiled if feature flag is enabled)
 #ifdef ENABLE_SMB_UPLOAD
@@ -88,28 +80,18 @@ private:
     bool ensureCloudImport();
     bool cloudImportCreated;
     bool cloudImportFailed;  // True if ensureCloudImport() failed; skip cloud backend for session
-    
-    // Session management
-    bool startUploadSession(fs::FS &sd);
-    void endUploadSession(fs::FS &sd);
 
 public:
     FileUploader(Config* cfg, WiFiManager* wifi);
     ~FileUploader();
     
     bool begin(fs::FS &sd);
-    bool shouldUpload();
-    bool uploadNewFiles(class SDCardManager* sdManager, bool forceUpload = false);
-    bool scanPendingFolders(class SDCardManager* sdManager);  // Scan SD card without uploading
-    bool performDeltaScan(class SDCardManager* sdManager);    // Compare remote vs local file counts
-    bool performDeepScan(class SDCardManager* sdManager);     // Compare remote vs local file sizes
     
-    // New FSM-driven exclusive access upload
+    // FSM-driven exclusive access upload
     UploadResult uploadWithExclusiveAccess(class SDCardManager* sdManager, int maxMinutes, DataFilter filter);
     
     // Getters for internal components (for web interface access)
     UploadStateManager* getStateManager() { return stateManager; }
-    TimeBudgetManager* getBudgetManager() { return budgetManager; }
     ScheduleManager* getScheduleManager() { return scheduleManager; }
     bool hasIncompleteFolders() { return stateManager && stateManager->getIncompleteFoldersCount() > 0; }
     

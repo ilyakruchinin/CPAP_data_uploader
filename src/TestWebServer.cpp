@@ -7,12 +7,6 @@
 // Global trigger flags
 volatile bool g_triggerUploadFlag = false;
 volatile bool g_resetStateFlag = false;
-volatile bool g_scanNowFlag = false;
-volatile bool g_deltaScanFlag = false;
-volatile bool g_deepScanFlag = false;
-
-// Global scan status flag
-volatile bool g_scanInProgress = false;
 
 // Monitoring trigger flags
 volatile bool g_monitorActivityFlag = false;
@@ -23,19 +17,13 @@ extern UploadState currentState;
 extern unsigned long stateEnteredAt;
 extern unsigned long cooldownStartedAt;
 
-// Legacy variables (defined in main.cpp)
-extern unsigned long nextUploadRetryTime;
-extern bool budgetExhaustedRetry;
-extern unsigned long lastIntervalUploadTime;
-
 // Constructor
 TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
-                             TimeBudgetManager* budget, ScheduleManager* schedule, 
+                             ScheduleManager* schedule, 
                              WiFiManager* wifi, CPAPMonitor* monitor)
     : server(nullptr),
       config(cfg),
       stateManager(state),
-      budgetManager(budget),
       scheduleManager(schedule),
       wifiManager(wifi),
       cpapMonitor(monitor),
@@ -63,9 +51,6 @@ bool TestWebServer::begin() {
     // Register request handlers
     server->on("/", [this]() { this->handleRoot(); });
     server->on("/trigger-upload", [this]() { this->handleTriggerUpload(); });
-    server->on("/scan-now", [this]() { this->handleScanNow(); });
-    server->on("/delta-scan", [this]() { this->handleDeltaScan(); });
-    server->on("/deep-scan", [this]() { this->handleDeepScan(); });
     server->on("/status", [this]() { this->handleStatus(); });
     server->on("/reset-state", [this]() { this->handleResetState(); });
     server->on("/config", [this]() { this->handleConfig(); });
@@ -99,9 +84,6 @@ bool TestWebServer::begin() {
     LOG("[TestWebServer] Available endpoints:");
     LOG("[TestWebServer]   GET /              - Status page (HTML)");
     LOG("[TestWebServer]   GET /trigger-upload - Force immediate upload");
-    LOG("[TestWebServer]   GET /scan-now      - Scan SD card for pending folders");
-    LOG("[TestWebServer]   GET /delta-scan    - Compare remote vs local file counts");
-    LOG("[TestWebServer]   GET /deep-scan     - Compare remote vs local file sizes");
     LOG("[TestWebServer]   GET /status        - Status information (JSON)");
     LOG("[TestWebServer]   GET /reset-state   - Clear upload state");
     LOG("[TestWebServer]   GET /config        - Display configuration");
@@ -123,9 +105,6 @@ void TestWebServer::handleRoot() {
     String html = "<!DOCTYPE html><html><head>";
     html += "<title>CPAP Data Uploader</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    if (g_scanInProgress) {
-        html += "<meta http-equiv='refresh' content='5'>";
-    }
     html += "<style>";
     html += "*{box-sizing:border-box;margin:0;padding:0}";
     html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
@@ -170,12 +149,6 @@ void TestWebServer::handleRoot() {
     // ── Header ──
     html += "<h1>CPAP Data Uploader</h1>";
     html += "<p class='subtitle'>Firmware " + String(FIRMWARE_VERSION) + " &middot; " + getUptimeString() + " uptime</p>";
-
-    // ── Scan-in-progress banner ──
-    if (g_scanInProgress) {
-        html += "<div class='alert'><h3>&#x23F3; Scan In Progress</h3>";
-        html += "<p>Page auto-refreshes every 5s. Wait for completion before starting another.</p></div>";
-    }
 
     // ── FSM State + System card (side by side) ──
     html += "<div class='cards'>";
@@ -260,21 +233,6 @@ void TestWebServer::handleRoot() {
             }
         }
         
-        // Retry info
-        String retryFolder = stateManager->getCurrentRetryFolder();
-        if (!retryFolder.isEmpty()) {
-            int retryCount = stateManager->getCurrentRetryCount();
-            int maxRetries = config ? config->getMaxRetryAttempts() : 3;
-            html += "<div class='row' style='margin-top:6px'><span class='k'>Retrying</span><span class='v' style='color:#ffaa44'>" + retryFolder + " (attempt " + String(retryCount + 1) + "/" + String(maxRetries) + ")</span></div>";
-        }
-        
-        if (budgetManager) {
-            unsigned long rate = budgetManager->getTransmissionRate();
-            if (rate > 0) {
-                float rateKB = rate / 1024.0;
-                html += "<div class='row'><span class='k'>Transfer rate</span><span class='v'>" + String(rateKB, 1) + " KB/s</span></div>";
-            }
-        }
     }
     html += "</div></div>"; // end progress card + cards
 
@@ -283,15 +241,6 @@ void TestWebServer::handleRoot() {
     html += "<h2>Actions</h2>";
     html += "<div class='actions'>";
     html += "<a href='/trigger-upload' class='btn btn-primary'>&#9650; Trigger Upload</a>";
-    
-    if (g_scanInProgress) {
-        html += "<span class='btn btn-disabled'>Scan (In Progress)</span>";
-    } else {
-        html += "<a href='/scan-now' class='btn btn-secondary'>&#128269; Scan SD Card</a>";
-        html += "<a href='/delta-scan' class='btn btn-secondary'>&#916; Delta Scan</a>";
-        html += "<a href='/deep-scan' class='btn btn-secondary'>&#128203; Deep Scan</a>";
-    }
-    
     html += "<a href='/monitor' class='btn btn-accent'>&#128200; SD Activity Monitor</a>";
     html += "</div>";
     
@@ -324,63 +273,6 @@ void TestWebServer::handleTriggerUpload() {
     server->send(200, "application/json", response);
 }
 
-// GET /scan-now - Scan SD card for pending folders
-void TestWebServer::handleScanNow() {
-    LOG("[TestWebServer] SD card scan requested via web interface");
-    
-    // Check if scan is already in progress
-    if (handleScanInProgress("SD card scan")) {
-        return;
-    }
-    
-    // Set global scan flag
-    g_scanNowFlag = true;
-    
-    // Add CORS headers
-    addCorsHeaders(server);
-    
-    String response = "{\"status\":\"success\",\"message\":\"SD card scan triggered. Refresh page to see updated folder counts.\"}";
-    server->send(200, "application/json", response);
-}
-
-// GET /delta-scan - Compare remote vs local file counts and mark differences for re-upload
-void TestWebServer::handleDeltaScan() {
-    LOG("[TestWebServer] Delta scan requested via web interface");
-    
-    // Check if scan is already in progress
-    if (handleScanInProgress("Delta scan")) {
-        return;
-    }
-    
-    // Set global delta scan flag
-    g_deltaScanFlag = true;
-    
-    // Add CORS headers
-    addCorsHeaders(server);
-    
-    String response = "{\"status\":\"success\",\"message\":\"Delta scan triggered. Comparing remote vs local file counts. Check logs for results.\"}";
-    server->send(200, "application/json", response);
-}
-
-// GET /deep-scan - Compare remote vs local file sizes and mark differences for re-upload
-void TestWebServer::handleDeepScan() {
-    LOG("[TestWebServer] Deep scan requested via web interface");
-    
-    // Check if scan is already in progress
-    if (handleScanInProgress("Deep scan")) {
-        return;
-    }
-    
-    // Set global deep scan flag
-    g_deepScanFlag = true;
-    
-    // Add CORS headers
-    addCorsHeaders(server);
-    
-    String response = "{\"status\":\"success\",\"message\":\"Deep scan triggered. Comparing remote vs local file sizes. Check logs for results.\"}";
-    server->send(200, "application/json", response);
-}
-
 // GET /status - JSON status information
 void TestWebServer::handleStatus() {
     // Add CORS headers
@@ -390,8 +282,6 @@ void TestWebServer::handleStatus() {
     json += "\"uptime_seconds\":" + String(millis() / 1000) + ",";
     json += "\"current_time\":\"" + getCurrentTimeString() + "\",";
     json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
-    json += "\"scan_in_progress\":" + String(g_scanInProgress ? "true" : "false") + ",";
-    
     // WiFi information
     if (wifiManager && wifiManager->isConnected()) {
         json += "\"wifi_connected\":true,";
@@ -401,24 +291,12 @@ void TestWebServer::handleStatus() {
         json += "\"wifi_connected\":false,";
     }
     
-    if (config && config->getUploadIntervalMinutes() > 0) {
-        unsigned long intervalMs = (unsigned long)config->getUploadIntervalMinutes() * 60000UL;
-        unsigned long elapsed = millis() - lastIntervalUploadTime;
-        unsigned long secondsUntilNext = (lastIntervalUploadTime == 0 || elapsed >= intervalMs) ? 0 : (intervalMs - elapsed) / 1000;
-        json += "\"next_upload_seconds\":" + String(secondsUntilNext) + ",";
-        json += "\"upload_interval_minutes\":" + String(config->getUploadIntervalMinutes()) + ",";
-        if (scheduleManager) json += "\"time_synced\":" + String(scheduleManager->isTimeSynced() ? "true" : "false") + ",";
-    } else if (scheduleManager) {
+    if (scheduleManager) {
         json += "\"next_upload_seconds\":" + String(scheduleManager->getSecondsUntilNextUpload()) + ",";
         json += "\"time_synced\":" + String(scheduleManager->isTimeSynced() ? "true" : "false") + ",";
     }
     
-    if (budgetManager) {
-        json += "\"budget_remaining_ms\":" + String(budgetManager->getRemainingBudgetMs()) + ",";
-        json += "\"transfer_rate_bytes_per_sec\":" + String(budgetManager->getTransmissionRate()) + ",";
-    }
-    
-    // Upload progress and retry information
+    // Upload progress
     if (stateManager) {
         int completedFolders = stateManager->getCompletedFoldersCount();
         int incompleteFolders = stateManager->getIncompleteFoldersCount();
@@ -427,33 +305,23 @@ void TestWebServer::handleStatus() {
         json += "\"completed_folders\":" + String(completedFolders) + ",";
         json += "\"incomplete_folders\":" + String(incompleteFolders) + ",";
         json += "\"total_folders\":" + String(totalFolders) + ",";
-        json += "\"upload_state_initialized\":" + String(totalFolders > 0 ? "true" : "false") + ",";
-        
-        String retryFolder = stateManager->getCurrentRetryFolder();
-        if (!retryFolder.isEmpty()) {
-            int retryCount = stateManager->getCurrentRetryCount();
-            json += "\"current_retry_folder\":\"" + retryFolder + "\",";
-            json += "\"current_retry_count\":" + String(retryCount);
-        } else {
-            json += "\"current_retry_folder\":null,";
-            json += "\"current_retry_count\":0";
-        }
+        json += "\"upload_state_initialized\":" + String(totalFolders > 0 ? "true" : "false");
     } else {
         json += "\"completed_folders\":0,";
         json += "\"incomplete_folders\":0,";
         json += "\"total_folders\":0,";
-        json += "\"upload_state_initialized\":false,";
-        json += "\"current_retry_folder\":null,";
-        json += "\"current_retry_count\":0";
+        json += "\"upload_state_initialized\":false";
     }
     
     if (config) {
         json += ",\"endpoint_type\":\"" + config->getEndpointType() + "\"";
-        json += ",\"upload_hour\":" + String(config->getUploadHour());
-        json += ",\"session_duration_seconds\":" + String(config->getSessionDurationSeconds());
-        json += ",\"max_retry_attempts\":" + String(config->getMaxRetryAttempts());
         json += ",\"boot_delay_seconds\":" + String(config->getBootDelaySeconds());
-        json += ",\"sd_release_interval_seconds\":" + String(config->getSdReleaseIntervalSeconds());
+        json += ",\"upload_mode\":\"" + config->getUploadMode() + "\"";
+        json += ",\"upload_start_hour\":" + String(config->getUploadStartHour());
+        json += ",\"upload_end_hour\":" + String(config->getUploadEndHour());
+        json += ",\"inactivity_seconds\":" + String(config->getInactivitySeconds());
+        json += ",\"exclusive_access_minutes\":" + String(config->getExclusiveAccessMinutes());
+        json += ",\"cooldown_minutes\":" + String(config->getCooldownMinutes());
         
         // Cloud upload status
         if (config->hasCloudEndpoint()) {
@@ -461,37 +329,9 @@ void TestWebServer::handleStatus() {
             if (config->getMaxDays() > 0) {
                 json += ",\"max_days\":" + String(config->getMaxDays());
             }
-            if (config->getUploadIntervalMinutes() > 0) {
-                json += ",\"upload_interval_minutes\":" + String(config->getUploadIntervalMinutes());
-            }
             json += ",\"cloud_insecure_tls\":" + String(config->getCloudInsecureTls() ? "true" : "false");
         } else {
             json += ",\"cloud_configured\":false";
-        }
-    }
-    
-    // Add retry timing information
-    if (budgetExhaustedRetry && nextUploadRetryTime > millis()) {
-        unsigned long remainingMs = nextUploadRetryTime - millis();
-        json += ",\"retry_wait_active\":true";
-        json += ",\"retry_wait_remaining_seconds\":" + String(remainingMs / 1000);
-    } else {
-        json += ",\"retry_wait_active\":false";
-    }
-    
-    // Add recommendations if retries are happening
-    if (stateManager) {
-        String retryFolder = stateManager->getCurrentRetryFolder();
-        if (!retryFolder.isEmpty()) {
-            int retryCount = stateManager->getCurrentRetryCount();
-            json += ",\"retry_warning\":true";
-            
-            if (retryCount >= 2 && config) {
-                json += ",\"recommendation\":\"Consider increasing SESSION_DURATION_SECONDS (current: " + 
-                       String(config->getSessionDurationSeconds()) + "s)\"";
-            }
-        } else {
-            json += ",\"retry_warning\":false";
         }
     }
     
@@ -547,10 +387,13 @@ void TestWebServer::handleConfig() {
         // Always censor endpoint password (never expose via HTTP)
         json += "\"endpoint_password\":\"***HIDDEN***\",";
         
-        json += "\"upload_hour\":" + String(config->getUploadHour()) + ",";
-        json += "\"session_duration_seconds\":" + String(config->getSessionDurationSeconds()) + ",";
-        json += "\"max_retry_attempts\":" + String(config->getMaxRetryAttempts()) + ",";
         json += "\"gmt_offset_hours\":" + String(config->getGmtOffsetHours()) + ",";
+        json += "\"upload_mode\":\"" + config->getUploadMode() + "\",";
+        json += "\"upload_start_hour\":" + String(config->getUploadStartHour()) + ",";
+        json += "\"upload_end_hour\":" + String(config->getUploadEndHour()) + ",";
+        json += "\"inactivity_seconds\":" + String(config->getInactivitySeconds()) + ",";
+        json += "\"exclusive_access_minutes\":" + String(config->getExclusiveAccessMinutes()) + ",";
+        json += "\"cooldown_minutes\":" + String(config->getCooldownMinutes()) + ",";
         
         // Cloud upload config
         if (config->hasCloudEndpoint()) {
@@ -567,10 +410,6 @@ void TestWebServer::handleConfig() {
         if (config->getMaxDays() > 0) {
             json += "\"max_days\":" + String(config->getMaxDays()) + ",";
         }
-        if (config->getUploadIntervalMinutes() > 0) {
-            json += "\"upload_interval_minutes\":" + String(config->getUploadIntervalMinutes()) + ",";
-        }
-        
         // Add credentials_secured field to indicate storage mode
         json += "\"credentials_secured\":" + String(credentialsSecured ? "true" : "false");
     }
@@ -596,21 +435,6 @@ void TestWebServer::handleNotFound() {
     
     String message = "{\"status\":\"error\",\"message\":\"Endpoint not found\",\"path\":\"" + uri + "\"}";
     server->send(404, "application/json", message);
-}
-
-// Helper: Check if scan is in progress and send appropriate response
-bool TestWebServer::handleScanInProgress(const String& scanType) {
-    if (g_scanInProgress) {
-        LOGF("[TestWebServer] %s already in progress, ignoring request", scanType.c_str());
-        
-        // Add CORS headers
-        addCorsHeaders(server);
-        
-        String response = "{\"status\":\"warning\",\"message\":\"Scan already in progress. Please wait for current scan to complete.\"}";
-        server->send(409, "application/json", response);
-        return true;
-    }
-    return false;
 }
 
 // Static helper: Add CORS headers to response
@@ -697,9 +521,8 @@ void TestWebServer::handleLogs() {
 }
 
 // Update manager references (needed after uploader recreation)
-void TestWebServer::updateManagers(UploadStateManager* state, TimeBudgetManager* budget, ScheduleManager* schedule) {
+void TestWebServer::updateManagers(UploadStateManager* state, ScheduleManager* schedule) {
     stateManager = state;
-    budgetManager = budget;
     scheduleManager = schedule;
 }
 

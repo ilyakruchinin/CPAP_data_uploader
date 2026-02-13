@@ -10,13 +10,11 @@
 FileUploader::FileUploader(Config* cfg, WiFiManager* wifi) 
     : config(cfg),
       stateManager(nullptr),
-      budgetManager(nullptr),
       scheduleManager(nullptr),
       wifiManager(wifi),
 #ifdef ENABLE_TEST_WEBSERVER
       webServer(nullptr),
 #endif
-      lastSdReleaseTime(0),
       cloudImportCreated(false),
       cloudImportFailed(false)
 #ifdef ENABLE_SMB_UPLOAD
@@ -34,7 +32,6 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
 // Destructor
 FileUploader::~FileUploader() {
     if (stateManager) delete stateManager;
-    if (budgetManager) delete budgetManager;
     if (scheduleManager) delete scheduleManager;
 #ifdef ENABLE_SMB_UPLOAD
     if (smbUploader) delete smbUploader;
@@ -57,9 +54,6 @@ bool FileUploader::begin(fs::FS &sd) {
         LOG("[FileUploader] WARNING: Failed to load upload state, starting fresh");
         // Continue anyway - stateManager will work with empty state
     }
-    
-    // Initialize TimeBudgetManager
-    budgetManager = new TimeBudgetManager();
     
     // Initialize ScheduleManager with new FSM-aware overload
     scheduleManager = new ScheduleManager();
@@ -137,77 +131,6 @@ bool FileUploader::begin(fs::FS &sd) {
     return true;
 }
 
-// Check if it's time to upload
-bool FileUploader::shouldUpload() {
-    if (!scheduleManager) {
-        return false;
-    }
-    return scheduleManager->isUploadTime();
-}
-
-
-
-// Check if it's time to periodically release SD card control
-// Returns true if SD was released and retaken successfully
-// Returns false if unable to retake control (should abort upload)
-bool FileUploader::checkAndReleaseSD(SDCardManager* sdManager) {
-    unsigned long now = millis();
-    unsigned long intervalMs = config->getSdReleaseIntervalSeconds() * 1000;
-    
-    // Check if it's time to release
-    if (now - lastSdReleaseTime < intervalMs) {
-        return true;  // Not time yet, continue
-    }
-    
-    LOG_DEBUG("[FileUploader] Periodic SD card release - giving CPAP priority access");
-    
-    // Pause active time tracking (only if an upload session is active)
-    bool hasActiveSession = budgetManager->getRemainingBudgetMs() > 0 || budgetManager->getActiveTimeMs() > 0;
-    if (hasActiveSession) {
-        budgetManager->pauseActiveTime();
-    }
-    
-    // Release SD card
-    sdManager->releaseControl();
-    
-    // Wait configured time, handling web requests during the wait
-    unsigned long waitMs = config->getSdReleaseWaitMs();
-    LOG_DEBUGF("[FileUploader] Waiting %lu ms before retaking control...", waitMs);
-    
-#ifdef ENABLE_TEST_WEBSERVER
-    // Handle web requests during wait to keep interface responsive
-    if (webServer) {
-        unsigned long waitStart = millis();
-        while (millis() - waitStart < waitMs) {
-            webServer->handleClient();
-            delay(10);  // Small delay to prevent tight loop
-        }
-    } else {
-        delay(waitMs);
-    }
-#else
-    delay(waitMs);
-#endif
-    
-    // Retake control
-    LOG_DEBUG("[FileUploader] Attempting to retake SD card control...");
-    if (!sdManager->takeControl()) {
-        LOG_ERROR("[FileUploader] Failed to retake SD card control");
-        LOG_WARN("[FileUploader] CPAP machine may be actively using SD card");
-        return false;  // Abort upload
-    }
-    
-    // Resume active time tracking (only if an upload session is active)
-    if (hasActiveSession) {
-        budgetManager->resumeActiveTime();
-    }
-    
-    // Reset release timer
-    lastSdReleaseTime = millis();
-    
-    LOG_DEBUG("[FileUploader] SD card control reacquired, resuming upload");
-    return true;
-}
 
 // ============================================================================
 // New FSM-driven exclusive access upload
@@ -296,20 +219,20 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         }
     }
     
-    // ── Phase 3: Root/SETTINGS files *** MANDATORY — NEVER SKIPPED *** ──
-    {
-        LOG("[FileUploader] Phase 3: Root/SETTINGS files (MANDATORY)");
+    // ── Phase 3: Root/SETTINGS files (only if DATALOG files were uploaded) ──
+    if (anyUploaded) {
+        LOG("[FileUploader] Phase 3: Root/SETTINGS files");
         std::vector<String> rootSettingsFiles = scanRootAndSettingsFiles(sd);
         
         for (const String& filePath : rootSettingsFiles) {
-            if (uploadSingleFile(sdManager, filePath)) {
-                anyUploaded = true;
-            }
+            uploadSingleFile(sdManager, filePath);
             
 #ifdef ENABLE_TEST_WEBSERVER
             if (webServer) webServer->handleClient();
 #endif
         }
+    } else {
+        LOG("[FileUploader] Skipping root/SETTINGS - no DATALOG files uploaded this session");
     }
     
     // Process cloud import if active
@@ -358,146 +281,6 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     return UploadResult::TIMEOUT;
 }
 
-// Main upload orchestration (legacy — used by existing main.cpp until FSM migration)
-bool FileUploader::uploadNewFiles(SDCardManager* sdManager, bool forceUpload) {
-    fs::FS &sd = sdManager->getFS();
-    LOG("[FileUploader] Starting upload orchestration...");
-    
-    // Check WiFi connection first
-    if (!wifiManager || !wifiManager->isConnected()) {
-        LOG_ERROR("[FileUploader] WiFi not connected - cannot upload");
-        LOG_ERROR("[FileUploader] Please ensure WiFi connection is established before upload");
-        return false;
-    }
-    
-    // Check if it's time to upload (unless forced or retrying incomplete folders)
-    bool hasIncompleteFolders = (stateManager->getIncompleteFoldersCount() > 0);
-    if (!forceUpload && !hasIncompleteFolders && !shouldUpload()) {
-        unsigned long secondsUntilNext = scheduleManager->getSecondsUntilNextUpload();
-        LOG_DEBUGF("[FileUploader] Not upload time yet. Next upload in %lu hours", secondsUntilNext / 3600);
-        return false;
-    }
-    
-    if (hasIncompleteFolders && !forceUpload) {
-        LOG("[FileUploader] Resuming upload for incomplete folders (retry)");
-    }
-    
-    if (forceUpload) {
-        LOG("[FileUploader] FORCED UPLOAD - bypassing schedule check");
-    }
-    LOG("[FileUploader] Upload time - starting session");
-    
-    // Start upload session with time budget
-    if (!startUploadSession(sd)) {
-        LOG_ERROR("[FileUploader] Failed to start upload session");
-        return false;
-    }
-    
-    bool anyUploaded = false;
-    
-    // Phase 1: Process DATALOG folders (newest first)
-    LOG("[FileUploader] Phase 1: Processing DATALOG folders");
-    std::vector<String> datalogFolders = scanDatalogFolders(sd);
-    
-    // Update total folders count for progress tracking
-    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
-    
-    for (const String& folderName : datalogFolders) {
-        // Check if we still have budget
-        if (!budgetManager->hasBudget()) {
-            LOG("[FileUploader] Time budget exhausted during DATALOG processing");
-            break;
-        }
-        
-        // Check for periodic SD card release
-        if (!checkAndReleaseSD(sdManager)) {
-            LOG_ERROR("[FileUploader] Failed to retake SD card control, aborting upload");
-            break;
-        }
-        
-        // Upload the folder
-        if (uploadDatalogFolder(sdManager, folderName)) {
-            anyUploaded = true;
-            LOGF("[FileUploader] Completed folder: %s", folderName.c_str());
-        } else {
-            LOGF("[FileUploader] Folder upload interrupted: %s", folderName.c_str());
-            // Budget exhausted or error - stop processing
-            break;
-        }
-        
-#ifdef ENABLE_TEST_WEBSERVER
-        // Handle web requests between folder uploads
-        if (webServer) {
-            webServer->handleClient();
-        }
-#endif
-    }
-    
-    // Phase 2: Process root and SETTINGS files (if budget remains)
-    if (budgetManager->hasBudget()) {
-        LOG("[FileUploader] Phase 2: Processing root and SETTINGS files");
-        std::vector<String> rootSettingsFiles = scanRootAndSettingsFiles(sd);
-        
-        for (const String& filePath : rootSettingsFiles) {
-            // Check if we still have budget
-            if (!budgetManager->hasBudget()) {
-                LOG("[FileUploader] Time budget exhausted during root/SETTINGS processing");
-                break;
-            }
-            
-            // Check for periodic SD card release
-            if (!checkAndReleaseSD(sdManager)) {
-                LOG_ERROR("[FileUploader] Failed to retake SD card control, aborting upload");
-                break;
-            }
-            
-            // Upload the file
-            if (uploadSingleFile(sdManager, filePath)) {
-                anyUploaded = true;
-            }
-            
-#ifdef ENABLE_TEST_WEBSERVER
-            // Handle web requests between file uploads
-            if (webServer) {
-                webServer->handleClient();
-            }
-#endif
-        }
-    } else {
-        LOG("[FileUploader] Skipping root/SETTINGS files - no budget remaining");
-    }
-    
-    // End upload session and save state
-    endUploadSession(sd);
-    
-    // Return true only if all folders are completed
-    bool allComplete = (stateManager->getIncompleteFoldersCount() == 0);
-    LOG_DEBUGF("[FileUploader] Upload session complete. All folders done: %s", allComplete ? "Yes" : "No");
-    
-    return allComplete;
-}
-
-// Scan SD card for pending folders without uploading
-bool FileUploader::scanPendingFolders(SDCardManager* sdManager) {
-    LOG("[FileUploader] Scanning SD card for pending folders...");
-    
-    fs::FS &sd = sdManager->getFS();
-    
-    // Scan DATALOG folders
-    std::vector<String> datalogFolders = scanDatalogFolders(sd);
-    
-    // Update total folders count for progress tracking
-    stateManager->setTotalFoldersCount(datalogFolders.size() + stateManager->getCompletedFoldersCount() + stateManager->getPendingFoldersCount());
-    
-    LOG_DEBUGF("[FileUploader] Found %d incomplete folders", datalogFolders.size());
-    LOG_DEBUGF("[FileUploader] Total folders: %d (completed: %d, incomplete: %d, pending: %d)", 
-         stateManager->getCompletedFoldersCount() + datalogFolders.size() + stateManager->getPendingFoldersCount(),
-         stateManager->getCompletedFoldersCount(),
-         datalogFolders.size(),
-         stateManager->getPendingFoldersCount());
-    
-    return true;
-}
 
 // Scan DATALOG folders and sort by date (newest first)
 std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCompleted) {
@@ -770,101 +553,12 @@ bool FileUploader::ensureCloudImport() {
 #endif
 }
 
-// Start upload session with time budget
-bool FileUploader::startUploadSession(fs::FS &sd) {
-    LOG("[FileUploader] Starting upload session");
-    
-    // Get session duration from config
-    unsigned long sessionDuration = config->getSessionDurationSeconds();
-    
-    // Check if we need to apply retry multiplier
-    int retryCount = stateManager->getCurrentRetryCount();
-    
-    // Apply multiplier for any retry attempt to increase budget
-    if (retryCount > 0) {
-        int multiplier = retryCount + 1;  // +1 so first retry gets 2x budget
-        LOG_DEBUGF("[FileUploader] Applying retry multiplier: %dx (retry count: %d)", multiplier, retryCount);
-        budgetManager->startSession(sessionDuration, multiplier);
-    } else {
-        budgetManager->startSession(sessionDuration);
-    }
-    
-    LOG_DEBUGF("[FileUploader] Session budget: %lu ms (active time only)", budgetManager->getRemainingBudgetMs());
-    LOG_DEBUGF("[FileUploader] Periodic SD release: every %d seconds", config->getSdReleaseIntervalSeconds());
-    
-    // Initialize periodic release timer
-    lastSdReleaseTime = millis();
-    
-    // Cloud import is created lazily via ensureCloudImport() on first actual upload
-    // This avoids creating empty imports when no files have changed
-    cloudImportCreated = false;
-    cloudImportFailed = false;
-    
-    return true;
-}
-
-// End upload session and save state
-void FileUploader::endUploadSession(fs::FS &sd) {
-    LOG("[FileUploader] Ending upload session");
-    
-    // Process cloud import if active
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (sleephqUploader && config->hasCloudEndpoint()) {
-        if (!sleephqUploader->getCurrentImportId().isEmpty()) {
-            if (!sleephqUploader->processImport()) {
-                LOG_WARN("[FileUploader] Failed to process cloud import");
-            }
-        }
-    }
-#endif
-    
-    // Save upload state
-    if (!stateManager->save(sd)) {
-        LOG_ERROR("[FileUploader] Failed to save upload state");
-        LOG_WARN("[FileUploader] Upload progress may be lost - will retry from last saved state");
-    }
-    
-    // Only mark upload as completed if there are no incomplete folders
-    bool hasIncompleteFolders = (stateManager->getIncompleteFoldersCount() > 0);
-    if (!hasIncompleteFolders) {
-        // Update last upload timestamp
-        time_t now;
-        time(&now);
-        stateManager->setLastUploadTimestamp((unsigned long)now);
-        scheduleManager->markUploadCompleted();
-        LOG("[FileUploader] All folders completed - upload session marked as done");
-    } else {
-        LOG("[FileUploader] Incomplete folders remain - upload will retry");
-    }
-    
-    // Calculate wait time
-    unsigned long waitTimeMs = budgetManager->getWaitTimeMs();
-    LOG_DEBUGF("[FileUploader] Wait time before next session: %lu seconds", waitTimeMs / 1000);
-    
-    // Save state again with updated timestamp
-    if (!stateManager->save(sd)) {
-        LOG_ERROR("[FileUploader] Failed to save final state with timestamp");
-        LOG_WARN("[FileUploader] Next upload may occur sooner than scheduled");
-    }
-}
 
 // Upload all files in a DATALOG folder
 bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& folderName) {
     fs::FS &sd = sdManager->getFS();
     
-    // Get retry count BEFORE setting current folder (in case it's a different folder)
-    String currentRetryFolder = stateManager->getCurrentRetryFolder();
-    int retryCount = (currentRetryFolder == folderName) ? stateManager->getCurrentRetryCount() : 0;
-    
-    // Set this as the current retry folder
-    stateManager->setCurrentRetryFolder(folderName);
-    
-    // Log appropriately based on retry status
-    if (retryCount > 0) {
-        LOGF("[FileUploader] RETRY ATTEMPT %d: Uploading DATALOG folder: %s", retryCount + 1, folderName.c_str());
-    } else {
-        LOGF("[FileUploader] Uploading DATALOG folder: %s", folderName.c_str());
-    }
+    LOGF("[FileUploader] Uploading DATALOG folder: %s", folderName.c_str());
     
     // Build folder path
     String folderPath = "/DATALOG/" + folderName;
@@ -874,17 +568,12 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
     if (!folderCheck) {
         LOG_ERRORF("[FileUploader] Cannot access folder: %s", folderPath.c_str());
         LOG_ERROR("[FileUploader] SD card may be in use by CPAP machine");
-        LOG_ERROR("[FileUploader] Folder will be retried in next upload session");
-        stateManager->incrementCurrentRetryCount();
-        stateManager->save(sd);
-        return false;  // Treat as error, not completion
+        return false;
     }
     
     if (!folderCheck.isDirectory()) {
         LOG_ERRORF("[FileUploader] Path is not a directory: %s", folderPath.c_str());
         folderCheck.close();
-        stateManager->incrementCurrentRetryCount();
-        stateManager->save(sd);
         return false;
     }
     folderCheck.close();
@@ -905,9 +594,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         if (!verifyFolder) {
             LOG_ERROR("[FileUploader] Folder scan returned empty but folder is not accessible");
             LOG_ERROR("[FileUploader] This indicates SD card read error or CPAP interference");
-            LOG_ERROR("[FileUploader] Folder will be retried in next upload session");
-            stateManager->incrementCurrentRetryCount();
-            stateManager->save(sd);
             return false;  // Treat as error
         }
         verifyFolder.close();
@@ -919,9 +605,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         unsigned long currentTime = time(NULL);
         if (currentTime < 1000000000) {  // Invalid NTP time (before year 2001)
             LOG_WARN("[FileUploader] NTP time not available - cannot track empty folder timing");
-            LOG_WARN("[FileUploader] Empty folder will be rechecked in next upload session");
-            stateManager->incrementCurrentRetryCount();
-            stateManager->save(sd);
             return false;  // Will retry when NTP is available
         }
         
@@ -931,20 +614,17 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
             if (stateManager->shouldPromotePendingToCompleted(folderName, currentTime)) {
                 // Promote to completed after 7 days of being empty
                 stateManager->promotePendingToCompleted(folderName);
-                stateManager->clearCurrentRetry();
                 stateManager->save(sd);
                 return true;
             } else {
                 // Still within 7-day window, skip for now
                 LOG_DEBUGF("[FileUploader] Pending folder still within 7-day window: %s", folderName.c_str());
-                stateManager->clearCurrentRetry();
-                return true;  // Don't increment retry count
+                return true;
             }
         } else {
             // First time seeing this empty folder - mark as pending
             stateManager->markFolderPending(folderName, currentTime);
             LOG_DEBUGF("[FileUploader] Marked empty folder as pending: %s", folderName.c_str());
-            stateManager->clearCurrentRetry();
             stateManager->save(sd);
             return true;
         }
@@ -957,15 +637,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
     int uploadedCount = 0;
     int skippedUnchanged = 0;
     for (const String& fileName : files) {
-        // Check for periodic SD card release before each file
-        if (!checkAndReleaseSD(sdManager)) {
-            LOG_ERROR("[FileUploader] Failed to retake SD card control during folder upload");
-            stateManager->incrementCurrentRetryCount();
-            stateManager->save(sd);
-            return false;
-        }
-        
-        // Check time budget before uploading
         String localPath = folderPath + "/" + fileName;
         
         // For recent folder re-scans, check if file has changed via checksum
@@ -992,27 +663,11 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         if (fileSize == 0) {
             LOG_WARNF("[FileUploader] File is empty: %s", localPath.c_str());
             file.close();
-            // Mark empty file as processed to avoid re-scanning
-            // Use a special checksum marker for empty files
             stateManager->markFileUploaded(localPath, "empty_file");
             continue;  // Skip empty files
         }
         
         file.close();
-        
-        // Check if we have budget for this file
-        if (!budgetManager->canUploadFile(fileSize)) {
-            LOG("[FileUploader] Insufficient time budget for remaining files");
-            LOGF("[FileUploader] Successfully uploaded %d of %d files before budget exhaustion", uploadedCount, files.size());
-            LOG("[FileUploader] This is normal - upload will resume in next session");
-            
-            // Increment retry count for this folder (partial upload)
-            stateManager->incrementCurrentRetryCount();
-            if (!stateManager->save(sd)) {
-                LOG("[FileUploader] WARNING: Failed to save state after partial upload");
-            }
-            return false;  // Session interrupted due to budget
-        }
         
         // Lazily create cloud import on first actual upload (avoids empty imports)
         if (!ensureCloudImport()) {
@@ -1024,14 +679,7 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         unsigned long bytesTransferred = 0;
         unsigned long uploadStartTime = millis();
         
-        // Log file upload with retry information if applicable
-        int currentRetryCount = stateManager->getCurrentRetryCount();
-        if (currentRetryCount > 0) {
-            LOGF("[FileUploader] RETRY ATTEMPT %d: Uploading file: %s (%lu bytes)", 
-                 currentRetryCount + 1, fileName.c_str(), fileSize);
-        } else {
-            LOGF("[FileUploader] Uploading file: %s (%lu bytes)", fileName.c_str(), fileSize);
-        }
+        LOGF("[FileUploader] Uploading file: %s (%lu bytes)", fileName.c_str(), fileSize);
         
         bool uploadSuccess = true;
         bool anyBackendConfigured = false;
@@ -1044,8 +692,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
                 LOG_DEBUG("[FileUploader] SMB not connected, attempting to connect...");
                 if (!smbUploader->begin()) {
                     LOG_ERROR("[FileUploader] Failed to connect to SMB share");
-                    stateManager->incrementCurrentRetryCount();
-                    stateManager->save(sd);
                     return false;
                 }
             }
@@ -1065,8 +711,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
                 LOG_DEBUG("[FileUploader] WebDAV not connected, attempting to connect...");
                 if (!webdavUploader->begin()) {
                     LOG_ERROR("[FileUploader] Failed to connect to WebDAV server");
-                    stateManager->incrementCurrentRetryCount();
-                    stateManager->save(sd);
                     return false;
                 }
             }
@@ -1086,8 +730,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
                 LOG_DEBUG("[FileUploader] Cloud not connected, attempting to connect...");
                 if (!sleephqUploader->begin()) {
                     LOG_ERROR("[FileUploader] Failed to connect to cloud service");
-                    stateManager->incrementCurrentRetryCount();
-                    stateManager->save(sd);
                     return false;
                 }
             }
@@ -1103,27 +745,14 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         
         if (!anyBackendConfigured) {
             LOG_ERROR("[FileUploader] No uploader available for configured endpoint type");
-            stateManager->incrementCurrentRetryCount();
-            stateManager->save(sd);
             return false;
         }
         
         if (!uploadSuccess) {
             LOG_ERRORF("[FileUploader] Failed to upload file: %s", localPath.c_str());
-            LOG_WARNF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
-            
-            // Don't mark folder as completed, will retry
-            stateManager->incrementCurrentRetryCount();
-            if (!stateManager->save(sd)) {
-                LOG_WARN("[FileUploader] Failed to save state after upload error");
-            }
+            LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
+            stateManager->save(sd);
             return false;  // Stop processing this folder
-        }
-        
-        // Record upload for transmission rate calculation (skip small files < 5KB)
-        unsigned long uploadTime = millis() - uploadStartTime;
-        if (bytesTransferred >= 5120) {  // 5KB minimum for rate calculation
-            budgetManager->recordUpload(bytesTransferred, uploadTime);
         }
         
         // Store per-file checksum so hasFileChanged() can detect changes on re-scan
@@ -1134,7 +763,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         
         uploadedCount++;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), bytesTransferred);
-        LOG_DEBUGF("[FileUploader] Budget remaining: %lu ms", budgetManager->getRemainingBudgetMs());
     }
     
     // All files processed successfully
@@ -1146,9 +774,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
     
     // Mark folder as completed
     stateManager->markFolderCompleted(folderName);
-    
-    // Reset retry count for this folder
-    stateManager->clearCurrentRetry();
     
     // Save state
     stateManager->save(sd);
@@ -1186,13 +811,6 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     }
     
     file.close();
-    
-    // Check if we have budget for this file
-    if (!budgetManager->canUploadFile(fileSize)) {
-        LOGF("[FileUploader] Insufficient time budget for file: %s", filePath.c_str());
-        LOG("[FileUploader] File will be uploaded in next session");
-        return false;  // Not an error, just out of budget
-    }
     
     // Check if file has changed (checksum comparison)
     if (!stateManager->hasFileChanged(sd, filePath)) {
@@ -1279,12 +897,6 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
         return false;
     }
     
-    // Record upload for transmission rate calculation (skip small files < 5KB)
-    unsigned long uploadTime = millis() - uploadStartTime;
-    if (bytesTransferred >= 5120) {  // 5KB minimum for rate calculation
-        budgetManager->recordUpload(bytesTransferred, uploadTime);
-    }
-    
     // Calculate and store checksum so hasFileChanged() won't flag this file next session
     String checksum = stateManager->calculateChecksum(sd, filePath);
     if (!checksum.isEmpty()) {
@@ -1293,305 +905,6 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     }
     
     LOGF("[FileUploader] Successfully uploaded: %s (%lu bytes)", filePath.c_str(), bytesTransferred);
-    
-    return true;
-}
-// Perform delta scan - compare remote vs local file counts and re-upload if different
-bool FileUploader::performDeltaScan(SDCardManager* sdManager) {
-    LOG("[FileUploader] Starting delta scan - comparing remote vs local file counts");
-    
-    if (!wifiManager || !wifiManager->isConnected()) {
-        LOG_ERROR("[FileUploader] WiFi not connected - cannot perform delta scan");
-        return false;
-    }
-    
-    fs::FS &sd = sdManager->getFS();
-    
-    // Only support SMB for now (can be extended for other protocols)
-#ifdef ENABLE_SMB_UPLOAD
-    if (!smbUploader || !config->hasSmbEndpoint()) {
-        LOG_ERROR("[FileUploader] Delta scan only supported for SMB endpoints");
-        return false;
-    }
-    
-    // Ensure SMB connection is established
-    if (!smbUploader->isConnected()) {
-        LOG("[FileUploader] Connecting to SMB share for delta scan...");
-        if (!smbUploader->begin()) {
-            LOG_ERROR("[FileUploader] Failed to connect to SMB share for delta scan");
-            return false;
-        }
-    }
-#else
-    LOG_ERROR("[FileUploader] Delta scan requires SMB support (compile with -DENABLE_SMB_UPLOAD)");
-    return false;
-#endif
-    
-    // Scan all DATALOG folders
-    std::vector<String> datalogFolders = scanDatalogFolders(sd, true);
-    
-    int foldersChecked = 0;
-    int foldersWithDifferences = 0;
-    std::vector<String> foldersToReupload;
-    
-    LOG_INFOF("[FileUploader] Checking %d DATALOG folders for differences", datalogFolders.size());
-    
-    for (const String& folderName : datalogFolders) {
-        // Check for periodic SD card release
-        if (!checkAndReleaseSD(sdManager)) {
-            LOG_ERROR("[FileUploader] Failed to retake SD card control during delta scan");
-            return false;
-        }
-        
-        String localFolderPath = "/DATALOG/" + folderName;
-        String remoteFolderPath = "/DATALOG/" + folderName;
-        
-        // Count local files
-        std::vector<String> localFiles = scanFolderFiles(sd, localFolderPath);
-        int localFileCount = localFiles.size();
-        
-        // Count remote files
-#ifdef ENABLE_SMB_UPLOAD
-        int remoteFileCount = smbUploader->countRemoteFiles(remoteFolderPath);
-#else
-        int remoteFileCount = -1;
-#endif
-        
-        foldersChecked++;
-        
-        if (remoteFileCount < 0) {
-            LOG_INFOF("[FileUploader] Could not access remote folder: %s (may not exist)", remoteFolderPath.c_str());
-            // If remote folder doesn't exist, we need to upload
-            if (localFileCount > 0) {
-                LOG_INFOF("[FileUploader] Local folder has %d files, remote doesn't exist - marking for re-upload", localFileCount);
-                foldersWithDifferences++;
-                foldersToReupload.push_back(folderName);
-            }
-        } else if (localFileCount != remoteFileCount) {
-            LOG_INFOF("[FileUploader] File count mismatch in %s: local=%d, remote=%d - marking for re-upload", 
-                      folderName.c_str(), localFileCount, remoteFileCount);
-            foldersWithDifferences++;
-            foldersToReupload.push_back(folderName);
-        } else {
-            LOG_INFOF("[FileUploader] File count matches in %s: %d files", folderName.c_str(), localFileCount);
-        }
-        
-        // Yield to prevent watchdog timeout
-        yield();
-    }
-    
-    LOG_INFOF("[FileUploader] Delta scan complete: checked %d folders, found %d with differences", 
-              foldersChecked, foldersWithDifferences);
-    
-    if (foldersWithDifferences == 0) {
-        LOG("[FileUploader] No differences found - all folders match remote");
-        return true;
-    }
-    
-    // Mark folders for re-upload by removing them from completed state
-    LOG_INFOF("[FileUploader] Marking %d folders for re-upload", foldersWithDifferences);
-    
-    for (const String& folderName : foldersToReupload) {
-        LOG_INFOF("[FileUploader] Processing folder for re-upload: %s", folderName.c_str());
-        
-        if (stateManager->isFolderCompleted(folderName)) {
-            LOG_INFOF("[FileUploader] Removing completed status from folder: %s", folderName.c_str());
-            stateManager->removeFolderFromCompleted(folderName);
-        } else {
-            LOG_INFOF("[FileUploader] Folder %s was not in completed status", folderName.c_str());
-        }
-        
-        // Also remove from pending if it was there
-        if (stateManager->isPendingFolder(folderName)) {
-            LOG_INFOF("[FileUploader] Removing pending status from folder: %s", folderName.c_str());
-            stateManager->removeFolderFromPending(folderName);
-        }
-    }
-    
-    // Save state changes
-    if (!stateManager->save(sd)) {
-        LOG_WARN("[FileUploader] Failed to save state after delta scan");
-    }
-    
-    LOG_INFOF("[FileUploader] Delta scan complete: %d folders marked for re-upload", foldersWithDifferences);
-    LOG("[FileUploader] Folders will be re-uploaded in the next upload session");
-    
-    return true;
-}
-
-// Perform deep scan - compare remote vs local file sizes and re-upload if different
-bool FileUploader::performDeepScan(SDCardManager* sdManager) {
-    LOG("[FileUploader] Starting deep scan - comparing remote vs local file sizes");
-    
-    if (!wifiManager || !wifiManager->isConnected()) {
-        LOG_ERROR("[FileUploader] WiFi not connected - cannot perform deep scan");
-        return false;
-    }
-    
-    fs::FS &sd = sdManager->getFS();
-    
-    // Only support SMB for now (can be extended for other protocols)
-#ifdef ENABLE_SMB_UPLOAD
-    if (!smbUploader || !config->hasSmbEndpoint()) {
-        LOG_ERROR("[FileUploader] Deep scan only supported for SMB endpoints");
-        return false;
-    }
-    
-    // Ensure SMB connection is established
-    if (!smbUploader->isConnected()) {
-        LOG("[FileUploader] Connecting to SMB share for deep scan...");
-        if (!smbUploader->begin()) {
-            LOG_ERROR("[FileUploader] Failed to connect to SMB share for deep scan");
-            return false;
-        }
-    }
-#else
-    LOG_ERROR("[FileUploader] Deep scan requires SMB support (compile with -DENABLE_SMB_UPLOAD)");
-    return false;
-#endif
-    
-    // Scan all DATALOG folders (including completed ones for deep scan)
-    std::vector<String> datalogFolders = scanDatalogFolders(sd, true);
-    
-    int foldersChecked = 0;
-    int foldersWithDifferences = 0;
-    int filesWithSizeDifferences = 0;
-    std::vector<String> foldersToReupload;
-    
-    LOG_INFOF("[FileUploader] Checking %d DATALOG folders for file size differences", datalogFolders.size());
-    
-    for (const String& folderName : datalogFolders) {
-        // Check for periodic SD card release
-        if (!checkAndReleaseSD(sdManager)) {
-            LOG_ERROR("[FileUploader] Failed to retake SD card control during deep scan");
-            return false;
-        }
-        
-        String localFolderPath = "/DATALOG/" + folderName;
-        String remoteFolderPath = "/DATALOG/" + folderName;
-        
-        // Get local file information
-        std::vector<String> localFiles = scanFolderFiles(sd, localFolderPath);
-        std::map<String, size_t> localFileInfo;
-        
-        for (const String& fileName : localFiles) {
-            String fullLocalPath = localFolderPath + "/" + fileName;
-            File localFile = sd.open(fullLocalPath, "r");
-            if (localFile) {
-                localFileInfo[fileName] = localFile.size();
-                localFile.close();
-            } else {
-                LOG_WARN("[FileUploader] Could not open local file for size check: " + fullLocalPath);
-            }
-        }
-        
-        // Get remote file information
-#ifdef ENABLE_SMB_UPLOAD
-        std::map<String, size_t> remoteFileInfo;
-        bool remoteSuccess = smbUploader->getRemoteFileInfo(remoteFolderPath, remoteFileInfo);
-#else
-        bool remoteSuccess = false;
-        std::map<String, size_t> remoteFileInfo;
-#endif
-        
-        foldersChecked++;
-        bool folderHasDifferences = false;
-        int folderFileDifferences = 0;
-        
-        if (!remoteSuccess) {
-            LOG_DEBUGF("[FileUploader] Could not access remote folder: %s", remoteFolderPath.c_str());
-            // If we can't access remote folder, mark for re-upload if local has files
-            if (!localFileInfo.empty()) {
-                LOG_DEBUGF("[FileUploader] Local folder has %d files, remote inaccessible - marking for re-upload", localFileInfo.size());
-                folderHasDifferences = true;
-            }
-        } else {
-            // Compare file counts first
-            if (localFileInfo.size() != remoteFileInfo.size()) {
-                LOG_DEBUGF("[FileUploader] File count mismatch in %s: local=%d, remote=%d", 
-                          folderName.c_str(), localFileInfo.size(), remoteFileInfo.size());
-                folderHasDifferences = true;
-            } else {
-                // Compare individual file sizes
-                for (const auto& localFile : localFileInfo) {
-                    const String& fileName = localFile.first;
-                    size_t localSize = localFile.second;
-                    
-                    auto remoteIt = remoteFileInfo.find(fileName);
-                    if (remoteIt == remoteFileInfo.end()) {
-                        LOG_DEBUGF("[FileUploader] File missing on remote: %s/%s (%u bytes)", 
-                                  folderName.c_str(), fileName.c_str(), localSize);
-                        folderHasDifferences = true;
-                        folderFileDifferences++;
-                    } else {
-                        size_t remoteSize = remoteIt->second;
-                        if (localSize != remoteSize) {
-                            LOG_INFOF("[FileUploader] File size mismatch: %s/%s local=%u bytes, remote=%u bytes", 
-                                      folderName.c_str(), fileName.c_str(), localSize, remoteSize);
-                            folderHasDifferences = true;
-                            folderFileDifferences++;
-                        }
-                    }
-                }
-                
-                // Check for files that exist on remote but not local (shouldn't happen normally)
-                for (const auto& remoteFile : remoteFileInfo) {
-                    const String& fileName = remoteFile.first;
-                    if (localFileInfo.find(fileName) == localFileInfo.end()) {
-                        LOG_DEBUGF("[FileUploader] Extra file on remote: %s/%s (%u bytes)", 
-                                  folderName.c_str(), fileName.c_str(), remoteFile.second);
-                        // This is unusual but not necessarily an error - don't mark for re-upload
-                    }
-                }
-            }
-        }
-        
-        if (folderHasDifferences) {
-            foldersWithDifferences++;
-            filesWithSizeDifferences += folderFileDifferences;
-            foldersToReupload.push_back(folderName);
-            LOG_DEBUGF("[FileUploader] Folder %s has differences (%d files affected)", 
-                      folderName.c_str(), folderFileDifferences);
-        } else {
-            LOG_INFOF("[FileUploader] File sizes match in %s: %d files", folderName.c_str(), localFileInfo.size());
-        }
-        
-        // Yield to prevent watchdog timeout
-        yield();
-    }
-    
-    LOG_INFOF("[FileUploader] Deep scan complete: checked %d folders, found %d with differences (%d files affected)", 
-              foldersChecked, foldersWithDifferences, filesWithSizeDifferences);
-    
-    if (foldersWithDifferences == 0) {
-        LOG("[FileUploader] No differences found - all file sizes match remote");
-        return true;
-    }
-    
-    // Mark folders for re-upload by removing them from completed state
-    LOG_DEBUGF("[FileUploader] Marking %d folders for re-upload due to file size differences", foldersWithDifferences);
-    
-    for (const String& folderName : foldersToReupload) {
-        if (stateManager->isFolderCompleted(folderName)) {
-            LOG_INFOF("[FileUploader] Removing completed status from folder: %s", folderName.c_str());
-            stateManager->removeFolderFromCompleted(folderName);
-        }
-        
-        // Also remove from pending if it was there
-        if (stateManager->isPendingFolder(folderName)) {
-            LOG_INFOF("[FileUploader] Removing pending status from folder: %s", folderName.c_str());
-            stateManager->removeFolderFromPending(folderName);
-        }
-    }
-    
-    // Save state changes
-    if (!stateManager->save(sd)) {
-        LOG_WARN("[FileUploader] Failed to save state after deep scan");
-    }
-    
-    LOG_INFOF("[FileUploader] Deep scan complete: %d folders marked for re-upload (%d files with size differences)", 
-              foldersWithDifferences, filesWithSizeDifferences);
-    LOG("[FileUploader] Folders will be re-uploaded in the next upload session");
     
     return true;
 }

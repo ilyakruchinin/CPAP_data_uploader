@@ -25,8 +25,8 @@ This document is for developers who want to build, modify, or contribute to the 
 ### Upload Management
 
 - **UploadStateManager** - Tracks which files/folders have been uploaded using checksums
-- **TimeBudgetManager** - Enforces time limits on SD card access (respects CPAP priority)
-- **ScheduleManager** - Manages daily upload scheduling with NTP time synchronization
+- **ScheduleManager** - Manages upload scheduling with NTP time synchronization
+- **UploadFSM** - Finite state machine controlling the upload lifecycle (IDLE → LISTENING → ACQUIRING → UPLOADING → RELEASING → COOLDOWN)
 
 ### Upload Backends
 
@@ -70,7 +70,6 @@ Power settings are applied automatically during startup and maintain full web se
 │   ├── WiFiManager.cpp      # WiFi connection handling
 │   ├── FileUploader.cpp     # File upload orchestration
 │   ├── UploadStateManager.cpp # Upload state tracking
-│   ├── TimeBudgetManager.cpp  # Time budget enforcement
 │   ├── ScheduleManager.cpp    # Upload scheduling
 │   ├── SMBUploader.cpp        # SMB upload implementation
 │   ├── TestWebServer.cpp      # Test web server (optional)
@@ -80,12 +79,13 @@ Power settings are applied automatically during startup and maintain full web se
 ├── include/                  # Header files
 │   ├── pins_config.h        # Pin definitions for SD WIFI PRO
 │   └── *.h                  # Component headers
-├── test/                     # Unit tests (72 tests, all passing)
-│   ├── test_time_budget_manager/
+├── test/                     # Unit tests
 │   ├── test_config/
-│   ├── test_webserver/
+│   ├── test_credential_migration/
+│   ├── test_logger_circular_buffer/
 │   ├── test_native/
 │   ├── test_schedule_manager/
+│   ├── test_upload_state_manager/
 │   └── mocks/               # Mock implementations
 ├── components/               # ESP-IDF components (not in git)
 │   └── libsmb2/             # SMB2/3 client library (cloned by setup script)
@@ -217,7 +217,6 @@ The system supports direct upload to SleepHQ cloud service via REST API. This ca
   "ENDPOINT_TYPE": "CLOUD",
   "CLOUD_CLIENT_ID": "your-sleephq-client-id",
   "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "UPLOAD_HOUR": 14,
   "GMT_OFFSET_HOURS": -8
 }
 ```
@@ -236,7 +235,6 @@ Upload to both a local NAS and SleepHQ simultaneously:
   "ENDPOINT_PASS": "smbpass",
   "CLOUD_CLIENT_ID": "your-sleephq-client-id",
   "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "UPLOAD_HOUR": 14,
   "GMT_OFFSET_HOURS": -8
 }
 ```
@@ -252,7 +250,6 @@ Upload to both a local NAS and SleepHQ simultaneously:
 | `CLOUD_BASE_URL` | No | `https://sleephq.com` | API base URL |
 | `CLOUD_INSECURE_TLS` | No | `false` | Skip TLS certificate validation (not recommended) |
 | `MAX_DAYS` | No | `0` (all) | Only upload DATALOG folders from the last N days |
-| `UPLOAD_INTERVAL_MINUTES` | No | `0` (daily) | Upload every N minutes instead of once daily |
 
 #### Upload Flow
 
@@ -287,18 +284,6 @@ content_hash = MD5(file_content + filename)
 ```
 
 Where `filename` is the bare filename without path (e.g., `BRP.edf`).
-
-#### Interval-Based Scheduling
-
-By default, uploads occur once daily at `UPLOAD_HOUR`. For more frequent uploads (e.g., when testing or when near-real-time data is desired):
-
-```json
-{
-  "UPLOAD_INTERVAL_MINUTES": 60
-}
-```
-
-This overrides the daily schedule and uploads every 60 minutes regardless of `UPLOAD_HOUR`.
 
 #### MAX_DAYS Filtering
 
@@ -469,23 +454,18 @@ pio test -e native
 Run specific test suite:
 ```bash
 pio test -e native -f test_config
-pio test -e native -f test_time_budget_manager
 pio test -e native -f test_schedule_manager
+pio test -e native -f test_upload_state_manager
 ```
 
 ### Test Coverage
 
-Current test results: **154 test cases, all passing**
-
-- `test_time_budget_manager`: 25 tests - Time budget and rate calculation
 - `test_config`: 33 tests - Configuration parsing and validation  
 - `test_credential_migration`: 6 tests - Secure credential storage
-- `test_sd_scan_failure`: 7 tests - SD card error handling
-- `test_webserver`: 9 tests - Web server endpoints
+- `test_logger_circular_buffer`: Logger circular buffer tests
 - `test_native`: 9 tests - Mock infrastructure
 - `test_upload_state_manager`: 42 tests - Upload state tracking
 - `test_schedule_manager`: 22 tests - Scheduling and NTP
-- `test_fileuploader_webserver`: 1 test - Integration testing
 
 ### Hardware Testing
 
@@ -849,12 +829,13 @@ pio test -e native -f test_config
 - Acceptable binary footprint (~220-270KB)
 - Active maintenance
 
-### Why Time Budgeting?
+### Why Exclusive Access FSM?
 
-CPAP machines need regular SD card access. Time budgeting ensures:
-- Short upload sessions, default 5 seconds, configurable.
-- CPAP machine gets priority
-- Uploads resume automatically
+CPAP machines need regular SD card access. The FSM-based exclusive access model ensures:
+- SD card bus inactivity is confirmed before taking control
+- Upload time is bounded by configurable exclusive access minutes
+- Cooldown periods between upload cycles give the CPAP machine uninterrupted access
+- Uploads resume automatically across multiple cycles
 
 ### Why Circular Buffer Logging?
 
@@ -910,10 +891,9 @@ SleepHQ requires an import session workflow (create → upload files → process
 
 ### Upload Performance
 
-- Default rate: 40 KB/s (conservative estimate)
 - Actual rate: Varies by network and share, during tests the transfer achieved 130KB/s
-- Rate tracking: Running average of last 5 uploads
-- Adaptive budgeting: Increases on repeated failures
+- Upload time bounded by EXCLUSIVE_ACCESS_MINUTES config parameter
+- Multiple upload cycles separated by COOLDOWN_MINUTES
 
 ---
 

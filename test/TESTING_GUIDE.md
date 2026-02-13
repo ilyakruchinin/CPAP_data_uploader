@@ -16,7 +16,7 @@ pio test -e native -vv
 
 Run specific test:
 ```bash
-pio test -e native -f test_webserver
+pio test -e native -f test_config
 ```
 
 ## Test Structure
@@ -37,14 +37,14 @@ test/
 │   └── MockWebServer.h            # Mock WebServer for testing
 ├── test_config/                   # Config tests
 │   └── test_config.cpp
+├── test_credential_migration/     # Credential migration tests
+│   └── test_credential_migration.cpp
+├── test_logger_circular_buffer/   # Logger tests
+│   └── test_logger_circular_buffer.cpp
 ├── test_schedule_manager/         # ScheduleManager tests
 │   └── test_schedule_manager.cpp
-├── test_time_budget_manager/      # TimeBudgetManager tests
-│   └── test_time_budget_manager.cpp
 ├── test_upload_state_manager/     # UploadStateManager tests
 │   └── test_upload_state_manager.cpp
-├── test_webserver/                # TestWebServer tests
-│   └── test_webserver.cpp
 └── test_native/                   # General native tests
     └── test_*.cpp                 # Test files
 ```
@@ -139,15 +139,17 @@ When testing components that depend on ESP32-specific libraries:
 2. **Include the component header in your test** - This allows you to test the interface
 3. **Create a test-specific implementation if needed** - For components that need special handling in tests
 
-Example for testing TimeBudgetManager:
+Example for testing UploadStateManager:
 
 ```cpp
 #include <unity.h>
 #include "Arduino.h"
 #include "MockTime.h"
 
-// Include the actual implementation
-#include "../src/TimeBudgetManager.cpp"
+// Include mocks and the actual implementation
+#include "../mocks/Arduino.cpp"
+#include "UploadStateManager.h"
+#include "../../src/UploadStateManager.cpp"
 
 void setUp(void) {
     MockTimeState::reset();
@@ -156,32 +158,16 @@ void setUp(void) {
 void tearDown(void) {
 }
 
-void test_budget_initialization() {
-    TimeBudgetManager manager;
+void test_initial_state() {
+    UploadStateManager manager;
     
-    MockTimeState::setMillis(1000);
-    manager.startSession(5);  // 5 second session
-    
-    TEST_ASSERT_TRUE(manager.hasBudget());
-    TEST_ASSERT_EQUAL(5000, manager.getRemainingBudgetMs());
-}
-
-void test_budget_consumption() {
-    TimeBudgetManager manager;
-    
-    MockTimeState::setMillis(1000);
-    manager.startSession(5);
-    
-    // Advance time by 2 seconds
-    MockTimeState::advanceMillis(2000);
-    
-    TEST_ASSERT_EQUAL(3000, manager.getRemainingBudgetMs());
+    TEST_ASSERT_EQUAL(0, manager.getCompletedFoldersCount());
+    TEST_ASSERT_EQUAL(0, manager.getIncompleteFoldersCount());
 }
 
 int main(int argc, char **argv) {
     UNITY_BEGIN();
-    RUN_TEST(test_budget_initialization);
-    RUN_TEST(test_budget_consumption);
+    RUN_TEST(test_initial_state);
     return UNITY_END();
 }
 ```
@@ -282,87 +268,6 @@ If tests hang or crash:
 - Look for null pointer dereferences
 - Use `Serial.println()` to add debug output
 
-## Testing the TestWebServer
-
-The TestWebServer component provides a web interface for on-demand upload testing. It has its own unit tests that use a mock WebServer.
-
-### Running TestWebServer Tests
-
-```bash
-pio test -e native -f test_webserver
-```
-
-### TestWebServer Test Coverage
-
-The tests verify:
-- Server initialization and startup
-- Endpoint registration (/, /trigger-upload, /status, /reset-state, /config)
-- Global trigger flag setting (g_triggerUploadFlag, g_resetStateFlag)
-- HTTP response generation (status codes, content types, JSON bodies)
-- CORS header inclusion
-- Request handling
-
-### MockWebServer
-
-The `test/mocks/MockWebServer.h` provides a mock WebServer implementation for testing:
-
-```cpp
-#include "../mocks/MockWebServer.h"
-
-void test_endpoint() {
-    WebServer server(80);
-    
-    // Register handler
-    server.on("/test", []() {
-        server.send(200, "text/plain", "OK");
-    });
-    
-    server.begin();
-    
-    // Simulate request
-    server.simulateRequest("/test");
-    
-    // Verify response
-    TEST_ASSERT_EQUAL(200, server.getLastResponseCode());
-    TEST_ASSERT_EQUAL_STRING("text/plain", server.getLastResponseType().c_str());
-    TEST_ASSERT_EQUAL_STRING("OK", server.getLastResponseBody().c_str());
-}
-```
-
-### Testing Web Endpoints
-
-When testing components that use WebServer:
-
-1. **Include MockWebServer.h** before including the component
-2. **Use simulateRequest()** to trigger handlers
-3. **Verify responses** using getLastResponseCode(), getLastResponseType(), getLastResponseBody()
-4. **Check headers** using getResponseHeader()
-5. **Test flag setting** for trigger and reset endpoints
-
-Example:
-
-```cpp
-void test_trigger_upload() {
-    TestWebServer testServer(&config, &stateManager, &budgetManager, &scheduleManager);
-    testServer.begin();
-    
-    WebServer* server = testServer.getServer();
-    
-    // Verify flag is initially false
-    TEST_ASSERT_FALSE(g_triggerUploadFlag);
-    
-    // Simulate request
-    server->simulateRequest("/trigger-upload");
-    
-    // Verify flag was set
-    TEST_ASSERT_TRUE(g_triggerUploadFlag);
-    
-    // Verify response
-    TEST_ASSERT_EQUAL(200, server->getLastResponseCode());
-    TEST_ASSERT_EQUAL_STRING("application/json", server->getLastResponseType().c_str());
-}
-```
-
 ## Hardware Testing with TestWebServer
 
 For hardware testing, the TestWebServer can be enabled to test uploads on-demand:
@@ -395,6 +300,9 @@ For hardware testing, the TestWebServer can be enabled to test uploads on-demand
    
    # View configuration
    curl http://192.168.1.100/config
+   
+   # View logs
+   curl http://192.168.1.100/logs
    ```
 
 5. **Disable for production** - Comment out `-DENABLE_TEST_WEBSERVER` before deploying

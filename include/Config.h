@@ -37,13 +37,8 @@ private:
     String endpointType;  // SMB, CLOUD, SMB,CLOUD
     String endpointUser;
     String endpointPassword;
-    int uploadHour;
-    int sessionDurationSeconds;
-    int maxRetryAttempts;
     int gmtOffsetHours;
     int bootDelaySeconds;
-    int sdReleaseIntervalSeconds;
-    int sdReleaseWaitMs;
     bool logToSdCard;
     bool isValid;
     
@@ -54,7 +49,6 @@ private:
     String cloudBaseUrl;
     int cloudDeviceId;
     int maxDays;
-    int uploadIntervalMinutes;
     int recentFolderDays;
     bool cloudInsecureTls;
     
@@ -122,13 +116,8 @@ public:
     const String& getEndpointType() const;
     const String& getEndpointUser() const;
     const String& getEndpointPassword() const;
-    int getUploadHour() const;
-    int getSessionDurationSeconds() const;
-    int getMaxRetryAttempts() const;
     int getGmtOffsetHours() const;
     int getBootDelaySeconds() const;
-    int getSdReleaseIntervalSeconds() const;
-    int getSdReleaseWaitMs() const;
     bool getLogToSdCard() const;
     bool valid() const;
     
@@ -139,7 +128,6 @@ public:
     const String& getCloudBaseUrl() const;
     int getCloudDeviceId() const;
     int getMaxDays() const;
-    int getUploadIntervalMinutes() const;
     int getRecentFolderDays() const;
     bool getCloudInsecureTls() const;
     bool hasCloudEndpoint() const;

@@ -65,11 +65,6 @@ const unsigned long NTP_RETRY_INTERVAL_MS = 5 * 60 * 1000;  // 5 minutes
 unsigned long lastWifiReconnectAttempt = 0;
 unsigned long lastSdCardRetry = 0;
 
-// Legacy variables still referenced by TestWebServer.cpp (will be replaced in Phase 7)
-unsigned long nextUploadRetryTime = 0;
-bool budgetExhaustedRetry = false;
-unsigned long lastIntervalUploadTime = 0;
-
 // SD card logging periodic dump timing
 unsigned long lastLogDumpTime = 0;
 const unsigned long LOG_DUMP_INTERVAL_MS = 10 * 1000;  // 10 seconds
@@ -78,14 +73,8 @@ const unsigned long LOG_DUMP_INTERVAL_MS = 10 * 1000;  // 10 seconds
 // External trigger flags (defined in TestWebServer.cpp)
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
-extern volatile bool g_scanNowFlag;
-extern volatile bool g_deltaScanFlag;
-extern volatile bool g_deepScanFlag;
 
-// External scan status flag
-extern volatile bool g_scanInProgress;
-
-// New monitoring trigger flags (defined in TestWebServer.cpp)
+// Monitoring trigger flags (defined in TestWebServer.cpp)
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
 #endif
@@ -276,21 +265,12 @@ void setup() {
     
     // Synchronize time with NTP server
     LOG("Synchronizing time with NTP server...");
-    // The ScheduleManager handles NTP sync internally during begin()
-    // We can check if time is synced by calling shouldUpload()
-    // (it will return false if time is not synced)
-    
-    // Trigger initial time sync check
-    if (uploader->shouldUpload()) {
+    ScheduleManager* sm = uploader->getScheduleManager();
+    if (sm && sm->isTimeSynced()) {
         LOG("Time synchronized successfully");
-        LOGF("System time: %s", uploader->getScheduleManager()->getCurrentLocalTime().c_str());
-        LOG_DEBUG("Currently in upload window - will begin upload shortly");
+        LOGF("System time: %s", sm->getCurrentLocalTime().c_str());
     } else {
-        LOG_DEBUG("Time sync status unknown or not in upload window");
-        if (uploader->getScheduleManager()->isTimeSynced()) {
-            LOGF("System time: %s", uploader->getScheduleManager()->getCurrentLocalTime().c_str());
-        }
-        LOG_DEBUG("Will retry NTP sync every 5 minutes if needed");
+        LOG_DEBUG("Time sync not yet available, will retry every 5 minutes");
         lastNtpSyncAttempt = millis();
     }
 
@@ -312,7 +292,6 @@ void setup() {
     // Create test web server with references to uploader's internal components
     testWebServer = new TestWebServer(&config, 
                                       uploader->getStateManager(),
-                                      uploader->getBudgetManager(),
                                       uploader->getScheduleManager(),
                                       &wifiManager,
                                       cpapMonitor);
@@ -358,8 +337,19 @@ void handleIdle() {
     ScheduleManager* sm = uploader->getScheduleManager();
     
     // Check data availability from last known state (no SD access needed)
-    freshDataRemaining = uploader->hasIncompleteFolders();  // Approximate
-    oldDataRemaining = freshDataRemaining;  // Will be refined during upload
+    // If state manager has never been populated (no scan run yet), assume data exists
+    // to allow the first upload cycle to discover and scan the SD card
+    bool neverScanned = (uploader->getStateManager()->getCompletedFoldersCount() == 0 &&
+                         uploader->getStateManager()->getIncompleteFoldersCount() == 0 &&
+                         uploader->getStateManager()->getPendingFoldersCount() == 0);
+    
+    if (neverScanned) {
+        freshDataRemaining = true;
+        oldDataRemaining = true;
+    } else {
+        freshDataRemaining = uploader->hasIncompleteFolders();
+        oldDataRemaining = freshDataRemaining;
+    }
     
     if (sm->isUploadEligible(freshDataRemaining, oldDataRemaining)) {
         transitionTo(UploadState::LISTENING);
@@ -440,6 +430,16 @@ void handleReleasing() {
     if (sdManager.hasControl()) {
         sdManager.releaseControl();
     }
+    
+    // If monitoring was requested during upload, go to MONITORING instead of COOLDOWN
+    if (monitoringRequested) {
+        monitoringRequested = false;
+        trafficMonitor.resetStatistics();
+        LOG("[FSM] Monitoring requested during upload — entering MONITORING after release");
+        transitionTo(UploadState::MONITORING);
+        return;
+    }
+    
     cooldownStartedAt = millis();
     transitionTo(UploadState::COOLDOWN);
 }
@@ -559,7 +559,6 @@ void loop() {
                     
                     if (testWebServer) {
                         testWebServer->updateManagers(uploader->getStateManager(),
-                                                     uploader->getBudgetManager(),
                                                      uploader->getScheduleManager());
                         uploader->setWebServer(testWebServer);
                     }
@@ -573,63 +572,6 @@ void loop() {
             LOG("State reset complete");
         } else {
             LOG_ERROR("Cannot reset state - SD card in use");
-        }
-    }
-    
-    // Check for scan trigger
-    if (g_scanNowFlag) {
-        LOG("=== SD Card Scan Triggered via Web Interface ===");
-        g_scanNowFlag = false;
-        
-        if (sdManager.takeControl()) {
-            g_scanInProgress = true;
-            if (uploader->scanPendingFolders(&sdManager)) {
-                LOG("SD card scan completed successfully");
-            } else {
-                LOG("SD card scan failed");
-            }
-            g_scanInProgress = false;
-            sdManager.releaseControl();
-        } else {
-            LOG_ERROR("Cannot scan SD card - in use by CPAP");
-        }
-    }
-    
-    // Check for delta scan trigger
-    if (g_deltaScanFlag) {
-        LOG("=== Delta Scan Triggered via Web Interface ===");
-        g_deltaScanFlag = false;
-        
-        if (sdManager.takeControl()) {
-            g_scanInProgress = true;
-            if (uploader->performDeltaScan(&sdManager)) {
-                LOG("Delta scan completed successfully");
-            } else {
-                LOG("Delta scan failed");
-            }
-            g_scanInProgress = false;
-            sdManager.releaseControl();
-        } else {
-            LOG_ERROR("Cannot perform delta scan - SD card in use by CPAP");
-        }
-    }
-    
-    // Check for deep scan trigger
-    if (g_deepScanFlag) {
-        LOG("=== Deep Scan Triggered via Web Interface ===");
-        g_deepScanFlag = false;
-        
-        if (sdManager.takeControl()) {
-            g_scanInProgress = true;
-            if (uploader->performDeepScan(&sdManager)) {
-                LOG("Deep scan completed successfully");
-            } else {
-                LOG("Deep scan failed");
-            }
-            g_scanInProgress = false;
-            sdManager.releaseControl();
-        } else {
-            LOG_ERROR("Cannot perform deep scan - SD card in use by CPAP");
         }
     }
     
@@ -687,16 +629,16 @@ void loop() {
     
     // ── Monitoring request handling (can interrupt most states) ──
     if (monitoringRequested) {
-        monitoringRequested = false;
         if (currentState != UploadState::UPLOADING) {
+            monitoringRequested = false;
             if (currentState == UploadState::ACQUIRING && sdManager.hasControl()) {
                 sdManager.releaseControl();
             }
             trafficMonitor.resetStatistics();
             transitionTo(UploadState::MONITORING);
         }
-        // If UPLOADING, the upload will complete its current cycle and then
-        // the FSM will naturally transition. For now, we don't interrupt uploads.
+        // If UPLOADING, leave flag set — handleReleasing() will redirect to MONITORING
+        // after upload finishes current cycle + mandatory root/SETTINGS files
     }
 
     // ── FSM dispatch ──
