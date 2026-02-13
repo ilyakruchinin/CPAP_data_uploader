@@ -99,6 +99,16 @@ public:
     LogData retrieveLogs();
 
     /**
+     * Print all logs to a Print destination (e.g., Serial or WebServer)
+     * Writes directly from buffer to output without intermediate String allocation.
+     * Thread-safe.
+     * 
+     * @param output The Print destination to write logs to
+     * @return Number of bytes written
+     */
+    size_t printLogs(Print& output);
+
+    /**
      * Enable or disable SD card logging
      * WARNING: SD card logging is for debugging only and can cause conflicts
      * when accessing the SD card for CPAP data uploads. Use with caution.

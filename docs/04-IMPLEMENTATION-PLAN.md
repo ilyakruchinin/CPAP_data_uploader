@@ -261,6 +261,14 @@ has been deleted.
 - Upload with large timer → verify COMPLETE when all files done
 - Verify root/SETTINGS are NEVER skipped regardless of timer state
 
+### 4.7 Single-Pass Streaming Optimization (Implemented)
+
+The upload logic was further optimized to minimize SD card I/O and memory usage:
+- **Single-Pass**: Files are read only once. MD5 checksum is calculated *during* the upload stream.
+- **Footer Hash**: SleepHQ API accepts `content_hash` in the multipart footer, allowing streamed calculation.
+- **Chunked Decoding**: Custom chunked response decoder implemented to support persistent TLS connections (keep-alive) with Cloudflare.
+- **Streaming Only**: In-memory buffering for small files removed to prevent heap fragmentation.
+
 ---
 
 ## Phase 5: SDCardManager Cleanup
@@ -402,16 +410,27 @@ void loop() {
   - Failure → transition to RELEASING (will try again after cooldown)
 ```
 
-**handleUploading()**:
+**handleUploading()** (non-blocking — upload runs as FreeRTOS task on Core 0):
 ```
-- Determine data filter:
-  - If canUploadFreshData() && canUploadOldData(): ALL_DATA
-  - If canUploadFreshData() only: FRESH_ONLY
-  - If canUploadOldData() only: OLD_ONLY
-- Call uploader->uploadWithExclusiveAccess(sdManager, X minutes, filter)
-  - COMPLETE → transition to COMPLETE
-  - TIMEOUT → uploadCycleHadTimeout = true, transition to RELEASING
-  - ERROR → transition to RELEASING
+- If upload task not yet started:
+  - Determine data filter (ALL_DATA / FRESH_ONLY / OLD_ONLY)
+  - Disable web server in uploader (main loop handles it exclusively)
+  - Spawn FreeRTOS task pinned to Core 0 (16KB stack)
+    - Task calls uploader->uploadWithExclusiveAccess(sdManager, X minutes, filter)
+    - On completion: sets volatile result flag and self-deletes
+  - If task creation fails: fall back to synchronous (blocking) upload
+- If upload task complete:
+  - Restore web server in uploader
+  - Read result:
+    - COMPLETE → transition to COMPLETE
+    - TIMEOUT → uploadCycleHadTimeout = true, transition to RELEASING
+    - ERROR → transition to RELEASING
+- Else: task still running — return immediately (main loop continues)
+
+NOTE: While upload task runs on Core 0, the main loop on Core 1 continues
+handling web server requests, TrafficMonitor updates, and WiFi reconnection.
+SD card log dumps and web triggers (reset, trigger upload) are blocked while
+the upload task is running to prevent shared-state conflicts.
 ```
 
 **handleReleasing()**:

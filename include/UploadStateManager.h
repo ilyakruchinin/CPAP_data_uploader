@@ -11,6 +11,7 @@ private:
     String stateFilePath;
     unsigned long lastUploadTimestamp;
     std::map<String, String> fileChecksums;
+    std::map<String, unsigned long> fileSizes;  // Fast size-based change detection
     std::set<String> completedDatalogFolders;
     std::map<String, unsigned long> pendingDatalogFolders;  // folderName -> firstSeenTimestamp
     String currentRetryFolder;
@@ -30,7 +31,7 @@ public:
     
     // Checksum-based tracking for root/SETTINGS files
     bool hasFileChanged(fs::FS &sd, const String& filePath);
-    void markFileUploaded(const String& filePath, const String& checksum);
+    void markFileUploaded(const String& filePath, const String& checksum, unsigned long fileSize = 0);
     
     // Folder-based tracking for DATALOG
     bool isFolderCompleted(const String& folderName);

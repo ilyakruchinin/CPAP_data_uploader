@@ -3,6 +3,7 @@
 
 #ifdef ENABLE_SLEEPHQ_UPLOAD
 
+#include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <esp32/rom/md5_hash.h>
@@ -47,7 +48,28 @@ SleepHQUploader::~SleepHQUploader() {
 void SleepHQUploader::setupTLS() {
     if (!tlsClient) {
         tlsClient = new WiFiClientSecure();
+        if (!tlsClient) {
+            LOG_ERROR("[SleepHQ] Failed to allocate WiFiClientSecure - OOM!");
+            return;
+        }
     }
+    configureTLS();
+}
+
+void SleepHQUploader::resetTLS() {
+    if (tlsClient) {
+        tlsClient->stop();
+        delay(100);  // Let lwIP process the FIN/RST before freeing
+        delete tlsClient;
+        tlsClient = nullptr;
+    }
+    // Give lwIP TCP stack time to release socket FDs and clean up TIME_WAIT
+    delay(500);
+    setupTLS();
+}
+
+void SleepHQUploader::configureTLS() {
+    if (!tlsClient) return;
     
     if (config->getCloudInsecureTls()) {
         LOG_WARN("[SleepHQ] TLS certificate validation DISABLED (insecure mode)");
@@ -57,8 +79,8 @@ void SleepHQUploader::setupTLS() {
         tlsClient->setCACert(GTS_ROOT_R4_CA);
     }
     
-    // Set reasonable timeout for ESP32
-    tlsClient->setTimeout(15);  // 15 seconds
+    // Set reasonable timeout for ESP32 - increased to 60s for slow networks
+    tlsClient->setTimeout(60);  // 60 seconds
 }
 
 bool SleepHQUploader::begin() {
@@ -66,6 +88,10 @@ bool SleepHQUploader::begin() {
     
     // Setup TLS
     setupTLS();
+    if (!tlsClient) {
+        LOG_ERROR("[SleepHQ] Failed to initialize TLS client");
+        return false;
+    }
     
     // Authenticate
     if (!authenticate()) {
@@ -348,7 +374,7 @@ String SleepHQUploader::computeContentHash(fs::FS &sd, const String& localPath, 
 }
 
 bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
-                              fs::FS &sd, unsigned long& bytesTransferred) {
+                              fs::FS &sd, unsigned long& bytesTransferred, String& fileChecksum) {
     bytesTransferred = 0;
     
     if (!ensureAccessToken()) {
@@ -374,14 +400,39 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
         return false;
     }
     
-    LOG_DEBUGF("[SleepHQ] Uploading: %s (%lu bytes, hash: %s)", localPath.c_str(), lockedFileSize, contentHash.c_str());
+    uint32_t freeHeap = ESP.getFreeHeap();
+    uint32_t maxAlloc = ESP.getMaxAllocHeap();
+    
+    LOG_DEBUGF("[SleepHQ] Uploading: %s (%lu bytes, hash: %s, free: %u, max_alloc: %u)",
+               localPath.c_str(), lockedFileSize, contentHash.c_str(), freeHeap, maxAlloc);
+    
+    // Policy: 1-connection-per-file for large files (>5KB) to avoid timeouts
+    // BUT: If memory is low (fragmented), we MUST preserve the existing connection
+    // because we might not be able to allocate a new SSL context if we close it.
+    bool lowMemory = (maxAlloc < 50000); // 50KB threshold (SSL needs ~40KB contiguous)
+    bool useKeepAlive = (lockedFileSize <= 5 * 1024) || lowMemory;
+    
+    if (tlsClient && tlsClient->connected()) {
+        if (!useKeepAlive) {
+            LOG_INFO("[SleepHQ] Refreshing TLS connection for stability (policy: 1-conn-per-file)");
+            tlsClient->stop(); 
+            yield();
+        } else if (lowMemory && lockedFileSize > 5 * 1024) {
+            LOG_WARNF("[SleepHQ] Low memory (%u bytes contiguous) - forcing keep-alive to preserve SSL context", maxAlloc);
+            useKeepAlive = true; // override keep-alive policy
+        }
+    }
+    
+    // Ensure WiFi is in high performance mode for upload
+    WiFi.setSleep(false);
     
     // Upload via multipart POST using the same byte count that was hashed
     String path = "/api/v1/imports/" + currentImportId + "/files";
     String responseBody;
     int httpCode;
     
-    if (!httpMultipartUpload(path, fileName, localPath, contentHash, lockedFileSize, sd, bytesTransferred, responseBody, httpCode)) {
+    String calculatedFileChecksum;
+    if (!httpMultipartUpload(path, fileName, localPath, contentHash, lockedFileSize, sd, bytesTransferred, responseBody, httpCode, &calculatedFileChecksum, useKeepAlive)) {
         LOG_ERRORF("[SleepHQ] Upload failed for: %s", localPath.c_str());
         return false;
     }
@@ -390,6 +441,10 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
         LOG_ERRORF("[SleepHQ] Upload returned HTTP %d for: %s", httpCode, localPath.c_str());
         LOG_ERRORF("[SleepHQ] Response: %s", responseBody.c_str());
         return false;
+    }
+    
+    if (fileChecksum.length() == 0 && !calculatedFileChecksum.isEmpty()) {
+        fileChecksum = calculatedFileChecksum;
     }
     
     LOG_DEBUGF("[SleepHQ] Uploaded: %s (%lu bytes)", fileName.c_str(), bytesTransferred);
@@ -430,55 +485,121 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
         setupTLS();
     }
     
+    if (!tlsClient) {
+        LOG_ERROR("[SleepHQ] TLS client not available (OOM)");
+        return false;
+    }
+    
     String baseUrl = config->getCloudBaseUrl();
     String url = baseUrl + path;
     
-    HTTPClient http;
-    http.begin(*tlsClient, url);
-    http.setTimeout(15000);  // 15 second timeout
-    
-    // Set headers
-    http.addHeader("Accept", "application/vnd.api+json");
-    if (!accessToken.isEmpty()) {
-        http.addHeader("Authorization", "Bearer " + accessToken);
-    }
-    if (!contentType.isEmpty()) {
-        http.addHeader("Content-Type", contentType);
-    }
-    
-    // Send request
-    if (method == "GET") {
-        httpCode = http.GET();
-    } else if (method == "POST") {
-        if (body.isEmpty()) {
-            httpCode = http.POST("");
-        } else {
-            httpCode = http.POST(body);
+    // Retry loop: if the keep-alive connection was closed by the server, reconnect once
+    for (int attempt = 0; attempt < 2; attempt++) {
+        // Ensure we have a valid TLS client before attempting
+        if (!tlsClient) {
+            LOG_ERROR("[SleepHQ] TLS client lost during retry");
+            return false;
         }
-    } else {
-        LOG_ERRORF("[SleepHQ] Unsupported HTTP method: %s", method.c_str());
+
+        // Check if heap has enough contiguous memory for SSL handshake (~40KB needed)
+        uint32_t maxAlloc = ESP.getMaxAllocHeap();
+        if (!tlsClient->connected() && maxAlloc < 40000) {
+            LOG_ERRORF("[SleepHQ] Insufficient contiguous heap for SSL (%u bytes), skipping request", maxAlloc);
+            return false;
+        }
+
+        HTTPClient http;
+        http.begin(*tlsClient, url);
+        http.setTimeout(15000);  // 15 second timeout
+        http.setReuse(true);     // Keep-alive: reuse TLS connection across requests
+        
+        // Set headers
+        http.addHeader("Accept", "application/vnd.api+json");
+        if (!accessToken.isEmpty()) {
+            http.addHeader("Authorization", "Bearer " + accessToken);
+        }
+        if (!contentType.isEmpty()) {
+            http.addHeader("Content-Type", contentType);
+        }
+        
+        // Send request
+        if (method == "GET") {
+            httpCode = http.GET();
+        } else if (method == "POST") {
+            httpCode = body.isEmpty() ? http.POST("") : http.POST(body);
+        } else {
+            LOG_ERRORF("[SleepHQ] Unsupported HTTP method: %s", method.c_str());
+            http.end();
+            return false;
+        }
+        
+        if (httpCode > 0) {
+            responseBody = http.getString();
+            http.end();
+            return true;
+        }
+        
+        // Connection error — retry once after reconnecting
+        if (attempt == 0) {
+            LOG_WARNF("[SleepHQ] HTTP %s failed (%s), waiting 3s before retry...",
+                      method.c_str(), http.errorToString(httpCode).c_str());
+            http.end();
+            resetTLS(); // Full reset to clear FDs
+            
+            // Check WiFi status and cycle if needed to clear poisoned sockets
+            if (WiFi.status() != WL_CONNECTED) {
+                LOG_WARN("[SleepHQ] WiFi disconnected, waiting for reconnection...");
+                unsigned long startWait = millis();
+                while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    delay(100);
+                }
+                if (WiFi.status() == WL_CONNECTED) {
+                    LOG_INFO("[SleepHQ] WiFi reconnected");
+                } else {
+                    LOG_ERROR("[SleepHQ] WiFi still disconnected");
+                }
+            } else {
+                // WiFi connected but request failed — cycle to clear poisoned sockets
+                LOG_WARN("[SleepHQ] Cycling WiFi to clear socket state...");
+                WiFi.disconnect(false);
+                delay(1000);
+                WiFi.reconnect();
+                unsigned long wifiWait = millis();
+                while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
+                    delay(100);
+                }
+                if (WiFi.status() == WL_CONNECTED) {
+                    LOG_INFO("[SleepHQ] WiFi reconnected after socket reset");
+                } else {
+                    LOG_ERROR("[SleepHQ] WiFi failed to reconnect");
+                }
+                resetTLS();
+            }
+            
+            continue;
+        }
+        
+        LOG_ERRORF("[SleepHQ] HTTP request failed after retry: %s", http.errorToString(httpCode).c_str());
         http.end();
         return false;
     }
-    
-    if (httpCode < 0) {
-        LOG_ERRORF("[SleepHQ] HTTP request failed: %s", http.errorToString(httpCode).c_str());
-        http.end();
-        return false;
-    }
-    
-    responseBody = http.getString();
-    http.end();
-    return true;
+    return false;
 }
 
 bool SleepHQUploader::httpMultipartUpload(const String& path, const String& fileName,
                                            const String& filePath, const String& contentHash,
                                            unsigned long lockedFileSize,
                                            fs::FS &sd, unsigned long& bytesTransferred,
-                                           String& responseBody, int& httpCode) {
+                                           String& responseBody, int& httpCode,
+                                           String* calculatedChecksum,
+                                           bool useKeepAlive) {
     if (!tlsClient) {
         setupTLS();
+    }
+    
+    if (!tlsClient) {
+        LOG_ERROR("[SleepHQ] TLS client not available (OOM)");
+        return false;
     }
     
     // Open the file
@@ -491,185 +612,511 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
     // file.size() which may have grown since the hash was computed.
     unsigned long fileSize = lockedFileSize;
     
-    // Extract the directory path for the 'path' field
-    String dirPath = filePath;
-    int lastSlash = dirPath.lastIndexOf('/');
-    if (lastSlash > 0) {
-        dirPath = dirPath.substring(0, lastSlash);
-    } else {
-        dirPath = "/";
+    // Extract the directory path for the 'path' field (stack-allocated to avoid heap churn)
+    char dirPath[128];
+    {
+        const char* fp = filePath.c_str();
+        const char* ls = strrchr(fp, '/');
+        if (ls && ls > fp) {
+            size_t dirLen = ls - fp;
+            if (dirLen >= sizeof(dirPath)) dirLen = sizeof(dirPath) - 1;
+            memcpy(dirPath, fp, dirLen);
+            dirPath[dirLen] = '\0';
+        } else {
+            strcpy(dirPath, "/");
+        }
     }
     
-    // Build multipart body
-    String boundary = "----ESP32Boundary" + String(millis());
+    // Build multipart boundary on stack (no heap allocation)
+    char boundary[32];
+    snprintf(boundary, sizeof(boundary), "----ESP32Boundary%lu", millis());
     
-    // Build the parts before and after the file content
-    String partBefore = "";
-    
-    // name field
-    partBefore += "--" + boundary + "\r\n";
-    partBefore += "Content-Disposition: form-data; name=\"name\"\r\n\r\n";
-    partBefore += fileName + "\r\n";
-    
-    // path field
-    partBefore += "--" + boundary + "\r\n";
-    partBefore += "Content-Disposition: form-data; name=\"path\"\r\n\r\n";
-    partBefore += dirPath + "\r\n";
-    
-    // content_hash field
-    partBefore += "--" + boundary + "\r\n";
-    partBefore += "Content-Disposition: form-data; name=\"content_hash\"\r\n\r\n";
-    partBefore += contentHash + "\r\n";
-    
-    // file field header
-    partBefore += "--" + boundary + "\r\n";
-    partBefore += "Content-Disposition: form-data; name=\"file\"; filename=\"" + fileName + "\"\r\n";
-    partBefore += "Content-Type: application/octet-stream\r\n\r\n";
-    
-    String partAfter = "\r\n--" + boundary + "--\r\n";
+    // Calculate exact part lengths using snprintf(NULL,0,...) — zero heap allocation
+    const char* fnStr = fileName.c_str();
+    int head1Len = snprintf(NULL, 0, "--%s\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n%s\r\n",
+                            boundary, fnStr);
+    int head2Len = snprintf(NULL, 0, "--%s\r\nContent-Disposition: form-data; name=\"path\"\r\n\r\n%s\r\n",
+                            boundary, dirPath);
+    int head3Len = snprintf(NULL, 0, "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+                            "Content-Type: application/octet-stream\r\n\r\n",
+                            boundary, fnStr);
+    int foot1Len = snprintf(NULL, 0, "\r\n--%s\r\nContent-Disposition: form-data; name=\"content_hash\"\r\n\r\n",
+                            boundary);
+    int foot2Len = snprintf(NULL, 0, "\r\n--%s--\r\n", boundary);
     
     // Calculate total content length
-    unsigned long totalLength = partBefore.length() + fileSize + partAfter.length();
+    unsigned long totalLength = head1Len + head2Len + head3Len + 
+                                fileSize + 
+                                foot1Len + 32 + foot2Len;
     
-    // Build full URL
-    String baseUrl = config->getCloudBaseUrl();
-    String url = baseUrl + path;
+    // Always stream multipart payloads.
+    // This avoids large per-file temporary allocations (and HTTPClient internal allocations)
+    // that can fragment heap and trigger TLS allocation failures later in the session.
+    file.close();
     
-    // For ESP32 HTTPClient, we need to build the complete payload
-    // For files up to ~48KB, assemble in memory; larger files need streaming
-    if (fileSize <= 49152) {  // 48KB limit for in-memory assembly
-        size_t totalBufSize = partBefore.length() + fileSize + partAfter.length();
-        uint8_t* combinedBuf = (uint8_t*)malloc(totalBufSize);
-        if (!combinedBuf) {
-            LOG_ERROR("[SleepHQ] Failed to allocate combined buffer");
-            file.close();
+    // Parse host and port from base URL — stack buffer to avoid heap churn
+    char host[128];
+    int port = 443;
+    {
+        const char* rawUrl = config->getCloudBaseUrl().c_str();
+        const char* hostStart = rawUrl;
+        if (strncmp(hostStart, "https://", 8) == 0) hostStart += 8;
+        else if (strncmp(hostStart, "http://", 7) == 0) hostStart += 7;
+        const char* hostEnd = strchr(hostStart, '/');
+        size_t hostLen = hostEnd ? (size_t)(hostEnd - hostStart) : strlen(hostStart);
+        if (hostLen >= sizeof(host)) hostLen = sizeof(host) - 1;
+        memcpy(host, hostStart, hostLen);
+        host[hostLen] = '\0';
+        char* colonPos = strchr(host, ':');
+        if (colonPos) {
+            port = atoi(colonPos + 1);
+            *colonPos = '\0';
+        }
+    }
+    
+    // Retry loop for streaming upload (same pattern as in-memory path)
+    for (int attempt = 0; attempt < 2; attempt++) {
+        // Ensure we have a valid TLS client before attempting
+        if (!tlsClient) {
+            LOG_ERROR("[SleepHQ] TLS client lost during retry");
+            return false;
+        }
+
+        // Reuse existing TLS connection if still alive (keep-alive from previous request)
+        if (!tlsClient->connected()) {
+            LOGF("[SleepHQ] Streaming: establishing TLS connection (attempt %d, free: %u, max_alloc: %u)",
+                 attempt + 1, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+            if (!tlsClient->connect(host, port)) {
+                LOG_ERROR("[SleepHQ] Failed to connect for streaming upload");
+                
+                if (attempt == 0) {
+                    resetTLS(); // Full reset instead of just stop()
+                    
+                    // Check WiFi status and wait if disconnected
+                    if (WiFi.status() != WL_CONNECTED) {
+                        LOG_WARN("[SleepHQ] WiFi disconnected during connect, waiting for reconnection...");
+                        unsigned long startWait = millis();
+                        while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                            delay(100);
+                        }
+                        if (WiFi.status() == WL_CONNECTED) {
+                            LOG_INFO("[SleepHQ] WiFi reconnected");
+                        } else {
+                            LOG_ERROR("[SleepHQ] WiFi still disconnected");
+                        }
+                    } else {
+                        // WiFi connected but TLS connect failed — socket FD may be poisoned (errno 113).
+                        // Cycle WiFi to release all lwIP sockets and clear TIME_WAIT state.
+                        LOG_WARN("[SleepHQ] Socket likely poisoned, cycling WiFi to clear...");
+                        WiFi.disconnect(false);  // Disconnect without erasing credentials
+                        delay(1000);
+                        WiFi.reconnect();
+                        unsigned long wifiWait = millis();
+                        while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
+                            delay(100);
+                        }
+                        if (WiFi.status() == WL_CONNECTED) {
+                            LOG_INFO("[SleepHQ] WiFi reconnected after socket reset");
+                        } else {
+                            LOG_ERROR("[SleepHQ] WiFi failed to reconnect after socket reset");
+                        }
+                        resetTLS();  // Get a fresh TLS client after WiFi cycle
+                    }
+                    
+                    continue; 
+                }
+                return false;
+            }
+        } else {
+            LOG_DEBUG("[SleepHQ] Streaming: reusing existing TLS connection (keep-alive)");
+        }
+        
+        // Send HTTP POST request headers — use stack buffer to avoid String heap churn
+        {
+            char hdrBuf[256];
+            int n;
+            n = snprintf(hdrBuf, sizeof(hdrBuf), "POST %s HTTP/1.1\r\n", path.c_str());
+            tlsClient->write((const uint8_t*)hdrBuf, n);
+            n = snprintf(hdrBuf, sizeof(hdrBuf), "Host: %s\r\n", host);
+            tlsClient->write((const uint8_t*)hdrBuf, n);
+            n = snprintf(hdrBuf, sizeof(hdrBuf), "Authorization: Bearer %s\r\n", accessToken.c_str());
+            tlsClient->write((const uint8_t*)hdrBuf, n);
+            n = snprintf(hdrBuf, sizeof(hdrBuf), "Accept: application/vnd.api+json\r\n");
+            tlsClient->write((const uint8_t*)hdrBuf, n);
+            n = snprintf(hdrBuf, sizeof(hdrBuf), "Content-Type: multipart/form-data; boundary=%s\r\n", boundary);
+            tlsClient->write((const uint8_t*)hdrBuf, n);
+            n = snprintf(hdrBuf, sizeof(hdrBuf), "Content-Length: %lu\r\n", totalLength);
+            tlsClient->write((const uint8_t*)hdrBuf, n);
+            if (useKeepAlive) {
+                tlsClient->write((const uint8_t*)"Connection: keep-alive\r\n\r\n", 26);
+            } else {
+                tlsClient->write((const uint8_t*)"Connection: close\r\n\r\n", 21);
+            }
+        }
+        
+        // Send multipart preamble — stack buffer to avoid heap churn
+        {
+            char partBuf[384];
+            int n;
+            n = snprintf(partBuf, sizeof(partBuf), "--%s\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n%s\r\n",
+                         boundary, fnStr);
+            tlsClient->write((const uint8_t*)partBuf, n);
+            n = snprintf(partBuf, sizeof(partBuf), "--%s\r\nContent-Disposition: form-data; name=\"path\"\r\n\r\n%s\r\n",
+                         boundary, dirPath);
+            tlsClient->write((const uint8_t*)partBuf, n);
+            n = snprintf(partBuf, sizeof(partBuf), "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+                         "Content-Type: application/octet-stream\r\n\r\n",
+                         boundary, fnStr);
+            tlsClient->write((const uint8_t*)partBuf, n);
+        }
+        
+        // Re-open and stream file
+        file = sd.open(filePath, FILE_READ);
+        if (!file) {
+            LOG_ERROR("[SleepHQ] Cannot re-open file for streaming");
             return false;
         }
         
-        // Build payload in single buffer: headers + file content + trailer
-        memcpy(combinedBuf, partBefore.c_str(), partBefore.length());
-        size_t bytesRead = file.read(combinedBuf + partBefore.length(), fileSize);
+        struct MD5Context md5ctx;
+        MD5Init(&md5ctx);
+        
+        uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE];
+        unsigned long totalSent = 0;
+        bool writeError = false;
+        int readRetries = 0;
+        
+        while (totalSent < fileSize) {
+            size_t toRead = sizeof(buffer);
+            if (fileSize - totalSent < toRead) {
+                toRead = fileSize - totalSent;
+            }
+            
+            size_t bytesRead = file.read(buffer, toRead);
+            if (bytesRead == 0) {
+                // Unexpected EOF or read error - try to recover
+                if (readRetries < 3) {
+                    LOG_WARNF("[SleepHQ] Read returned 0 at %lu/%lu, retrying (%d/3)...", totalSent, fileSize, readRetries + 1);
+                    delay(100);
+                    readRetries++;
+                    continue;
+                }
+                LOG_ERRORF("[SleepHQ] File read failed at %lu/%lu bytes", totalSent, fileSize);
+                break;
+            }
+            readRetries = 0; // Reset retry counter on success
+            
+            // Update checksum with file data
+            MD5Update(&md5ctx, buffer, bytesRead);
+            
+            // Write to TLS with retry and partial write handling
+            size_t remainingToWrite = bytesRead;
+            uint8_t* writePtr = buffer;
+            int writeRetries = 0;
+            
+            while (remainingToWrite > 0) {
+                size_t written = tlsClient->write(writePtr, remainingToWrite);
+                
+                if (written > 0) {
+                    remainingToWrite -= written;
+                    writePtr += written;
+                    totalSent += written;
+                    writeRetries = 0; // Reset retry counter on success
+                } else {
+                    // Write failed or returned 0 (buffer full / EAGAIN)
+                    if (!tlsClient->connected()) {
+                        LOG_ERROR("[SleepHQ] Connection lost during write");
+                        writeError = true;
+                        break;
+                    }
+                    
+                    if (writeRetries < 10) {
+                        LOG_WARNF("[SleepHQ] Write returned 0/fail at %lu/%lu, retrying (%d/10)...", totalSent, fileSize, writeRetries + 1);
+                        delay(500); // Wait longer for socket buffer to drain
+                        writeRetries++;
+                        yield();
+                        continue;
+                    } else {
+                        LOG_ERRORF("[SleepHQ] Write timeout/fail after 10 retries at %lu/%lu", totalSent, fileSize);
+                        writeError = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (writeError) {
+                break;
+            }
+        }
         file.close();
-        if (bytesRead != fileSize) {
-            LOG_ERRORF("[SleepHQ] Short read: expected %lu bytes, got %u", fileSize, bytesRead);
-            free(combinedBuf);
+
+        if (totalSent != fileSize) {
+            if (writeError) {
+                LOG_WARNF("[SleepHQ] Upload interrupted by write error (%lu/%lu bytes), reconnecting...", totalSent, fileSize);
+            } else {
+                LOG_WARNF("[SleepHQ] Short read from file (%lu/%lu bytes), reconnecting...", totalSent, fileSize);
+            }
+            resetTLS(); // Full reset to clear FDs
+            
+            // Check WiFi status and cycle if needed to clear poisoned sockets
+            if (WiFi.status() != WL_CONNECTED) {
+                LOG_WARN("[SleepHQ] WiFi disconnected during stream, waiting for reconnection...");
+                unsigned long startWait = millis();
+                while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    delay(100);
+                }
+            } else {
+                // WiFi up but socket likely poisoned — cycle to clear
+                LOG_WARN("[SleepHQ] Cycling WiFi to clear poisoned sockets after write error...");
+                WiFi.disconnect(false);
+                delay(1000);
+                WiFi.reconnect();
+                unsigned long wifiWait = millis();
+                while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
+                    delay(100);
+                }
+                resetTLS();
+            }
+            
+            if (attempt == 0) {
+                continue;
+            }
             return false;
         }
-        memcpy(combinedBuf + partBefore.length() + fileSize, partAfter.c_str(), partAfter.length());
         
-        HTTPClient http;
-        http.begin(*tlsClient, url);
-        http.setTimeout(30000);
-        http.addHeader("Accept", "application/vnd.api+json");
-        http.addHeader("Authorization", "Bearer " + accessToken);
-        http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-        
-        httpCode = http.sendRequest("POST", combinedBuf, totalBufSize);
-        free(combinedBuf);
-        
-        if (httpCode > 0) {
-            responseBody = http.getString();
-            bytesTransferred = fileSize;
+        if (writeError) {
+            resetTLS(); // Full reset to clear FDs
+            
+            // Check WiFi status and cycle if needed to clear poisoned sockets
+            if (WiFi.status() != WL_CONNECTED) {
+                LOG_WARN("[SleepHQ] WiFi disconnected during stream write, waiting for reconnection...");
+                unsigned long startWait = millis();
+                while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    delay(100);
+                }
+            } else {
+                LOG_WARN("[SleepHQ] Cycling WiFi to clear poisoned sockets after write fail...");
+                WiFi.disconnect(false);
+                delay(1000);
+                WiFi.reconnect();
+                unsigned long wifiWait = millis();
+                while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
+                    delay(100);
+                }
+                resetTLS();
+            }
+            
+            if (attempt == 0) {
+                LOG_WARN("[SleepHQ] Streaming write failed, reconnecting...");
+                continue;
+            }
+            return false;
         }
-        http.end();
+        
+        // Finalize checksum — use stack buffer, no String allocation
+        uint8_t digest[16];
+        MD5Final(digest, &md5ctx);
+        char hashStr[33];
+        for (int i = 0; i < 16; i++) {
+            sprintf(hashStr + (i * 2), "%02x", digest[i]);
+        }
+        hashStr[32] = '\0';
+        
+        if (calculatedChecksum) {
+            *calculatedChecksum = String(hashStr);
+        }
+        
+        // Send footer with hash — stack buffer to avoid heap churn
+        {
+            char partBuf[384];
+            int n;
+            n = snprintf(partBuf, sizeof(partBuf), "\r\n--%s\r\nContent-Disposition: form-data; name=\"content_hash\"\r\n\r\n",
+                         boundary);
+            tlsClient->write((const uint8_t*)partBuf, n);
+            tlsClient->write((const uint8_t*)hashStr, 32);
+            n = snprintf(partBuf, sizeof(partBuf), "\r\n--%s--\r\n", boundary);
+            tlsClient->write((const uint8_t*)partBuf, n);
+        }
+        tlsClient->flush();
+        
+        // Read response status line
+        unsigned long timeout = millis() + 30000;
+        while (!tlsClient->available() && millis() < timeout) {
+            delay(10);
+        }
+
+        if (!tlsClient->available()) {
+            LOG_WARN("[SleepHQ] Streaming response timeout, reconnecting...");
+            resetTLS(); // Full reset to clear FDs
+            
+            // Check WiFi status
+            if (WiFi.status() != WL_CONNECTED) {
+                LOG_WARN("[SleepHQ] WiFi disconnected awaiting response, waiting for reconnection...");
+                unsigned long startWait = millis();
+                while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    delay(100);
+                }
+            }
+            
+            if (attempt == 0) {
+                continue;
+            }
+            return false;
+        }
+        
+        String statusLine = tlsClient->readStringUntil('\n');
+        int spaceIdx = statusLine.indexOf(' ');
+        if (spaceIdx > 0) {
+            httpCode = statusLine.substring(spaceIdx + 1, spaceIdx + 4).toInt();
+        } else {
+            httpCode = -1;
+        }
+        
+        // Parse response headers — extract Content-Length and Connection
+        long contentLength = -1;
+        bool isChunked = false;
+        bool connectionClose = false;
+        bool headersDone = false;
+        unsigned long headerDeadline = millis() + 5000;
+        while (millis() < headerDeadline) {
+            if (!tlsClient->available()) {
+                delay(2);
+                continue;
+            }
+            String headerLine = tlsClient->readStringUntil('\n');
+            if (headerLine == "\r" || headerLine.length() <= 1) {
+                headersDone = true;
+                break;
+            }
+            if (headerLine.startsWith("Content-Length:") || headerLine.startsWith("content-length:")) {
+                contentLength = headerLine.substring(headerLine.indexOf(':') + 1).toInt();
+            }
+            if (headerLine.startsWith("Transfer-Encoding:") || headerLine.startsWith("transfer-encoding:")) {
+                if (headerLine.indexOf("chunked") >= 0) {
+                    isChunked = true;
+                }
+            }
+            if (headerLine.startsWith("Connection:") || headerLine.startsWith("connection:")) {
+                String v = headerLine;
+                v.toLowerCase();
+                if (v.indexOf("close") >= 0) {
+                    connectionClose = true;
+                }
+            }
+        }
+
+        if (!headersDone) {
+            LOG_WARN("[SleepHQ] Incomplete response headers, reconnecting...");
+            resetTLS(); // Full reset to clear FDs
+            
+            // Check WiFi status
+            if (WiFi.status() != WL_CONNECTED) {
+                LOG_WARN("[SleepHQ] WiFi disconnected during headers, waiting for reconnection...");
+                unsigned long startWait = millis();
+                while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    delay(100);
+                }
+            }
+            
+            if (attempt == 0) {
+                continue;
+            }
+            return false;
+        }
+        
+        // Drain response body using Content-Length or Chunked encoding
+        responseBody = "";
+        if (isChunked) {
+            // Drain chunked response
+            unsigned long chunkDeadline = millis() + 5000;
+            while (millis() < chunkDeadline) {
+                if (!tlsClient->available()) {
+                    delay(2);
+                    continue;
+                }
+                // Read chunk size (hex)
+                String sizeLine = tlsClient->readStringUntil('\n');
+                sizeLine.trim(); // Remove \r
+                long chunkSize = strtol(sizeLine.c_str(), NULL, 16);
+                
+                if (chunkSize <= 0) {
+                    // End of stream (0-size chunk). Drain trailers.
+                    while (tlsClient->available()) {
+                        String trailer = tlsClient->readStringUntil('\n');
+                        if (trailer == "\r" || trailer.length() <= 1) break;
+                    }
+                    break;
+                }
+                
+                // Read chunk data
+                long remaining = chunkSize;
+                while (remaining > 0 && millis() < chunkDeadline) {
+                    if (!tlsClient->available()) { delay(2); continue; }
+                    uint8_t drainBuf[256];
+                    size_t toRead = (remaining < (long)sizeof(drainBuf)) ? remaining : sizeof(drainBuf);
+                    size_t r = tlsClient->read(drainBuf, toRead);
+                    if (r == 0) break;
+                    // Capture first 1KB of response for debugging/logging
+                    if (responseBody.length() < 1024) {
+                        for (size_t i = 0; i < r && responseBody.length() < 1024; i++) {
+                            responseBody += (char)drainBuf[i];
+                        }
+                    }
+                    remaining -= r;
+                    chunkDeadline = millis() + 5000;
+                }
+                
+                // Read trailing CRLF after chunk data
+                tlsClient->readStringUntil('\n');
+            }
+        } else if (contentLength > 0) {
+            long remaining = contentLength;
+            unsigned long bodyDeadline = millis() + 5000;
+            while (remaining > 0 && millis() < bodyDeadline) {
+                if (!tlsClient->available()) {
+                    delay(2);
+                    continue;
+                }
+                uint8_t drainBuf[256];
+                size_t toRead = (remaining < (long)sizeof(drainBuf)) ? remaining : sizeof(drainBuf);
+                size_t r = tlsClient->read(drainBuf, toRead);
+                if (r == 0) break;
+                if (responseBody.length() < 1024) {
+                    for (size_t i = 0; i < r && responseBody.length() < 1024; i++) {
+                        responseBody += (char)drainBuf[i];
+                    }
+                }
+                remaining -= r;
+                bodyDeadline = millis() + 5000;
+            }
+            if (remaining > 0) {
+                LOG_WARNF("[SleepHQ] Response body not fully drained (%ld bytes left), resetting TLS", remaining);
+                tlsClient->stop();
+            }
+        } else {
+            // Unknown body length: drain briefly then reset to avoid stale bytes
+            unsigned long drainDeadline = millis() + 300;
+            while (millis() < drainDeadline) {
+                while (tlsClient->available()) {
+                    int c = tlsClient->read();
+                    if (c >= 0 && responseBody.length() < 1024) {
+                        responseBody += (char)c;
+                    }
+                    drainDeadline = millis() + 300;
+                }
+                delay(2);
+            }
+            tlsClient->stop();
+        }
+        
+        // Keep TLS alive unless server requested close
+        if (connectionClose) {
+            tlsClient->stop();
+        }
+
+        bytesTransferred = totalSent;
         return httpCode > 0;
     }
-    
-    // For larger files, stream via WiFiClientSecure directly
-    file.close();
-    
-    // Parse host and port from base URL
-    String host = config->getCloudBaseUrl();
-    host.replace("https://", "");
-    host.replace("http://", "");
-    // Strip trailing path first so ':' in paths can't confuse the parser
-    int pathSep = host.indexOf('/');
-    if (pathSep > 0) host = host.substring(0, pathSep);
-    int port = 443;
-    int portSep = host.indexOf(':');
-    if (portSep > 0) {
-        port = host.substring(portSep + 1).toInt();
-        host = host.substring(0, portSep);
-    }
-    
-    if (!tlsClient->connect(host.c_str(), port)) {
-        LOG_ERROR("[SleepHQ] Failed to connect for streaming upload");
-        return false;
-    }
-    
-    // Send HTTP POST request headers
-    tlsClient->print("POST " + path + " HTTP/1.1\r\n");
-    tlsClient->print("Host: " + host + "\r\n");
-    tlsClient->print("Authorization: Bearer " + accessToken + "\r\n");
-    tlsClient->print("Accept: application/vnd.api+json\r\n");
-    tlsClient->print("Content-Type: multipart/form-data; boundary=" + boundary + "\r\n");
-    tlsClient->print("Content-Length: " + String(totalLength) + "\r\n");
-    tlsClient->print("Connection: close\r\n\r\n");
-    
-    // Send multipart preamble
-    tlsClient->print(partBefore);
-    
-    // Re-open and stream file
-    file = sd.open(filePath, FILE_READ);
-    if (!file) {
-        LOG_ERROR("[SleepHQ] Cannot re-open file for streaming");
-        tlsClient->stop();
-        return false;
-    }
-    
-    uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE];
-    unsigned long totalSent = 0;
-    // Read exactly fileSize bytes (locked to match the content hash)
-    // Do NOT use file.available() which can grow if CPAP appends data
-    while (totalSent < fileSize) {
-        size_t toRead = sizeof(buffer);
-        if (fileSize - totalSent < toRead) {
-            toRead = fileSize - totalSent;
-        }
-        size_t bytesRead = file.read(buffer, toRead);
-        if (bytesRead == 0) break;  // EOF or read error
-        size_t written = tlsClient->write(buffer, bytesRead);
-        if (written != bytesRead) {
-            LOG_ERROR("[SleepHQ] Write error during streaming upload");
-            file.close();
-            tlsClient->stop();
-            return false;
-        }
-        totalSent += written;
-    }
-    file.close();
-    
-    // Send closing boundary
-    tlsClient->print(partAfter);
-    tlsClient->flush();
-    
-    // Read response status line
-    unsigned long timeout = millis() + 30000;
-    while (!tlsClient->available() && millis() < timeout) {
-        delay(10);
-    }
-    
-    String statusLine = tlsClient->readStringUntil('\n');
-    // Parse HTTP status code
-    int spaceIdx = statusLine.indexOf(' ');
-    if (spaceIdx > 0) {
-        httpCode = statusLine.substring(spaceIdx + 1, spaceIdx + 4).toInt();
-    } else {
-        httpCode = -1;
-    }
-    
-    // Skip headers
-    while (tlsClient->available()) {
-        String headerLine = tlsClient->readStringUntil('\n');
-        if (headerLine == "\r" || headerLine.length() <= 1) break;
-    }
-    
-    // Read response body (bulk read to avoid O(n²) char-by-char concatenation)
-    responseBody = tlsClient->readString();
-    
-    tlsClient->stop();
-    bytesTransferred = totalSent;
-    return httpCode > 0;
+    return false;
 }
 
 #endif // ENABLE_SLEEPHQ_UPLOAD

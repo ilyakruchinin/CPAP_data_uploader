@@ -54,6 +54,19 @@ bool stopMonitoringRequested = false;
 unsigned long lastIdleCheck = 0;
 const unsigned long IDLE_CHECK_INTERVAL_MS = 60000;  // 60 seconds
 
+// FreeRTOS upload task (runs upload on separate core for web server responsiveness)
+volatile bool uploadTaskRunning = false;
+volatile bool uploadTaskComplete = false;
+volatile UploadResult uploadTaskResult = UploadResult::ERROR;
+TaskHandle_t uploadTaskHandle = nullptr;
+
+struct UploadTaskParams {
+    FileUploader* uploader;
+    SDCardManager* sdManager;
+    int maxMinutes;
+    DataFilter filter;
+};
+
 // ============================================================================
 // Global State (legacy + shared)
 // ============================================================================
@@ -388,46 +401,115 @@ void handleAcquiring() {
     }
 }
 
+// FreeRTOS task function — runs on Core 0 so main loop (Core 1) stays responsive
+void uploadTaskFunction(void* pvParameters) {
+    UploadTaskParams* params = (UploadTaskParams*)pvParameters;
+    
+    UploadResult result = params->uploader->uploadWithExclusiveAccess(
+        params->sdManager, params->maxMinutes, params->filter);
+    
+    uploadTaskResult = result;
+    uploadTaskComplete = true;
+    
+    delete params;
+    vTaskDelete(NULL);  // Self-delete
+}
+
 void handleUploading() {
     if (!uploader) {
         transitionTo(UploadState::RELEASING);
         return;
     }
     
-    // Determine data filter based on what's eligible right now
-    ScheduleManager* sm = uploader->getScheduleManager();
-    DataFilter filter;
-    bool canFresh = sm->canUploadFreshData();
-    bool canOld = sm->canUploadOldData();
-    
-    if (canFresh && canOld) {
-        filter = DataFilter::ALL_DATA;
-    } else if (canFresh) {
-        filter = DataFilter::FRESH_ONLY;
-    } else if (canOld) {
-        filter = DataFilter::OLD_ONLY;
-    } else {
-        LOG_WARN("[FSM] No data category eligible, releasing");
-        transitionTo(UploadState::RELEASING);
-        return;
-    }
-    
-    int maxMinutes = config.getExclusiveAccessMinutes();
-    UploadResult result = uploader->uploadWithExclusiveAccess(&sdManager, maxMinutes, filter);
-    
-    switch (result) {
-        case UploadResult::COMPLETE:
-            transitionTo(UploadState::COMPLETE);
-            break;
-        case UploadResult::TIMEOUT:
-            uploadCycleHadTimeout = true;
+    if (!uploadTaskRunning) {
+        // ── First call: determine filter and spawn upload task ──
+        ScheduleManager* sm = uploader->getScheduleManager();
+        DataFilter filter;
+        bool canFresh = sm->canUploadFreshData();
+        bool canOld = sm->canUploadOldData();
+        
+        if (canFresh && canOld) {
+            filter = DataFilter::ALL_DATA;
+        } else if (canFresh) {
+            filter = DataFilter::FRESH_ONLY;
+        } else if (canOld) {
+            filter = DataFilter::OLD_ONLY;
+        } else {
+            LOG_WARN("[FSM] No data category eligible, releasing");
             transitionTo(UploadState::RELEASING);
-            break;
-        case UploadResult::ERROR:
-            LOG_ERROR("[FSM] Upload error occurred");
-            transitionTo(UploadState::RELEASING);
-            break;
+            return;
+        }
+        
+        // Disable web server handling inside upload task — main loop handles it
+        // This prevents concurrent handleClient() calls from two cores
+#ifdef ENABLE_TEST_WEBSERVER
+        uploader->setWebServer(nullptr);
+#endif
+        
+        UploadTaskParams* params = new UploadTaskParams{
+            uploader, &sdManager, config.getExclusiveAccessMinutes(), filter
+        };
+        
+        uploadTaskComplete = false;
+        uploadTaskRunning = true;
+        
+        // Pin to Core 0 (protocol core) — keeps Core 1 free for main loop + web server
+        // Stack: 16KB — TLS buffers are on heap, task only needs stack for locals
+        BaseType_t rc = xTaskCreatePinnedToCore(
+            uploadTaskFunction,  // Task function
+            "upload",            // Name
+            16384,               // Stack size (16KB for task locals + SD I/O)
+            params,              // Parameters
+            1,                   // Priority (same as loop task)
+            &uploadTaskHandle,   // Handle
+            0                    // Pin to Core 0
+        );
+        
+        if (rc != pdPASS) {
+            LOG_ERROR("[FSM] Failed to create upload task — falling back to blocking upload");
+            uploadTaskRunning = false;
+            delete params;
+#ifdef ENABLE_TEST_WEBSERVER
+            uploader->setWebServer(testWebServer);
+#endif
+            // Fallback: run synchronously (old behavior)
+            int maxMinutes = config.getExclusiveAccessMinutes();
+            UploadResult result = uploader->uploadWithExclusiveAccess(&sdManager, maxMinutes, filter);
+            switch (result) {
+                case UploadResult::COMPLETE: transitionTo(UploadState::COMPLETE); break;
+                case UploadResult::TIMEOUT:  uploadCycleHadTimeout = true; transitionTo(UploadState::RELEASING); break;
+                case UploadResult::ERROR:    LOG_ERROR("[FSM] Upload error"); transitionTo(UploadState::RELEASING); break;
+            }
+        } else {
+            LOG("[FSM] Upload task started on Core 0 (non-blocking)");
+        }
+    } else if (uploadTaskComplete) {
+        // ── Task finished: read result and transition ──
+        uploadTaskRunning = false;
+        uploadTaskHandle = nullptr;
+        
+        // Restore web server handling in uploader
+#ifdef ENABLE_TEST_WEBSERVER
+        uploader->setWebServer(testWebServer);
+#endif
+        
+        UploadResult result = (UploadResult)uploadTaskResult;
+        
+        switch (result) {
+            case UploadResult::COMPLETE:
+                transitionTo(UploadState::COMPLETE);
+                break;
+            case UploadResult::TIMEOUT:
+                uploadCycleHadTimeout = true;
+                transitionTo(UploadState::RELEASING);
+                break;
+            case UploadResult::ERROR:
+                LOG_ERROR("[FSM] Upload error occurred");
+                transitionTo(UploadState::RELEASING);
+                break;
+        }
     }
+    // else: task still running — return immediately (non-blocking)
 }
 
 void handleReleasing() {
@@ -518,7 +600,8 @@ void loop() {
     // ── Always-on tasks ──
     
     // Periodic SD card log dump (every 10 seconds when enabled)
-    if (config.getLogToSdCard()) {
+    // Skip when upload task is running — SD card is in use on another core
+    if (config.getLogToSdCard() && !uploadTaskRunning) {
         unsigned long currentTime = millis();
         if (currentTime - lastLogDumpTime >= LOG_DUMP_INTERVAL_MS) {
             if (Logger::getInstance().dumpLogsToSDCardPeriodic(&sdManager)) {
@@ -546,8 +629,8 @@ void loop() {
     
     // ── Web trigger handlers (operate independently of FSM) ──
     
-    // Check for state reset trigger
-    if (g_resetStateFlag) {
+    // Check for state reset trigger (blocked while upload task is running)
+    if (g_resetStateFlag && !uploadTaskRunning) {
         LOG("=== State Reset Triggered via Web Interface ===");
         g_resetStateFlag = false;
         
@@ -591,7 +674,8 @@ void loop() {
     }
     
     // Check for upload trigger (force immediate upload — skip inactivity check)
-    if (g_triggerUploadFlag) {
+    // Blocked while upload task is running — already uploading
+    if (g_triggerUploadFlag && !uploadTaskRunning) {
         LOG("=== Upload Triggered via Web Interface ===");
         g_triggerUploadFlag = false;
         uploadCycleHadTimeout = false;

@@ -181,3 +181,31 @@ active therapy, while still detecting non-therapy idle states promptly.
 > **Note**: These observations are preliminary and based on limited data from a single
 > AirSense 11 AutoSet. Different CPAP models may have different write patterns. The
 > threshold should be tuned using the SD Activity Monitor for each deployment.
+
+---
+
+## 7. Cloud API & Protocol Findings (SleepHQ)
+
+### 7.1 Multipart Upload Efficiency
+Extensive testing with the SleepHQ API (v1) revealed critical optimization opportunities:
+
+1.  **Hash-in-Footer Support**: The API accepts the `content_hash` field in the multipart **footer** (after the file content).
+    *   *Impact*: Allows calculating MD5 checksums *while* streaming the file upload.
+    *   *Result*: Eliminates the pre-upload read pass. Uploads are now **Single-Pass** (Read → MD5+Stream → Footer).
+
+2.  **Chunked Transfer Encoding**: The API (served via Cloudflare) often uses `Transfer-Encoding: chunked` for responses.
+    *   *Issue*: Standard `WiFiClient` doesn't handle chunked decoding automatically.
+    *   *Fix*: Implemented a custom chunked decoder to properly drain responses. This is **required** to keep the TLS connection clean for reuse (keep-alive).
+
+3.  **Batching Not Supported**:
+    *   Attempting to upload multiple files in a single multipart request returns `406 Not Acceptable` or validation errors.
+    *   *Conclusion*: Files must be uploaded one request per file.
+
+### 7.2 HTTP Status Codes
+*   **201 Created**: File uploaded successfully (new data).
+*   **200 OK**: File skipped/deduplicated by server (hash matches existing file).
+    *   *Optimization*: The firmware treats both as success. The local `UploadStateManager` tracks files by hash to prevent redundant uploads even before hitting the network.
+
+### 7.3 Memory Management
+*   **Streaming is Mandatory**: Attempting to buffer multipart payloads in RAM (for small files) causes heap fragmentation over time, leading to SSL allocation failures (`-32512`) during long sessions.
+*   **Solution**: All uploads, regardless of size, must use the streaming path. This keeps heap usage flat and predictable (~110KB free).

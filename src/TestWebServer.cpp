@@ -102,6 +102,12 @@ void TestWebServer::handleClient() {
 
 // GET / - HTML status page (modern dark dashboard)
 void TestWebServer::handleRoot() {
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+
+    auto sendChunk = [this](const String& s) {
+        server->sendContent(s);
+    };
+
     String html = "<!DOCTYPE html><html><head>";
     html += "<title>CPAP Data Uploader</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
@@ -145,14 +151,18 @@ void TestWebServer::handleRoot() {
     html += ".alert h3{color:#ffaa44;font-size:0.9em;margin-bottom:6px}";
     html += ".alert p{font-size:0.85em;color:#c7d5e0;margin:3px 0}";
     html += "</style></head><body><div class='wrap'>";
+    
+    // Send initial chunk with headers
+    server->send(200, "text/html", html);
 
     // ── Header ──
-    html += "<h1>CPAP Data Uploader</h1>";
+    html = "<h1>CPAP Data Uploader</h1>";
     html += "<p class='subtitle'>Firmware " + String(FIRMWARE_VERSION) + " &middot; " + getUptimeString() + " uptime</p>";
+    sendChunk(html);
 
     // ── FSM State + System card (side by side) ──
-    html += "<div class='cards'>";
-
+    html = "<div class='cards'>";
+    
     // FSM State card
     html += "<div class='card'>";
     html += "<h2>Upload Engine</h2>";
@@ -181,9 +191,10 @@ void TestWebServer::handleRoot() {
         html += "<div class='row'><span class='k'>Cooldown</span><span class='v'>" + String(config->getCooldownMinutes()) + " min</span></div>";
     }
     html += "</div>";
+    sendChunk(html);
 
     // System card
-    html += "<div class='card'>";
+    html = "<div class='card'>";
     html += "<h2>System</h2>";
     html += "<div class='row'><span class='k'>Time</span><span class='v'>" + getCurrentTimeString() + "</span></div>";
     html += "<div class='row'><span class='k'>Free heap</span><span class='v'>" + String(ESP.getFreeHeap() / 1024) + " KB</span></div>";
@@ -207,9 +218,10 @@ void TestWebServer::handleRoot() {
     }
     html += "</div>";
     html += "</div>"; // end .cards row 1
+    sendChunk(html);
 
     // ── Upload Progress card (full width) ──
-    html += "<div class='cards'>";
+    html = "<div class='cards'>";
     html += "<div class='card' style='grid-column:1/-1'>";
     html += "<h2>Upload Progress</h2>";
     
@@ -232,12 +244,12 @@ void TestWebServer::handleRoot() {
                 html += "<div class='row' style='margin-top:6px'><span class='k'>Incomplete</span><span class='v' style='color:#ffaa44'>" + String(incomplete) + " folders remaining</span></div>";
             }
         }
-        
     }
     html += "</div></div>"; // end progress card + cards
+    sendChunk(html);
 
     // ── Actions ──
-    html += "<div class='card' style='margin-bottom:20px'>";
+    html = "<div class='card' style='margin-bottom:20px'>";
     html += "<h2>Actions</h2>";
     html += "<div class='actions'>";
     html += "<a href='/trigger-upload' class='btn btn-primary'>&#9650; Trigger Upload</a>";
@@ -255,8 +267,10 @@ void TestWebServer::handleRoot() {
     html += "</div></div>";
 
     html += "</div></body></html>";
+    sendChunk(html);
     
-    server->send(200, "text/html", html);
+    // Terminate chunked transmission
+    server->sendContent("");
 }
 
 // GET /trigger-upload - Force immediate upload
@@ -278,10 +292,21 @@ void TestWebServer::handleStatus() {
     // Add CORS headers
     addCorsHeaders(server);
     
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    
+    auto sendChunk = [this](const String& s) {
+        server->sendContent(s);
+    };
+    
     String json = "{";
     json += "\"uptime_seconds\":" + String(millis() / 1000) + ",";
     json += "\"current_time\":\"" + getCurrentTimeString() + "\",";
     json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
+    
+    // Send initial chunk with headers
+    server->send(200, "application/json", json);
+    
+    json = "";
     // WiFi information
     if (wifiManager && wifiManager->isConnected()) {
         json += "\"wifi_connected\":true,";
@@ -295,7 +320,9 @@ void TestWebServer::handleStatus() {
         json += "\"next_upload_seconds\":" + String(scheduleManager->getSecondsUntilNextUpload()) + ",";
         json += "\"time_synced\":" + String(scheduleManager->isTimeSynced() ? "true" : "false") + ",";
     }
+    sendChunk(json);
     
+    json = "";
     // Upload progress
     if (stateManager) {
         int completedFolders = stateManager->getCompletedFoldersCount();
@@ -312,7 +339,9 @@ void TestWebServer::handleStatus() {
         json += "\"total_folders\":0,";
         json += "\"upload_state_initialized\":false";
     }
+    sendChunk(json);
     
+    json = "";
     if (config) {
         json += ",\"endpoint_type\":\"" + config->getEndpointType() + "\"";
         json += ",\"boot_delay_seconds\":" + String(config->getBootDelaySeconds());
@@ -334,20 +363,26 @@ void TestWebServer::handleStatus() {
             json += ",\"cloud_configured\":false";
         }
     }
+    sendChunk(json);
     
+    json = "";
     // Add CPAP monitor data (without usage percentage)
     if (cpapMonitor) {
         json += ",\"cpap_monitor\":{";
         json += "\"interval_minutes\":10";
         json += ",\"data_points\":144";
+        // Usage data might be large, so we handle it carefully if it was a large string
+        // But getUsageDataJSON likely returns a string. 
+        // Ideally we would stream that too, but for now just append.
         json += ",\"usage_data\":" + cpapMonitor->getUsageDataJSON();
         json += "}";
     }
 
-    
     json += "}";
+    sendChunk(json);
     
-    server->send(200, "application/json", json);
+    // Terminate chunked transmission
+    server->sendContent("");
 }
 
 // GET /reset-state - Clear upload state
@@ -502,22 +537,50 @@ int TestWebServer::getPendingFoldersCount() {
     return stateManager->getIncompleteFoldersCount();
 }
 
+// Helper class to adapt WebServer for chunked streaming via Print interface
+class ChunkedPrint : public Print {
+    WebServer* _server;
+public:
+    ChunkedPrint(WebServer* server) : _server(server) {}
+    
+    size_t write(uint8_t c) override {
+        return write(&c, 1);
+    }
+    
+    size_t write(const uint8_t *buffer, size_t size) override {
+        if (size == 0) return 0;
+        
+        // Manually write chunk header (size in hex + CRLF)
+        WiFiClient client = _server->client();
+        client.print(String(size, HEX));
+        client.write("\r\n", 2);
+        
+        // Write chunk data
+        size_t written = client.write(buffer, size);
+        
+        // Write chunk footer (CRLF)
+        client.write("\r\n", 2);
+        
+        return written;
+    }
+};
+
 // GET /logs - Retrieve system logs from circular buffer
 void TestWebServer::handleLogs() {
     // Add CORS headers for cross-origin access
     addCorsHeaders(server);
     
-    // Retrieve logs from Logger
-    // All logs in the circular buffer are always returned
-    Logger::LogData logData = Logger::getInstance().retrieveLogs();
+    // Set headers for streaming
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    // Send initial chunk with headers to avoid "content length is zero" warning
+    server->send(200, "text/plain", "--- System Logs ---\n");
     
-    // Return plain text with metadata in headers
-    // This avoids memory issues with large JSON strings and escaping
-    server->sendHeader("X-Bytes-Lost", String(logData.bytesLost));
-    server->sendHeader("X-Bytes-Returned", String(logData.content.length()));
-    server->sendHeader("X-Timestamp", getCurrentTimeString());
+    // Stream logs directly using ChunkedPrint adapter
+    ChunkedPrint chunkedOutput(server);
+    Logger::getInstance().printLogs(chunkedOutput);
     
-    server->send(200, "text/plain", logData.content);
+    // Terminate chunked transmission
+    server->sendContent("");
 }
 
 // Update manager references (needed after uploader recreation)

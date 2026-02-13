@@ -156,7 +156,7 @@ scan confirms no new data exists, the day is marked completed → IDLE.
 | **IDLE** | Scheduled mode only. Waiting for upload window to open. Checks periodically (every 60s). Not used in smart mode. | Until window opens (scheduled) |
 | **LISTENING** | PCNT sampling bus activity. Tracking consecutive silence. | Until Z seconds of silence (default 125s — see 01-FINDINGS.md §6) |
 | **ACQUIRING** | Taking SD card control, initializing SD_MMC. | ~500ms (brief transition) |
-| **UPLOADING** | ESP has exclusive SD access. Uploading files as fast as possible. No periodic releases. | Up to X minutes or until all files done |
+| **UPLOADING** | ESP has exclusive SD access. Upload runs as a **FreeRTOS task on Core 0**, keeping the web server responsive on Core 1. TLS connection reused across files (HTTP keep-alive). No periodic SD releases. | Up to X minutes or until all files done |
 | **RELEASING** | Finishing current file, unmounting SD, releasing mux to host. | ~100ms (brief transition) |
 | **COOLDOWN** | Card released to CPAP. Non-blocking wait. Web server still responsive. | Y minutes |
 | **COMPLETE** | All files uploaded for this cycle. | Transition state |
@@ -243,13 +243,28 @@ UPLOADING state entered
     │
     ├─ Phase 3: Root/SETTINGS files *** MANDATORY — NEVER SKIPPED ***
     │   ├─ Timer does NOT gate this phase
-    │   ├─ Upload all changed files (checksum comparison)
-    │   ├─ These files are small and fast
-    │   └─ Required to finalize a valid import
+    │   ├─ Root files (Identification.json, STR.edf, etc.): FORCED upload (ensure valid import)
+    │   ├─ SETTINGS folder: Conditional upload (only if changed)
+    │   └─ These files are small and fast
     │
     └─ All files uploaded → COMPLETE
        OR DATALOG timer expired but root/SETTINGS done → RELEASING
 ```
+
+### 4.1 Upload Efficiency Optimizations (Single-Pass)
+
+1.  **Single-Pass Streaming**: The `SleepHQUploader` no longer reads the file twice (once for MD5, once for upload).
+    - It calculates the MD5 hash **while streaming** the file content to the TLS socket.
+    - It sends the `content_hash` field in the **multipart footer** (accepted by SleepHQ API).
+    - *Impact*: Reduces SD card I/O by 50% per file and eliminates pre-upload delays.
+
+2.  **TLS Connection Reuse**: The uploader implements a custom chunked transfer decoder to properly drain API responses.
+    - This allows the `WiFiClientSecure` connection to remain clean and reusable (HTTP keep-alive).
+    - *Impact*: Eliminates the 1-2 second TLS handshake overhead for every file after the first one.
+
+3.  **Memory Stability**: All uploads use the streaming path with small fixed buffers (4KB).
+    - The RAM-heavy in-memory path for small files was removed to prevent heap fragmentation.
+    - *Impact*: Stable heap usage (~110KB free) even during long multi-file sessions.
 
 **Key rules**:
 - No `checkAndReleaseSD()` calls during upload. The ESP holds exclusive access for the
@@ -378,7 +393,7 @@ The web page shows a **progressive, auto-updating activity timeline**:
 | `ScheduleManager` | Rewrite: support upload window (two hours), upload mode enum, `isInUploadWindow()` replacing `isUploadTime()`. |
 | `SDCardManager` | Remove `digitalRead(CS_SENSE)` check from `takeControl()`. Activity detection moves to TrafficMonitor (called from main FSM). |
 | `FileUploader` | Remove `checkAndReleaseSD()`. Add phase-based upload with mandatory root/SETTINGS finalization. Accept data category filter. |
-| `UploadStateManager` | No changes needed. Already tracks per-folder and per-file state. |
+| `UploadStateManager` | Add file-size tracking for fast change detection (skip MD5 when size differs). |
 | `CPAPMonitor` | Replace stub with TrafficMonitor integration. |
 
 ### 7.2 New Components

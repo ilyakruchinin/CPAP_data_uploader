@@ -36,7 +36,7 @@ def get_version_info():
             # Count commits since latest tag
             commit_count = run_git_command(f"git rev-list {latest_tag}..HEAD --count")
             if commit_count and int(commit_count) > 0:
-                version = f"{latest_tag}-dev+{commit_count}"
+                version = f"{latest_tag}-dev+{commit_count}-streamfix9"
                 is_dev = True
             else:
                 version = latest_tag

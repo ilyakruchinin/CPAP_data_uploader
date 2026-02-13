@@ -161,14 +161,30 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         return (millis() - sessionStart) >= maxMs;
     };
     
-    // ── Phase 1: Fresh DATALOG folders (newest first) ──
-    if (!timerExpired && (filter == DataFilter::FRESH_ONLY || filter == DataFilter::ALL_DATA)) {
-        LOG("[FileUploader] Phase 1: Fresh DATALOG folders");
+    // ── Single scan: partition into fresh and old folders ──
+    std::vector<String> freshFolders;
+    std::vector<String> oldFolders;
+    
+    bool needFresh = (filter == DataFilter::FRESH_ONLY || filter == DataFilter::ALL_DATA);
+    bool needOld = (filter == DataFilter::OLD_ONLY || filter == DataFilter::ALL_DATA);
+    
+    if (needFresh || needOld) {
         std::vector<String> allFolders = scanDatalogFolders(sd);
-        
         for (const String& folderName : allFolders) {
-            if (!isRecentFolder(folderName)) continue;  // Skip old folders in this phase
-            
+            if (isRecentFolder(folderName)) {
+                freshFolders.push_back(folderName);
+            } else {
+                oldFolders.push_back(folderName);
+            }
+        }
+        LOGF("[FileUploader] Scan: %d fresh, %d old folders", freshFolders.size(), oldFolders.size());
+    }
+    
+    // ── Phase 1: Fresh DATALOG folders (newest first) ──
+    if (!timerExpired && needFresh) {
+        LOG("[FileUploader] Phase 1: Fresh DATALOG folders");
+        
+        for (const String& folderName : freshFolders) {
             if (isTimerExpired()) {
                 LOG("[FileUploader] X-minute timer expired during fresh DATALOG phase");
                 timerExpired = true;
@@ -189,14 +205,11 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     }
     
     // ── Phase 2: Old DATALOG folders (newest first, only if in window) ──
-    if (!timerExpired && (filter == DataFilter::OLD_ONLY || filter == DataFilter::ALL_DATA)) {
+    if (!timerExpired && needOld) {
         if (scheduleManager && scheduleManager->canUploadOldData()) {
             LOG("[FileUploader] Phase 2: Old DATALOG folders");
-            std::vector<String> allFolders = scanDatalogFolders(sd);
             
-            for (const String& folderName : allFolders) {
-                if (isRecentFolder(folderName)) continue;  // Skip fresh folders in this phase
-                
+            for (const String& folderName : oldFolders) {
                 if (isTimerExpired()) {
                     LOG("[FileUploader] X-minute timer expired during old DATALOG phase");
                     timerExpired = true;
@@ -222,10 +235,34 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     // ── Phase 3: Root/SETTINGS files (only if DATALOG files were uploaded) ──
     if (anyUploaded) {
         LOG("[FileUploader] Phase 3: Root/SETTINGS files");
-        std::vector<String> rootSettingsFiles = scanRootAndSettingsFiles(sd);
         
-        for (const String& filePath : rootSettingsFiles) {
-            uploadSingleFile(sdManager, filePath);
+        // 1. Mandatory Root Files (Force upload every session)
+        // These files are critical for import context and must be included even if unchanged
+        std::vector<String> rootFiles = {
+            "/Identification.json",
+            "/Identification.crc",
+            "/Identification.tgt",
+            "/STR.edf",
+            "/journal.jnl"
+        };
+        
+        for (const String& filePath : rootFiles) {
+            // Upload with force=true to skip hasFileChanged check
+            if (sd.exists(filePath)) {
+                uploadSingleFile(sdManager, filePath, true);
+            }
+            
+#ifdef ENABLE_TEST_WEBSERVER
+            if (webServer) webServer->handleClient();
+#endif
+        }
+        
+        // 2. Settings Files (Upload only if changed)
+        std::vector<String> settingsFiles = scanSettingsFiles(sd);
+        
+        for (const String& filePath : settingsFiles) {
+            // Upload with force=false (default) to respect hasFileChanged
+            uploadSingleFile(sdManager, filePath, false);
             
 #ifdef ENABLE_TEST_WEBSERVER
             if (webServer) webServer->handleClient();
@@ -447,28 +484,9 @@ std::vector<String> FileUploader::scanFolderFiles(fs::FS &sd, const String& fold
     return files;
 }
 
-// Scan root and SETTINGS files that need tracking
-std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
+// Scan SETTINGS files that need tracking (conditionally uploaded)
+std::vector<String> FileUploader::scanSettingsFiles(fs::FS &sd) {
     std::vector<String> files;
-    
-    // Root files to track
-    std::vector<String> rootFiles = {
-        "/Identification.json",
-        "/Identification.crc",
-        "/Identification.tgt",
-        "/STR.edf",
-        "/journal.jnl"
-    };
-    
-    for (const String& file : rootFiles) {
-        if (sd.exists(file)) {
-            // Check if file has changed
-            if (stateManager->hasFileChanged(sd, file)) {
-                files.push_back(file);
-                LOG_DEBUGF("[FileUploader] Root file changed: %s", file.c_str());
-            }
-        }
-    }
     
     // SETTINGS files: scan entire /SETTINGS/ directory (supports legacy and modern formats)
     File settingsDir = sd.open("/SETTINGS");
@@ -497,13 +515,12 @@ std::vector<String> FileUploader::scanRootAndSettingsFiles(fs::FS &sd) {
         LOG_DEBUG("[FileUploader] /SETTINGS directory not found or not accessible");
     }
     
-    LOG_DEBUGF("[FileUploader] Found %d changed root/SETTINGS files", files.size());
+    LOG_DEBUGF("[FileUploader] Found %d changed SETTINGS files", files.size());
     
     return files;
 }
 
 // Check if a DATALOG folder name (YYYYMMDD) is within the recent window
-// Recent folders are re-scanned on interval uploads to detect changed files
 bool FileUploader::isRecentFolder(const String& folderName) const {
     int recentDays = config->getRecentFolderDays();
     if (recentDays <= 0) return false;
@@ -663,7 +680,7 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         if (fileSize == 0) {
             LOG_WARNF("[FileUploader] File is empty: %s", localPath.c_str());
             file.close();
-            stateManager->markFileUploaded(localPath, "empty_file");
+            stateManager->markFileUploaded(localPath, "empty_file", 0);
             continue;  // Skip empty files
         }
         
@@ -724,6 +741,9 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
         }
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
+        // Variable to capture checksum if calculated during upload
+        String fileChecksum = "";
+        
         if (sleephqUploader && config->hasCloudEndpoint() && !cloudImportFailed) {
             anyBackendConfigured = true;
             if (!sleephqUploader->isConnected()) {
@@ -734,11 +754,15 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
                 }
             }
             unsigned long cloudBytes = 0;
-            if (!sleephqUploader->upload(localPath, remotePath, sd, cloudBytes)) {
+            String cloudChecksum = "";
+            if (!sleephqUploader->upload(localPath, remotePath, sd, cloudBytes, cloudChecksum)) {
                 LOG_ERRORF("[FileUploader] Cloud upload failed for: %s", localPath.c_str());
                 uploadSuccess = false;
             } else if (bytesTransferred == 0) {
                 bytesTransferred = cloudBytes;
+            }
+            if (!cloudChecksum.isEmpty()) {
+                fileChecksum = cloudChecksum;
             }
         }
 #endif
@@ -755,14 +779,23 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
             return false;  // Stop processing this folder
         }
         
-        // Store per-file checksum so hasFileChanged() can detect changes on re-scan
-        String checksum = stateManager->calculateChecksum(sd, localPath);
+        // Store per-file checksum + size so hasFileChanged() can detect changes on re-scan
+        // Use checksum from upload if available (saves a read), otherwise calculate it
+        String checksum = fileChecksum;
+        if (checksum.isEmpty()) {
+            checksum = stateManager->calculateChecksum(sd, localPath);
+        }
+        
         if (!checksum.isEmpty()) {
-            stateManager->markFileUploaded(localPath, checksum);
+            stateManager->markFileUploaded(localPath, checksum, fileSize);
         }
         
         uploadedCount++;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), bytesTransferred);
+        
+#ifdef ENABLE_TEST_WEBSERVER
+        if (webServer) webServer->handleClient();
+#endif
     }
     
     // All files processed successfully
@@ -782,7 +815,7 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
 }
 
 // Upload a single file (for root and SETTINGS files)
-bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& filePath) {
+bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& filePath, bool force) {
     fs::FS &sd = sdManager->getFS();
     LOGF("[FileUploader] Uploading single file: %s", filePath.c_str());
     
@@ -813,9 +846,14 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     file.close();
     
     // Check if file has changed (checksum comparison)
-    if (!stateManager->hasFileChanged(sd, filePath)) {
-        LOG_DEBUG("[FileUploader] File unchanged, skipping upload");
-        return true;  // Not an error, just no need to upload
+    // If 'force' is true, skip this check (used for mandatory root files)
+    if (!force) {
+        if (!stateManager->hasFileChanged(sd, filePath)) {
+            LOG_DEBUG("[FileUploader] File unchanged, skipping upload");
+            return true;  // Not an error, just no need to upload
+        }
+    } else {
+        LOG_DEBUG("[FileUploader] Forcing upload (mandatory file)");
     }
     
     // Lazily create cloud import on first actual upload (avoids empty imports)
@@ -868,6 +906,9 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     }
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
+    // Variable to capture checksum if calculated during upload
+    String fileChecksum = "";
+    
     if (sleephqUploader && config->hasCloudEndpoint() && !cloudImportFailed) {
         anyBackendConfigured = true;
         if (!sleephqUploader->isConnected()) {
@@ -878,11 +919,15 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
             }
         }
         unsigned long cloudBytes = 0;
-        if (!sleephqUploader->upload(filePath, filePath, sd, cloudBytes)) {
+        String cloudChecksum = "";
+        if (!sleephqUploader->upload(filePath, filePath, sd, cloudBytes, cloudChecksum)) {
             LOG_ERRORF("[FileUploader] Cloud upload failed for: %s", filePath.c_str());
             uploadSuccess = false;
         } else if (bytesTransferred == 0) {
             bytesTransferred = cloudBytes;
+        }
+        if (!cloudChecksum.isEmpty()) {
+            fileChecksum = cloudChecksum;
         }
     }
 #endif
@@ -897,14 +942,22 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
         return false;
     }
     
-    // Calculate and store checksum so hasFileChanged() won't flag this file next session
-    String checksum = stateManager->calculateChecksum(sd, filePath);
+    // Calculate and store checksum + size so hasFileChanged() won't flag this file next session
+    String checksum = fileChecksum;
+    if (checksum.isEmpty()) {
+        checksum = stateManager->calculateChecksum(sd, filePath);
+    }
+    
     if (!checksum.isEmpty()) {
-        stateManager->markFileUploaded(filePath, checksum);
+        stateManager->markFileUploaded(filePath, checksum, fileSize);
         stateManager->save(sd);
     }
     
     LOGF("[FileUploader] Successfully uploaded: %s (%lu bytes)", filePath.c_str(), bytesTransferred);
+    
+#ifdef ENABLE_TEST_WEBSERVER
+    if (webServer) webServer->handleClient();
+#endif
     
     return true;
 }

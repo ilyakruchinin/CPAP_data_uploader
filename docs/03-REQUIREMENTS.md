@@ -178,6 +178,7 @@ These are no longer needed and should be **ignored with a warning log** if prese
 | **R-NF-06** | State file (`.upload_state.json`) format unchanged — no migration needed |
 | **R-NF-07** | All build flags (ENABLE_SMB_UPLOAD, ENABLE_SLEEPHQ_UPLOAD, etc.) unchanged |
 | **R-NF-08** | OTA update functionality unchanged |
+| **R-NF-09** | **SleepHQ uploads must use streaming + chunked decoding** to maintain persistent TLS connections and prevent heap exhaustion |
 
 ---
 
@@ -197,6 +198,7 @@ These are no longer needed and should be **ignored with a warning log** if prese
 | **T-10** | Web trigger: verify forced upload bypasses inactivity check |
 | **T-11** | Cross-midnight window: verify START > END wraps correctly |
 | **T-12** | Long-running stability: verify no memory leaks or watchdog timeouts over 24h+ |
-| **T-13** | SD Activity Monitor: verify live PCNT data displayed in web UI, uploads stopped |
-| **T-14** | SD Activity Monitor: verify entering from UPLOADING state finishes current file + root/SETTINGS first |
-| **T-15** | Root/SETTINGS mandatory: verify root/SETTINGS always uploaded even when X timer expired during DATALOG |
+| **T-13** | **Memory/TLS Stability**: Verify heap remains stable (>100KB) during long upload sessions with mixed file sizes |
+| **T-14** | SD Activity Monitor: verify live PCNT data displayed in web UI, uploads stopped |
+| **T-15** | SD Activity Monitor: verify entering from UPLOADING state finishes current file + root/SETTINGS first |
+| **T-16** | Root/SETTINGS mandatory: verify root/SETTINGS always uploaded even when X timer expired during DATALOG |
