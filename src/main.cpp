@@ -44,8 +44,6 @@ CPAPMonitor* cpapMonitor = nullptr;
 UploadState currentState = UploadState::IDLE;
 unsigned long stateEnteredAt = 0;
 unsigned long cooldownStartedAt = 0;
-bool freshDataRemaining = false;
-bool oldDataRemaining = false;
 bool uploadCycleHadTimeout = false;
 
 // Monitoring mode flags
@@ -320,6 +318,15 @@ void setup() {
     }
 #endif
 
+    // Set initial FSM state based on upload mode
+    if (uploader && uploader->getScheduleManager() && uploader->getScheduleManager()->isSmartMode()) {
+        LOG("[FSM] Smart mode — starting in LISTENING (continuous loop)");
+        transitionTo(UploadState::LISTENING);
+    } else {
+        LOG("[FSM] Scheduled mode — starting in IDLE");
+        // IDLE is the correct initial state for scheduled mode
+    }
+
     LOG("Setup complete!");
 }
 
@@ -328,6 +335,10 @@ void setup() {
 // ============================================================================
 
 void handleIdle() {
+    // IDLE is only used in scheduled mode.
+    // Smart mode never enters IDLE — it uses the continuous loop:
+    // LISTENING → ACQUIRING → UPLOADING → RELEASING → COOLDOWN → LISTENING
+    
     unsigned long now = millis();
     if (now - lastIdleCheck < IDLE_CHECK_INTERVAL_MS) return;
     lastIdleCheck = now;
@@ -336,22 +347,12 @@ void handleIdle() {
     
     ScheduleManager* sm = uploader->getScheduleManager();
     
-    // Check data availability from last known state (no SD access needed)
-    // If state manager has never been populated (no scan run yet), assume data exists
-    // to allow the first upload cycle to discover and scan the SD card
-    bool neverScanned = (uploader->getStateManager()->getCompletedFoldersCount() == 0 &&
-                         uploader->getStateManager()->getIncompleteFoldersCount() == 0 &&
-                         uploader->getStateManager()->getPendingFoldersCount() == 0);
-    
-    if (neverScanned) {
-        freshDataRemaining = true;
-        oldDataRemaining = true;
-    } else {
-        freshDataRemaining = uploader->hasIncompleteFolders();
-        oldDataRemaining = freshDataRemaining;
-    }
-    
-    if (sm->isUploadEligible(freshDataRemaining, oldDataRemaining)) {
+    // In scheduled mode: transition to LISTENING when the upload window opens,
+    // even if all known files are marked complete. This ensures new DATALOG
+    // folders written by the CPAP since the last upload are discovered during
+    // the scan phase of the upload cycle.
+    if (sm->isInUploadWindow() && !sm->isDayCompleted()) {
+        LOG("[FSM] Upload window open — transitioning to LISTENING");
         transitionTo(UploadState::LISTENING);
     }
 }
@@ -366,11 +367,14 @@ void handleListening() {
         return;
     }
     
-    // Check if still eligible (window might have closed)
+    // In scheduled mode, check if the upload window has closed while we were listening
+    // Smart mode never exits LISTENING to IDLE — it stays in the continuous loop
     ScheduleManager* sm = uploader->getScheduleManager();
-    if (!sm->isUploadEligible(freshDataRemaining, oldDataRemaining)) {
-        LOG("[FSM] No longer eligible to upload (window closed or no data)");
-        transitionTo(UploadState::IDLE);
+    if (!sm->isSmartMode()) {
+        if (!sm->isInUploadWindow() || sm->isDayCompleted()) {
+            LOG("[FSM] Scheduled mode — window closed or day completed while listening");
+            transitionTo(UploadState::IDLE);
+        }
     }
 }
 
@@ -452,21 +456,24 @@ void handleCooldown() {
     }
     
     LOGF("[FSM] Cooldown complete (%d minutes)", config.getCooldownMinutes());
+    uploadCycleHadTimeout = false;
     
-    if (uploadCycleHadTimeout) {
-        // More files to upload — go back to listening for inactivity
-        uploadCycleHadTimeout = false;
-        
-        ScheduleManager* sm = uploader->getScheduleManager();
-        if (sm->isUploadEligible(true, true)) {
+    ScheduleManager* sm = uploader->getScheduleManager();
+    
+    if (sm->isSmartMode()) {
+        // Smart mode: ALWAYS return to LISTENING (continuous loop)
+        trafficMonitor.resetIdleTracking();
+        LOG("[FSM] Smart mode — returning to LISTENING (continuous loop)");
+        transitionTo(UploadState::LISTENING);
+    } else {
+        // Scheduled mode: return to LISTENING if still in window and day not done
+        if (sm->isInUploadWindow() && !sm->isDayCompleted()) {
             trafficMonitor.resetIdleTracking();
             transitionTo(UploadState::LISTENING);
         } else {
-            LOG("[FSM] No longer eligible after cooldown");
+            LOG("[FSM] Scheduled mode — window closed or day completed");
             transitionTo(UploadState::IDLE);
         }
-    } else {
-        transitionTo(UploadState::IDLE);
     }
 }
 
@@ -474,13 +481,9 @@ void handleComplete() {
     ScheduleManager* sm = uploader->getScheduleManager();
     
     if (sm->isSmartMode()) {
-        // Smart mode: cooldown then re-scan for new fresh data
-        LOG("[FSM] Smart mode complete — entering cooldown before re-scan");
-        uploadCycleHadTimeout = false;  // Not a timeout, but we want to re-check
-        
-        // We'll go through cooldown → listening → if no new data → idle
-        // Set the flag so cooldown transitions to LISTENING for re-scan
-        uploadCycleHadTimeout = true;
+        // Smart mode: release → cooldown → listening (continuous loop)
+        // Next cycle will scan SD card and discover any new data naturally
+        LOG("[FSM] Smart mode complete — continuing loop via RELEASING → COOLDOWN → LISTENING");
         transitionTo(UploadState::RELEASING);
     } else {
         // Scheduled mode: done for today
@@ -498,7 +501,13 @@ void handleMonitoring() {
     if (stopMonitoringRequested) {
         stopMonitoringRequested = false;
         LOG("[FSM] Monitoring stopped by user");
-        transitionTo(UploadState::IDLE);
+        ScheduleManager* sm = uploader ? uploader->getScheduleManager() : nullptr;
+        if (sm && sm->isSmartMode()) {
+            trafficMonitor.resetIdleTracking();
+            transitionTo(UploadState::LISTENING);
+        } else {
+            transitionTo(UploadState::IDLE);
+        }
     }
 }
 
@@ -568,7 +577,13 @@ void loop() {
             }
             
             sdManager.releaseControl();
-            transitionTo(UploadState::IDLE);
+            ScheduleManager* sm = uploader ? uploader->getScheduleManager() : nullptr;
+            if (sm && sm->isSmartMode()) {
+                trafficMonitor.resetIdleTracking();
+                transitionTo(UploadState::LISTENING);
+            } else {
+                transitionTo(UploadState::IDLE);
+            }
             LOG("State reset complete");
         } else {
             LOG_ERROR("Cannot reset state - SD card in use");

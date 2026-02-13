@@ -247,15 +247,11 @@ finalize the import, regardless of the X-minute timer.
 - Delete `lastSdReleaseTime` member
 - Remove all `checkAndReleaseSD()` calls from `uploadDatalogFolder()` and `uploadNewFiles()`
 
-### 4.5 Simplify TimeBudgetManager
+### 4.5 Timer Management
 
-The X-minute timer is now managed by `uploadWithExclusiveAccess()` directly (simple
-`millis()` comparison). TimeBudgetManager can be simplified or the timer check can be
-inline. The transmission rate tracking is still useful for the web UI status display.
-
-Keep: `recordUpload()`, `getTransmissionRate()`
-Remove: `startSession()`, `hasBudget()`, `canUploadFile()`, `pauseActiveTime()`,
-`resumeActiveTime()` — all replaced by direct timer check.
+The X-minute timer is managed by `uploadWithExclusiveAccess()` directly (simple
+`millis()` comparison). No separate timer manager class is needed. TimeBudgetManager
+has been deleted.
 
 ### 4.6 Test
 
@@ -378,14 +374,16 @@ void loop() {
 
 ### 6.4 State Handlers (Pseudocode)
 
-**handleIdle()**:
+**handleIdle()** (scheduled mode only):
 ```
-- Every 60 seconds, check eligibility:
-  - Scan data availability (from last known state, no SD access needed)
-  - freshDataRemaining = stateManager has incomplete recent folders
-  - oldDataRemaining = stateManager has incomplete old folders
-  - If scheduleManager.isUploadEligible(freshDataRemaining, oldDataRemaining):
+- Smart mode: never enters IDLE. Initial state is LISTENING.
+- Scheduled mode: every 60 seconds, check if upload window is open
+  - If scheduleManager.isInUploadWindow() AND NOT isDayCompleted():
       transition to LISTENING
+  - NOTE: Does NOT check data availability — always transitions to LISTENING
+    when the window opens, even if all known files are marked complete.
+    This ensures new DATALOG folders written by the CPAP since the last
+    upload are discovered during the scan phase of the upload cycle.
 ```
 
 **handleListening()**:
@@ -427,24 +425,22 @@ void loop() {
 ```
 - If elapsed < Y minutes: return (non-blocking wait)
 - After Y minutes:
-  - If uploadCycleHadTimeout (more files to upload):
-      - If still eligible: transition to LISTENING
-      - Else: transition to IDLE
-  - Else: transition to IDLE (came from error or complete)
+  - Smart mode: ALWAYS transition to LISTENING (continuous loop)
+  - Scheduled mode:
+      - If still in upload window AND day not completed:
+          transition to LISTENING
+      - Else: transition to IDLE (window closed)
 ```
 
 **handleComplete()**:
 ```
+- Smart mode:
+    - transition to RELEASING (which goes to COOLDOWN → LISTENING)
+    - The continuous loop ensures new data is discovered on next cycle
+
 - Scheduled mode:
     - scheduleManager.markDayCompleted()
     - transition to IDLE
-
-- Smart mode:
-    - transition to RELEASING → COOLDOWN
-    - After cooldown + Z seconds inactivity (via LISTENING):
-        - Brief SD access to re-scan for new fresh data
-        - If new files found: start new upload cycle (ACQUIRING)
-        - If no new files: transition to IDLE
 ```
 
 **handleMonitoring()**:
@@ -482,7 +478,7 @@ if (g_stopMonitorFlag) {
 }
 ```
 
-Other web triggers (scan, delta scan, deep scan, reset state) remain unchanged —
+Other web triggers (reset state) remain unchanged —
 they operate independently of the FSM.
 
 ### 6.6 State Logging
@@ -534,9 +530,11 @@ New endpoint `GET /api/sd-activity` (only active during MONITORING state):
 ### 6.9 Test
 
 - Full FSM cycle: IDLE → LISTENING → ACQUIRING → UPLOADING → RELEASING → COOLDOWN → LISTENING
-- Smart mode re-scan: COMPLETE → COOLDOWN → LISTENING → (no new files) → IDLE
+- Smart mode continuous loop: COMPLETE → RELEASING → COOLDOWN → LISTENING (never IDLE)
+- Smart mode new data: COMPLETE → loop → next cycle discovers new DATALOG folder
 - Scheduled mode: COMPLETE → IDLE, verify no uploads until next day
-- Window boundary: verify transition to IDLE when window closes during COOLDOWN
+- Scheduled mode re-discovery: window opens → IDLE → LISTENING even if all files complete
+- Window boundary: verify transition to IDLE when window closes during COOLDOWN (scheduled only)
 - Web trigger: verify immediate ACQUIRING from any state
 - MONITORING: verify entering from IDLE stops uploads, PCNT data flows to web UI
 - MONITORING: verify entering from UPLOADING finishes file + root/SETTINGS first
@@ -625,8 +623,6 @@ using JavaScript fetch() for polling.
 | `src/ScheduleManager.cpp` | Modify: rewrite implementation | 3 |
 | `include/FileUploader.h` | Modify: new enums, new method, remove periodic release | 4 |
 | `src/FileUploader.cpp` | Modify: major refactor, mandatory root/SETTINGS | 4 |
-| `include/TimeBudgetManager.h` | Modify: simplify | 4 |
-| `src/TimeBudgetManager.cpp` | Modify: simplify | 4 |
 | `include/SDCardManager.h` | No changes | 5 |
 | `src/SDCardManager.cpp` | Modify: remove digitalRead check | 5 |
 | `src/main.cpp` | Modify: major rewrite of loop(), MONITORING state | 6 |

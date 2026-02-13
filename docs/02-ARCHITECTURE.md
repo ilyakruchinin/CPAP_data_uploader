@@ -10,7 +10,10 @@ All uploads happen **only within the upload window** defined by `UPLOAD_START_HO
 `UPLOAD_END_HOUR`. Even in scheduled mode, bus inactivity (Z seconds of silence) must be
 confirmed before taking SD card control.
 
-Once all files are uploaded → done until next day's window.
+When the upload window opens, the FSM transitions from IDLE to LISTENING — **even if all
+known files are marked complete** — to discover any new data the CPAP may have written.
+Once a scan confirms no new data exists, the day is marked as completed → IDLE until
+the next day's window.
 
 ### 1.2 Smart Mode (`"smart"`)
 
@@ -21,9 +24,12 @@ Data is split into two categories with different scheduling rules:
 | **Fresh data** | DATALOG folders within last B days + root/SETTINGS files | **Anytime** (24/7), as long as bus is idle |
 | **Old data** | DATALOG folders older than B days | **Only within upload window** [START, END] |
 
-After a complete upload cycle (all files done), the system enters a cooldown. After
-cooldown + inactivity re-verified, it re-scans for new fresh data. If new files are
-found (e.g., CPAP wrote new therapy data), a new upload cycle starts.
+Smart mode operates as a **continuous loop**: LISTENING → ACQUIRING → UPLOADING →
+RELEASING → COOLDOWN → LISTENING. The FSM **never enters IDLE** in smart mode.
+After every upload cycle (whether complete or timed out), the system cools down and
+returns to LISTENING to wait for bus inactivity before the next cycle. This ensures
+new data written by the CPAP between upload cycles is always discovered on the next
+scan, without relying on stale state information.
 
 ### 1.3 Upload Window
 
@@ -41,75 +47,113 @@ Cross-midnight support: if START > END, the window wraps. E.g., START=22, END=6 
 
 ## 2. Finite State Machine
 
+### 2.1 Smart Mode FSM (continuous loop — no IDLE)
+
 ```
-                    ┌──────────────────────────────────────┐
-                    │                                      │
-                    ▼                                      │
-              ┌──────────┐                                 │
-              │   IDLE   │◄──── schedule window expired    │
-              └────┬─────┘      or all done (scheduled)    │
-                   │                                       │
-          eligible to upload?                              │
-          (mode + time + data)                             │
-                   │                                       │
-                   ▼                                       │
-              ┌──────────┐     bus activity detected       │
-              │LISTENING │────────────────┐                │
-              │(Z secs)  │◄───────────────┘                │
-              └────┬─────┘     (reset silence counter)     │
-                   │                                       │
-          Z seconds of silence                             │
-                   │                                       │
-                   ▼                                       │
-              ┌──────────┐                                 │
-              │ACQUIRING │─── SD init failed ──► RELEASING │
-              └────┬─────┘                                 │
-                   │                                       │
-              SD mounted OK                                │
-                   │                                       │
-                   ▼                                       │
-              ┌──────────┐                                 │
-              │UPLOADING │                                 │
-              │(max X min)│                                │
-              └──┬────┬──┘                                 │
-                 │    │                                    │
-        all done │    │ X min expired                      │
-                 │    │ (finish current file)              │
-                 │    │                                    │
-                 │    ▼                                    │
-                 │ ┌──────────┐                            │
-                 │ │RELEASING │                            │
-                 │ └────┬─────┘                            │
-                 │      │                                  │
-                 │      ▼                                  │
-                 │ ┌──────────┐                            │
-                 │ │ COOLDOWN │                            │
-                 │ │ (Y min)  │                            │
-                 │ └────┬─────┘                            │
-                 │      │                                  │
-                 │      │  still eligible? ──No──► IDLE    │
-                 │      │  (time window + data left)       │
-                 │      │                                  │
-                 │      ▼                                  │
-                 │    LISTENING (back to inactivity check) │
-                 │                                         │
-                 ▼                                         │
-              ┌──────────┐                                 │
-              │ COMPLETE │─────────────────────────────────┘
-              └──────────┘
-                 │
-                 │ smart mode only:
-                 │ after cooldown + Z inactivity,
-                 │ re-scan for new fresh data
-                 │ → if found: back to LISTENING
-                 │ → if none: IDLE
+              ┌──────────┐     bus activity detected
+     ┌───────►│LISTENING │────────────────┐
+     │        │(Z secs)  │◄───────────────┘
+     │        └────┬─────┘     (reset silence counter)
+     │             │
+     │    Z seconds of silence
+     │             │
+     │             ▼
+     │        ┌──────────┐
+     │        │ACQUIRING │─── SD init failed ──┐
+     │        └────┬─────┘                     │
+     │             │                           │
+     │        SD mounted OK                    │
+     │             │                           │
+     │             ▼                           │
+     │        ┌──────────┐                     │
+     │        │UPLOADING │                     │
+     │        │(max X min)│                    │
+     │        └──┬────┬──┘                     │
+     │           │    │                        │
+     │  all done │    │ X min expired          │
+     │  (COMPLETE)│   │ (finish current file)  │
+     │           │    │                        │
+     │           │    ▼                        │
+     │           │ ┌──────────┐                │
+     │           └►│RELEASING │◄───────────────┘
+     │             └────┬─────┘
+     │                  │
+     │                  ▼
+     │             ┌──────────┐
+     └─────────────│ COOLDOWN │
+                   │ (Y min)  │
+                   └──────────┘
 ```
 
-### State Descriptions
+Smart mode **always** returns to LISTENING after cooldown, regardless of whether the
+last upload was complete, timed out, or had an error. This creates a continuous loop
+that naturally discovers new data on each scan cycle.
+
+### 2.2 Scheduled Mode FSM (IDLE between windows)
+
+```
+              ┌──────────┐
+              │   IDLE   │◄──── window closed / day completed
+              └────┬─────┘
+                   │
+          upload window open?
+          (not yet completed today)
+                   │
+                   ▼
+              ┌──────────┐     bus activity detected
+              │LISTENING │────────────────┐
+              │(Z secs)  │◄───────────────┘
+              └────┬─────┘     (reset silence counter)
+                   │
+          Z seconds of silence
+                   │
+                   ▼
+              ┌──────────┐
+              │ACQUIRING │─── SD init failed ──┐
+              └────┬─────┘                     │
+                   │                           │
+              SD mounted OK                    │
+                   │                           │
+                   ▼                           │
+              ┌──────────┐                     │
+              │UPLOADING │                     │
+              │(max X min)│                    │
+              └──┬────┬──┘                     │
+                 │    │                        │
+        all done │    │ X min expired          │
+        (COMPLETE)│   │                        │
+                 │    ▼                        │
+                 │ ┌──────────┐                │
+                 │ │RELEASING │◄───────────────┘
+                 │ └────┬─────┘
+                 │      │
+                 │      ▼
+                 │ ┌──────────┐
+                 │ │ COOLDOWN │
+                 │ │ (Y min)  │
+                 │ └────┬─────┘
+                 │      │
+                 │      │ still in window? ──No──► IDLE
+                 │      │
+                 │      ▼
+                 │    LISTENING (back to inactivity check)
+                 │
+                 ▼
+              ┌──────────┐
+              │ COMPLETE │──► mark day completed ──► IDLE
+              └──────────┘
+```
+
+In scheduled mode, when the upload window opens, the FSM transitions from IDLE to
+LISTENING **even if all known files are marked complete**. This ensures new data
+written by the CPAP since the last upload is discovered during the scan. After the
+scan confirms no new data exists, the day is marked completed → IDLE.
+
+### 2.3 State Descriptions
 
 | State | Description | Duration |
 |---|---|---|
-| **IDLE** | Not eligible to upload. Checking periodically (every 60s). | Until schedule/mode triggers |
+| **IDLE** | Scheduled mode only. Waiting for upload window to open. Checks periodically (every 60s). Not used in smart mode. | Until window opens (scheduled) |
 | **LISTENING** | PCNT sampling bus activity. Tracking consecutive silence. | Until Z seconds of silence (default 125s — see 01-FINDINGS.md §6) |
 | **ACQUIRING** | Taking SD card control, initializing SD_MMC. | ~500ms (brief transition) |
 | **UPLOADING** | ESP has exclusive SD access. Uploading files as fast as possible. No periodic releases. | Up to X minutes or until all files done |
@@ -218,28 +262,32 @@ UPLOADING state entered
 
 ---
 
-## 5. Smart Mode Re-scan Logic
+## 5. Smart Mode Continuous Loop
 
-After a complete upload cycle in smart mode:
+Smart mode does **not** use a separate re-scan step. Instead, the continuous loop
+(LISTENING → ACQUIRING → UPLOADING → RELEASING → COOLDOWN → LISTENING) naturally
+handles new data discovery:
 
 ```
-COMPLETE
+COMPLETE (all known files uploaded)
     │
-    ├─ Release SD card (RELEASING)
-    ├─ Cooldown (Y minutes)
-    ├─ Listen for inactivity (Z seconds)
+    ├─ RELEASING (release SD card)
+    ├─ COOLDOWN (Y minutes — CPAP gets uninterrupted access)
+    ├─ LISTENING (wait for Z seconds of bus silence)
+    ├─ ACQUIRING (take SD card)
+    ├─ UPLOADING (scan SD card — discovers any new folders/files written since last cycle)
+    │   ├─ New data found → upload it → RELEASING → COOLDOWN → loop continues
+    │   └─ No new data → COMPLETE (nothing uploaded) → RELEASING → COOLDOWN → loop continues
     │
-    ├─ Take SD card briefly to re-scan
-    │   ├─ Check fresh DATALOG folders for new/changed files
-    │   │   (using isRecentFolder() + hasFileChanged())
-    │   ├─ If new files found → start new upload cycle
-    │   └─ If no new files → IDLE
-    │
-    └─ IDLE (wait for next trigger)
+    └─ (loop never exits — always returns to LISTENING after cooldown)
 ```
 
-This handles the scenario where the CPAP writes new data between upload cycles (e.g.,
-therapy summary files written after mask-off).
+This handles all scenarios where the CPAP writes new data between upload cycles (e.g.,
+therapy summary files written after mask-off, second therapy session starting later).
+
+The cooldown period (Y minutes, default 10) ensures the CPAP gets adequate
+uninterrupted SD card access between cycles. The inactivity check (Z seconds, default
+125) ensures the CPAP is not actively writing when the ESP takes the card.
 
 ---
 
@@ -330,7 +378,6 @@ The web page shows a **progressive, auto-updating activity timeline**:
 | `ScheduleManager` | Rewrite: support upload window (two hours), upload mode enum, `isInUploadWindow()` replacing `isUploadTime()`. |
 | `SDCardManager` | Remove `digitalRead(CS_SENSE)` check from `takeControl()`. Activity detection moves to TrafficMonitor (called from main FSM). |
 | `FileUploader` | Remove `checkAndReleaseSD()`. Add phase-based upload with mandatory root/SETTINGS finalization. Accept data category filter. |
-| `TimeBudgetManager` | Simplify: X-minute timer replaces complex session budget. Remove pause/resume (no periodic releases). |
 | `UploadStateManager` | No changes needed. Already tracks per-folder and per-file state. |
 | `CPAPMonitor` | Replace stub with TrafficMonitor integration. |
 
@@ -371,19 +418,31 @@ Timeline (smart mode, morning after therapy):
 07:08  X=5min timer expires, current file finishes
 07:08  → RELEASING → COOLDOWN
 07:18  Y=10min cooldown complete
-07:18  → LISTENING (check for inactivity again)
+07:18  → LISTENING (smart mode always returns here)
 07:20  Z=125s silence confirmed
-07:20  → ACQUIRING → UPLOADING: resume remaining files
-07:23  All fresh files done → COMPLETE
-07:23  Re-scan: no new files → COOLDOWN → LISTENING → ...
-08:00  Upload window opens (START=8)
-08:00  Old data now eligible
-08:02  Z=125s silence confirmed
-08:02  → UPLOADING: old DATALOG folders
+07:20  → ACQUIRING → UPLOADING: resume remaining fresh files
+07:23  All fresh files done → COMPLETE → RELEASING → COOLDOWN
+07:33  Cooldown complete → LISTENING
+07:35  Z=125s silence → ACQUIRING → UPLOADING: scan finds no new fresh data
+07:35  → COMPLETE → RELEASING → COOLDOWN
+07:45  Cooldown complete → LISTENING (loop continues...)
+08:00  Upload window opens (START=8) — old data now eligible
+08:02  Z=125s silence → ACQUIRING → UPLOADING: old DATALOG folders
 08:07  X=5min timer → RELEASING → COOLDOWN
 ...    (cycle continues until all old data uploaded)
-10:00  All files uploaded → IDLE
-10:00  Next activity: tomorrow morning (or when new fresh data detected)
+10:00  All files uploaded → COMPLETE → RELEASING → COOLDOWN
+10:10  Cooldown → LISTENING → scan finds nothing → COMPLETE → COOLDOWN → ...
+
+--- Second therapy session scenario ---
+14:00  User starts second therapy session (mask on)
+14:00  CPAP writes to SD card every ~60s
+14:00  ESP in LISTENING but bus never stays silent for Z=125s (therapy writes)
+       → FSM stays in LISTENING, cannot acquire (correct behavior)
+16:00  User removes mask, CPAP writes final summary
+16:01  Bus goes silent
+16:03  Z=125s silence confirmed → ACQUIRING → UPLOADING
+16:03  Scan discovers new DATALOG folder from second session → uploads it
+16:05  → COMPLETE → RELEASING → COOLDOWN → LISTENING → ...
 ```
 
 ---
@@ -409,18 +468,14 @@ If `START=22, END=6`, should the upload window wrap around midnight (22:00→06:
 This would be unusual (uploading during typical therapy hours) but should be supported
 for flexibility.
 
-### Q3: Smart Mode COMPLETE → Re-scan Timing
+### Q3: Smart Mode COMPLETE → Re-scan Timing ✅ RESOLVED
 
-After all files are uploaded in smart mode, how aggressively should we re-scan?
-
-- **Option A**: Cooldown (Y min) → inactivity check (Z sec) → re-scan → if nothing new, IDLE
-- **Option B**: Cooldown (Y min) → inactivity check (Z sec) → re-scan → if nothing new,
-  wait another Y minutes and re-scan again (persistent polling)
-- **Option C**: After COMPLETE, only re-scan if PCNT detects new bus activity followed by
-  silence (event-driven rather than polling)
-
-I've designed for **Option A** above. Option C is more elegant but requires keeping PCNT
-running during IDLE state.
+**Answer**: Smart mode uses a **continuous loop** (Option B variant). After COMPLETE,
+the FSM always goes through RELEASING → COOLDOWN → LISTENING → ACQUIRING → UPLOADING.
+The upload cycle itself scans the SD card and discovers new data naturally. There is no
+separate "re-scan" step — the scan IS the upload cycle. If no new data is found, the
+cycle completes immediately and loops back. The cooldown period (Y minutes) prevents
+excessive SD card access. IDLE is never used in smart mode.
 
 ### Q4: Web "Upload Now" Behavior
 
