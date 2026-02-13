@@ -19,7 +19,6 @@
 |---|---|---|---|
 | `RECENT_FOLDER_DAYS` | int | `2` | Defines fresh vs old data boundary (B) |
 | `MAX_DAYS` | int | `0` (all) | Hard cutoff — older folders ignored entirely |
-| `MAX_RETRY_ATTEMPTS` | int | `3` | Retries per folder on upload failure |
 | `BOOT_DELAY_SECONDS` | int | `30` | Initial delay before first SD access |
 | `GMT_OFFSET_HOURS` | int | `0` | Timezone for schedule calculations |
 | `LOG_TO_SD_CARD` | bool | `false` | Debug logging to SD |
@@ -104,7 +103,7 @@ These are no longer needed and should be **ignored with a warning log** if prese
 | Requirement | Description |
 |---|---|
 | **R-FSM-01** | Implement 8 states: IDLE, LISTENING, ACQUIRING, UPLOADING, RELEASING, COOLDOWN, COMPLETE, MONITORING |
-| **R-FSM-02** | IDLE → LISTENING transition based on mode + time + data availability |
+| **R-FSM-02** | IDLE → LISTENING: scheduled mode only — when upload window opens (even if all files marked complete, to discover new data). Smart mode starts directly in LISTENING and never uses IDLE. |
 | **R-FSM-03** | LISTENING: non-blocking, uses TrafficMonitor.update() every loop iteration |
 | **R-FSM-04** | LISTENING → ACQUIRING: only after Z consecutive seconds of silence |
 | **R-FSM-05** | ACQUIRING: take SD control, mount, handle failure → RELEASING |
@@ -113,10 +112,10 @@ These are no longer needed and should be **ignored with a warning log** if prese
 | **R-FSM-08** | UPLOADING → RELEASING: when X minutes expired AND current file done |
 | **R-FSM-09** | UPLOADING → COMPLETE: when all eligible files uploaded |
 | **R-FSM-10** | COOLDOWN: non-blocking Y-minute wait, web server remains responsive |
-| **R-FSM-11** | COOLDOWN → LISTENING: if still eligible (time window, data remaining) |
-| **R-FSM-12** | COOLDOWN → IDLE: if no longer eligible (window closed, no data) |
-| **R-FSM-13** | COMPLETE (smart mode): after cooldown + Z inactivity, re-scan fresh data |
-| **R-FSM-14** | COMPLETE (scheduled mode): mark done, go to IDLE |
+| **R-FSM-11** | COOLDOWN → LISTENING: smart mode — always (continuous loop). Scheduled mode — if still in upload window and day not completed. |
+| **R-FSM-12** | COOLDOWN → IDLE: scheduled mode only — when upload window has closed |
+| **R-FSM-13** | COMPLETE (smart mode): → RELEASING → COOLDOWN → LISTENING (continuous loop, no re-scan step needed — next upload cycle scans naturally) |
+| **R-FSM-14** | COMPLETE (scheduled mode): mark day completed → IDLE |
 | **R-FSM-15** | Web "Upload Now": force transition to ACQUIRING (skip inactivity check) |
 | **R-FSM-16** | All states: handle web server requests (non-blocking) |
 | **R-FSM-17** | MONITORING: entered via web button, all uploads stopped, TrafficMonitor continues sampling |
