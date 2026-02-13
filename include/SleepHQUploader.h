@@ -44,7 +44,9 @@ private:
                              const String& filePath, const String& contentHash,
                              unsigned long lockedFileSize,
                              fs::FS &sd, unsigned long& bytesTransferred,
-                             String& responseBody, int& httpCode);
+                             String& responseBody, int& httpCode,
+                             String* calculatedChecksum = nullptr,
+                             bool useKeepAlive = true);
     
     // Content hash: MD5(file_content + filename)
     String computeContentHash(fs::FS &sd, const String& localPath, const String& fileName,
@@ -59,6 +61,8 @@ private:
     
     // TLS setup
     void setupTLS();
+    void resetTLS();
+    void configureTLS();
 
 public:
     SleepHQUploader(Config* cfg);
@@ -66,7 +70,7 @@ public:
     
     bool begin();
     bool upload(const String& localPath, const String& remotePath, 
-                fs::FS &sd, unsigned long& bytesTransferred);
+                fs::FS &sd, unsigned long& bytesTransferred, String& fileChecksum);
     void end();
     bool isConnected() const;
     

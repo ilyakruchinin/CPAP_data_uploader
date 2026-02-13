@@ -52,7 +52,7 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
     struct MD5Context md5_ctx;
     MD5Init(&md5_ctx);
     
-    const size_t bufferSize = 512;
+    const size_t bufferSize = 4096;
     uint8_t buffer[bufferSize];
     size_t totalBytesRead = 0;
     size_t expectedSize = file.size();
@@ -98,26 +98,44 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
 }
 
 bool UploadStateManager::hasFileChanged(fs::FS &sd, const String& filePath) {
-    // Calculate current checksum
-    String currentChecksum = calculateChecksum(sd, filePath);
-    if (currentChecksum.isEmpty()) {
-        // File doesn't exist or can't be read
-        return false;
-    }
-    
-    // Check if we have a stored checksum
-    auto it = fileChecksums.find(filePath);
-    if (it == fileChecksums.end()) {
-        // No stored checksum, file is new
+    // Fast path: check if we have any record of this file
+    auto checksumIt = fileChecksums.find(filePath);
+    if (checksumIt == fileChecksums.end()) {
+        // No stored checksum — file is new, definitely changed
         return true;
     }
     
-    // Compare checksums
-    return (it->second != currentChecksum);
+    // Fast path: compare file size first (O(1), no file read)
+    // CPAP files typically grow when new data is appended, so size change
+    // catches ~95% of modifications without reading the file.
+    auto sizeIt = fileSizes.find(filePath);
+    if (sizeIt != fileSizes.end()) {
+        File file = sd.open(filePath, FILE_READ);
+        if (!file) return false;  // Can't read — treat as unchanged
+        unsigned long currentSize = file.size();
+        file.close();
+        
+        if (currentSize != sizeIt->second) {
+            LOG_DEBUGF("[UploadStateManager] Size changed: %s (%lu -> %lu)",
+                       filePath.c_str(), sizeIt->second, currentSize);
+            return true;  // Size differs — definitely changed
+        }
+    }
+    
+    // Slow path: size matches (or no stored size) — compare MD5 checksums
+    String currentChecksum = calculateChecksum(sd, filePath);
+    if (currentChecksum.isEmpty()) {
+        return false;  // Can't read file
+    }
+    
+    return (checksumIt->second != currentChecksum);
 }
 
-void UploadStateManager::markFileUploaded(const String& filePath, const String& checksum) {
+void UploadStateManager::markFileUploaded(const String& filePath, const String& checksum, unsigned long fileSize) {
     fileChecksums[filePath] = checksum;
+    if (fileSize > 0) {
+        fileSizes[filePath] = fileSize;
+    }
 }
 
 bool UploadStateManager::isFolderCompleted(const String& folderName) {

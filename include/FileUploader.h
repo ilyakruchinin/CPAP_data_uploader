@@ -67,11 +67,11 @@ private:
     // File scanning
     std::vector<String> scanDatalogFolders(fs::FS &sd, bool includeCompleted = false);
     std::vector<String> scanFolderFiles(fs::FS &sd, const String& folderPath);
-    std::vector<String> scanRootAndSettingsFiles(fs::FS &sd);
+    std::vector<String> scanSettingsFiles(fs::FS &sd);
     
     // Upload logic
     bool uploadDatalogFolder(class SDCardManager* sdManager, const String& folderName);
-    bool uploadSingleFile(class SDCardManager* sdManager, const String& filePath);
+    bool uploadSingleFile(class SDCardManager* sdManager, const String& filePath, bool force = false);
     
     // Helper: check if a DATALOG folder name (YYYYMMDD) is within the recent window
     bool isRecentFolder(const String& folderName) const;

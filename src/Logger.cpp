@@ -284,6 +284,89 @@ Logger::LogData Logger::retrieveLogs() {
 
     return result;
 }
+
+// Print all logs to a Print destination without intermediate String allocation
+size_t Logger::printLogs(Print& output) {
+    if (!initialized || buffer == nullptr || mutex == nullptr) {
+        return 0;
+    }
+
+    // Acquire mutex for thread-safe buffer access
+    if (xSemaphoreTake(mutex, portMAX_DELAY) != pdTRUE) {
+        return 0;
+    }
+
+    size_t bytesWritten = 0;
+
+    // Calculate available data to read (from tail to head)
+    uint32_t availableBytes = headIndex - tailIndex;
+    
+    if (availableBytes > bufferSize) {
+        availableBytes = bufferSize;
+    }
+
+    // Find start of first valid line if we had overflow
+    uint32_t startOffset = 0;
+    if (totalBytesLost > 0 && availableBytes > 0) {
+        for (uint32_t i = 0; i < availableBytes && i < 100; i++) {
+            uint32_t logicalIndex = tailIndex + i;
+            size_t physicalPos = logicalIndex % bufferSize;
+            if (buffer[physicalPos] == '[') {
+                startOffset = i;
+                break;
+            }
+        }
+    }
+
+    // Release mutex temporarily to avoid holding it during slow I/O
+    // We make a copy of indices
+    uint32_t currentTail = tailIndex + startOffset;
+    uint32_t currentHead = headIndex;
+    xSemaphoreGive(mutex);
+
+    char chunk[128];
+    uint32_t pos = currentTail;
+    
+    while (pos < currentHead) {
+        // Re-acquire mutex to read a chunk safely
+        if (xSemaphoreTake(mutex, portMAX_DELAY) != pdTRUE) {
+            break;
+        }
+        
+        // Check if our reader position has been overtaken by writer (buffer wrap)
+        if (tailIndex > pos) {
+            pos = tailIndex; // Skip lost data
+        }
+        
+        size_t bytesToRead = sizeof(chunk);
+        if (currentHead - pos < bytesToRead) {
+            bytesToRead = currentHead - pos;
+        }
+        
+        if (bytesToRead == 0) {
+            xSemaphoreGive(mutex);
+            break;
+        }
+        
+        for (size_t i = 0; i < bytesToRead; i++) {
+            size_t physicalPos = (pos + i) % bufferSize;
+            chunk[i] = buffer[physicalPos];
+        }
+        
+        xSemaphoreGive(mutex);
+        
+        // Write chunk to output
+        output.write((const uint8_t*)chunk, bytesToRead);
+        bytesWritten += bytesToRead;
+        pos += bytesToRead;
+        
+        // Yield to allow other tasks to run
+        yield();
+    }
+
+    return bytesWritten;
+}
+
 // Enable or disable SD card logging (debugging only)
 void Logger::enableSdCardLogging(bool enable, fs::FS* sdFS) {
     if (enable && sdFS == nullptr) {
