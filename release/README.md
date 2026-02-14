@@ -286,7 +286,7 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 1. Device reads `config.json` from SD card
 2. Connects to WiFi network
 3. Synchronizes time with internet (NTP)
-4. Loads upload history from `.upload_state.json` (if exists)
+4. Loads upload history from `.upload_state.v2` + `.upload_state.v2.log` (if present)
 
 ### Daily Upload Cycle
 1. Waits for upload eligibility based on configured mode (`UPLOAD_MODE`)
@@ -299,7 +299,7 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
    - SETTINGS files
 4. Automatically creates directories on remote share if they don't exist
 5. Releases SD card after session or time budget exhausted
-6. Saves progress to `.upload_state.json`
+6. Saves progress to `.upload_state.v2` (snapshot) and `.upload_state.v2.log` (append-only journal)
 
 ### Smart File Tracking
 - **DATALOG folders**: Tracks completion (all files uploaded = done)
@@ -475,7 +475,8 @@ The firmware includes an optional test web server for development and troublesho
 - Check logs for specific errors
 
 **Same files uploading repeatedly**
-- Check `.upload_state.json` exists on SD card
+- Check `.upload_state.v2` exists on SD card
+- Check `.upload_state.v2.log` is writable
 - Verify SD card has write permission
 - Try reset state via web interface
 
@@ -509,8 +510,8 @@ http://<device-ip>/logs
 ```
 
 **Check Upload State**
-- Look for `.upload_state.json` on SD card
-- Contains upload history and retry counts
+- Look for `.upload_state.v2` and `.upload_state.v2.log` on SD card
+- Contains upload history, retry counts, and incremental journal updates
 
 ---
 
@@ -520,7 +521,8 @@ http://<device-ip>/logs
 ```
 /
 ├── config.json              # Your configuration (you create this)
-├── .upload_state.json       # Upload tracking (auto-created)
+├── .upload_state.v2         # Upload tracking snapshot (auto-created)
+├── .upload_state.v2.log     # Upload tracking journal (auto-created)
 ├── Identification.json      # ResMed 11 identification (if present)
 ├── Identification.crc       # Identification checksum (if present)
 ├── Identification.tgt       # ResMed 9/10 identification (if present)

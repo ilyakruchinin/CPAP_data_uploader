@@ -1,6 +1,8 @@
 #include "UploadStateManager.h"
 #include "Logger.h"
-#include <ArduinoJson.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #ifdef UNIT_TEST
 #include "MockMD5.h"
@@ -8,35 +10,348 @@
 #include "esp32/rom/md5_hash.h"
 #endif
 
-static inline bool isDatalogPath(const String& path) {
-    return path.startsWith("/DATALOG/");
+namespace {
+static inline bool readLine(File& file, char* buffer, size_t bufferLen) {
+    if (bufferLen == 0) {
+        return false;
+    }
+
+    size_t idx = 0;
+    while (file.available()) {
+        int ch = file.read();
+        if (ch < 0) {
+            break;
+        }
+        if (ch == '\r') {
+            continue;
+        }
+        if (ch == '\n') {
+            break;
+        }
+        if (idx + 1 < bufferLen) {
+            buffer[idx++] = (char)ch;
+        }
+    }
+
+    if (idx == 0 && !file.available()) {
+        buffer[0] = '\0';
+        return false;
+    }
+
+    buffer[idx] = '\0';
+    return true;
+}
+
+static inline int hexNibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static inline bool parseDayToken(const char* token, uint32_t& day) {
+    if (!token) {
+        return false;
+    }
+
+    if (strcmp(token, "0") == 0) {
+        day = 0;
+        return true;
+    }
+
+    if (strlen(token) != 8) {
+        return false;
+    }
+
+    uint32_t value = 0;
+    for (size_t i = 0; i < 8; ++i) {
+        char c = token[i];
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        value = value * 10 + (uint32_t)(c - '0');
+    }
+
+    day = value;
+    return true;
+}
 }
 
 UploadStateManager::UploadStateManager() 
-    : stateFilePath("/.upload_state.json"),
+    : stateSnapshotPath("/.upload_state.v2"),
+      stateJournalPath("/.upload_state.v2.log"),
       lastUploadTimestamp(0),
+      completedCount(0),
+      pendingCount(0),
+      fileEntryCount(0),
+      currentRetryFolderDay(0),
       currentRetryCount(0),
+      journalEventCount(0),
+      journalLineCount(0),
+      forceCompaction(false),
       totalFoldersCount(0) {
+    clearState();
 }
 
 bool UploadStateManager::begin(fs::FS &sd) {
     LOG("[UploadStateManager] Initializing...");
     
     // Try to load existing state
-    if (!loadState(sd)) {
+    bool loadedState = loadState(sd);
+    if (!loadedState) {
         LOG("[UploadStateManager] WARNING: No existing state file or failed to load");
         LOG("[UploadStateManager] Starting with empty state - all files will be considered new");
-        
-        // Initialize with empty state - this is safe and allows operation to continue
-        fileChecksums.clear();
-        completedDatalogFolders.clear();
-        pendingDatalogFolders.clear();
-        currentRetryFolder = "";
-        currentRetryCount = 0;
-        lastUploadTimestamp = 0;
+        clearState();
+    }
+
+    if (loadedState && shouldCompact(sd)) {
+        compactState(sd);
     }
     
     return true;  // Always return true - we can operate with empty state
+}
+
+void UploadStateManager::clearState() {
+    lastUploadTimestamp = 0;
+    completedCount = 0;
+    pendingCount = 0;
+    fileEntryCount = 0;
+    currentRetryFolderDay = 0;
+    currentRetryCount = 0;
+    journalEventCount = 0;
+    journalLineCount = 0;
+    forceCompaction = false;
+    totalFoldersCount = 0;
+
+    memset(completedFolders, 0, sizeof(completedFolders));
+    memset(pendingFolders, 0, sizeof(pendingFolders));
+    memset(fileEntries, 0, sizeof(fileEntries));
+    memset(journalEvents, 0, sizeof(journalEvents));
+}
+
+bool UploadStateManager::isDatalogPath(const String& path) {
+    return path.startsWith("/DATALOG/");
+}
+
+bool UploadStateManager::parseDayKey(const String& text, DayKey& outDay) {
+    if (text.length() != 8) {
+        return false;
+    }
+
+    uint32_t value = 0;
+    for (size_t i = 0; i < 8; ++i) {
+        char c = text[i];
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        value = value * 10 + (uint32_t)(c - '0');
+    }
+
+    outDay = value;
+    return true;
+}
+
+void UploadStateManager::dayKeyToChars(DayKey day, char* out, size_t outLen) {
+    if (outLen == 0) {
+        return;
+    }
+    if (day == 0) {
+        snprintf(out, outLen, "0");
+        return;
+    }
+    snprintf(out, outLen, "%08lu", (unsigned long)day);
+}
+
+UploadStateManager::PathHash UploadStateManager::hashPath(const String& path) {
+    const uint64_t fnvOffset = 1469598103934665603ULL;
+    const uint64_t fnvPrime = 1099511628211ULL;
+    uint64_t hash = fnvOffset;
+
+    const char* p = path.c_str();
+    while (*p) {
+        hash ^= (uint8_t)(*p);
+        hash *= fnvPrime;
+        ++p;
+    }
+
+    return hash;
+}
+
+bool UploadStateManager::parseHexMd5(const char* hex, uint8_t out[16]) {
+    if (!hex || strlen(hex) != 32) {
+        return false;
+    }
+
+    for (int i = 0; i < 16; ++i) {
+        int hi = hexNibble(hex[i * 2]);
+        int lo = hexNibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+
+    return true;
+}
+
+void UploadStateManager::md5ToHex(const uint8_t md5[16], char out[33]) {
+    for (int i = 0; i < 16; ++i) {
+        snprintf(out + (i * 2), 3, "%02x", md5[i]);
+    }
+    out[32] = '\0';
+}
+
+int UploadStateManager::findCompletedIndex(DayKey day) const {
+    for (uint16_t i = 0; i < completedCount; ++i) {
+        if (completedFolders[i] == day) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+int UploadStateManager::findPendingIndex(DayKey day) const {
+    for (uint16_t i = 0; i < pendingCount; ++i) {
+        if (pendingFolders[i].day == day) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+int UploadStateManager::findFileIndex(PathHash pathHash) const {
+    for (uint16_t i = 0; i < fileEntryCount; ++i) {
+        if ((fileEntries[i].flags & FILE_FLAG_ACTIVE) && fileEntries[i].pathHash == pathHash) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+void UploadStateManager::queueEvent(const JournalEvent& event) {
+    if (journalEventCount >= MAX_JOURNAL_EVENTS) {
+        forceCompaction = true;
+        return;
+    }
+    journalEvents[journalEventCount++] = event;
+}
+
+bool UploadStateManager::addCompletedInternal(DayKey day, bool queue) {
+    if (day == 0) {
+        return false;
+    }
+    if (findCompletedIndex(day) >= 0) {
+        return true;
+    }
+
+    if (completedCount >= MAX_COMPLETED_FOLDERS) {
+        memmove(&completedFolders[0], &completedFolders[1], sizeof(DayKey) * (MAX_COMPLETED_FOLDERS - 1));
+        completedCount = MAX_COMPLETED_FOLDERS - 1;
+        forceCompaction = true;
+    }
+
+    completedFolders[completedCount++] = day;
+
+    if (queue) {
+        JournalEvent ev = {};
+        ev.type = JournalEventType::AddCompleted;
+        ev.day = day;
+        queueEvent(ev);
+    }
+    return true;
+}
+
+bool UploadStateManager::removeCompletedInternal(DayKey day, bool queue) {
+    int idx = findCompletedIndex(day);
+    if (idx < 0) {
+        return false;
+    }
+
+    if ((uint16_t)idx < (completedCount - 1)) {
+        memmove(&completedFolders[idx], &completedFolders[idx + 1], sizeof(DayKey) * (completedCount - idx - 1));
+    }
+    completedCount--;
+
+    if (queue) {
+        JournalEvent ev = {};
+        ev.type = JournalEventType::RemoveCompleted;
+        ev.day = day;
+        queueEvent(ev);
+    }
+    return true;
+}
+
+bool UploadStateManager::addPendingInternal(DayKey day, UnixTs ts, bool queue) {
+    if (day == 0) {
+        return false;
+    }
+
+    int idx = findPendingIndex(day);
+    if (idx >= 0) {
+        pendingFolders[idx].firstSeenTs = ts;
+    } else {
+        if (pendingCount >= MAX_PENDING_FOLDERS) {
+            memmove(&pendingFolders[0], &pendingFolders[1], sizeof(PendingFolderEntry) * (MAX_PENDING_FOLDERS - 1));
+            pendingCount = MAX_PENDING_FOLDERS - 1;
+            forceCompaction = true;
+        }
+        pendingFolders[pendingCount].day = day;
+        pendingFolders[pendingCount].firstSeenTs = ts;
+        pendingCount++;
+    }
+
+    if (queue) {
+        JournalEvent ev = {};
+        ev.type = JournalEventType::AddPending;
+        ev.day = day;
+        ev.timestamp = ts;
+        queueEvent(ev);
+    }
+    return true;
+}
+
+bool UploadStateManager::removePendingInternal(DayKey day, bool queue) {
+    int idx = findPendingIndex(day);
+    if (idx < 0) {
+        return false;
+    }
+
+    if ((uint16_t)idx < (pendingCount - 1)) {
+        memmove(&pendingFolders[idx], &pendingFolders[idx + 1], sizeof(PendingFolderEntry) * (pendingCount - idx - 1));
+    }
+    pendingCount--;
+
+    if (queue) {
+        JournalEvent ev = {};
+        ev.type = JournalEventType::RemovePending;
+        ev.day = day;
+        queueEvent(ev);
+    }
+    return true;
+}
+
+void UploadStateManager::setRetryInternal(DayKey day, int retryCount, bool queue) {
+    currentRetryFolderDay = day;
+    currentRetryCount = retryCount < 0 ? 0 : retryCount;
+
+    if (queue) {
+        JournalEvent ev = {};
+        ev.type = JournalEventType::SetRetry;
+        ev.day = day;
+        ev.retryCount = (uint16_t)currentRetryCount;
+        queueEvent(ev);
+    }
+}
+
+void UploadStateManager::setTimestampInternal(UnixTs ts, bool queue) {
+    lastUploadTimestamp = ts;
+
+    if (queue) {
+        JournalEvent ev = {};
+        ev.type = JournalEventType::SetTimestamp;
+        ev.timestamp = ts;
+        queueEvent(ev);
+    }
 }
 
 String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath) {
@@ -94,7 +409,7 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
     String checksumStr = "";
     for (int i = 0; i < 16; i++) {
         char hex[3];
-        sprintf(hex, "%02x", hash[i]);
+        snprintf(hex, sizeof(hex), "%02x", hash[i]);
         checksumStr += hex;
     }
     
@@ -102,80 +417,116 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
 }
 
 bool UploadStateManager::hasFileChanged(fs::FS &sd, const String& filePath) {
-    auto checksumIt = fileChecksums.find(filePath);
-    
-    // Fast path: compare file size first (O(1), one file open)
-    // CPAP files typically grow when new data is appended, so size change
-    // catches ~95% of modifications without reading the file.
-    auto sizeIt = fileSizes.find(filePath);
-    if (sizeIt != fileSizes.end()) {
+    PathHash pathHash = hashPath(filePath);
+    int idx = findFileIndex(pathHash);
+    if (idx < 0) {
         File file = sd.open(filePath, FILE_READ);
-        if (!file) return false;  // Can't read — treat as unchanged
-        unsigned long currentSize = file.size();
+        if (!file) {
+            return false;
+        }
         file.close();
-        
-        if (currentSize != sizeIt->second) {
-            LOG_DEBUGF("[UploadStateManager] Size changed: %s (%lu -> %lu)",
-                       filePath.c_str(), sizeIt->second, currentSize);
-            return true;  // Size differs — definitely changed
+        return true;
+    }
+
+    const FileFingerprintEntry& entry = fileEntries[idx];
+
+    if (entry.fileSize > 0) {
+        File file = sd.open(filePath, FILE_READ);
+        if (!file) {
+            return false;
         }
 
-        // Size unchanged and we're in size-only tracking mode (no checksum stored)
-        if (checksumIt == fileChecksums.end() || checksumIt->second.isEmpty()) {
+        unsigned long currentSize = file.size();
+        file.close();
+
+        if (currentSize != entry.fileSize) {
+            LOG_DEBUGF("[UploadStateManager] Size changed: %s (%lu -> %lu)",
+                       filePath.c_str(),
+                       entry.fileSize,
+                       currentSize);
+            return true;
+        }
+
+        if ((entry.flags & FILE_FLAG_HAS_MD5) == 0) {
             return false;
         }
     }
 
-    // No stored checksum and no size record — treat as new/changed
-    if (checksumIt == fileChecksums.end()) {
-        return true;
+    if ((entry.flags & FILE_FLAG_HAS_MD5) == 0) {
+        return false;
     }
-    
-    // Slow path: size matches (or no stored size) — compare MD5 checksums
+
     String currentChecksum = calculateChecksum(sd, filePath);
     if (currentChecksum.isEmpty()) {
-        return false;  // Can't read file
+        return false;
     }
-    
-    return (checksumIt->second != currentChecksum);
+
+    uint8_t currentMd5[16] = {0};
+    if (!parseHexMd5(currentChecksum.c_str(), currentMd5)) {
+        return true;
+    }
+
+    return memcmp(currentMd5, entry.md5, sizeof(currentMd5)) != 0;
 }
 
 void UploadStateManager::markFileUploaded(const String& filePath, const String& checksum, unsigned long fileSize) {
-    if (!checksum.isEmpty()) {
-        fileChecksums[filePath] = checksum;
-    } else {
-        // Size-only tracking entry (used for recent DATALOG re-scan optimization)
-        fileChecksums.erase(filePath);
+    PathHash pathHash = hashPath(filePath);
+
+    if (isDatalogPath(filePath)) {
+        if (fileSize > 0) {
+            upsertFileEntry(pathHash, (uint32_t)fileSize, nullptr, false, false, false);
+        }
+        return;
     }
-    if (fileSize > 0) {
-        fileSizes[filePath] = fileSize;
+
+    if (checksum.isEmpty()) {
+        removeFileEntry(pathHash, true);
+        return;
     }
+
+    uint8_t md5[16] = {0};
+    bool hasMd5 = parseHexMd5(checksum.c_str(), md5);
+    upsertFileEntry(pathHash,
+                    (uint32_t)fileSize,
+                    hasMd5 ? md5 : nullptr,
+                    hasMd5,
+                    true,
+                    true);
 }
 
 bool UploadStateManager::isFolderCompleted(const String& folderName) {
-    return completedDatalogFolders.find(folderName) != completedDatalogFolders.end();
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        return false;
+    }
+    return findCompletedIndex(day) >= 0;
 }
 
 void UploadStateManager::markFolderCompleted(const String& folderName) {
-    completedDatalogFolders.insert(folderName);
-    
-    // Remove from pending state if it was pending
-    auto pendingIt = pendingDatalogFolders.find(folderName);
-    if (pendingIt != pendingDatalogFolders.end()) {
-        pendingDatalogFolders.erase(pendingIt);
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        LOG_WARNF("[UploadStateManager] Invalid folder name for completion: %s", folderName.c_str());
+        return;
+    }
+
+    addCompletedInternal(day, true);
+
+    if (removePendingInternal(day, true)) {
         LOG_DEBUGF("[UploadStateManager] Removed folder from pending state: %s", folderName.c_str());
     }
-    
-    // Clear retry tracking for this folder since it's now complete
-    if (currentRetryFolder == folderName) {
+
+    if (currentRetryFolderDay == day) {
         clearCurrentRetry();
     }
 }
 
 void UploadStateManager::removeFolderFromCompleted(const String& folderName) {
-    auto it = completedDatalogFolders.find(folderName);
-    if (it != completedDatalogFolders.end()) {
-        completedDatalogFolders.erase(it);
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        return;
+    }
+
+    if (removeCompletedInternal(day, true)) {
         LOG_DEBUGF("[UploadStateManager] Removed folder from completed state: %s", folderName.c_str());
     }
 }
@@ -185,31 +536,35 @@ int UploadStateManager::getCurrentRetryCount() {
 }
 
 void UploadStateManager::setCurrentRetryFolder(const String& folderName) {
-    if (currentRetryFolder != folderName) {
-        // New folder, reset count
-        currentRetryFolder = folderName;
-        currentRetryCount = 0;
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        LOG_WARNF("[UploadStateManager] Invalid retry folder: %s", folderName.c_str());
+        return;
+    }
+
+    if (currentRetryFolderDay != day) {
+        setRetryInternal(day, 0, true);
     }
 }
 
 void UploadStateManager::incrementCurrentRetryCount() {
-    currentRetryCount++;
+    setRetryInternal(currentRetryFolderDay, currentRetryCount + 1, true);
 }
 
 void UploadStateManager::clearCurrentRetry() {
-    currentRetryFolder = "";
-    currentRetryCount = 0;
+    setRetryInternal(0, 0, true);
 }
 
 int UploadStateManager::getCompletedFoldersCount() const {
-    return completedDatalogFolders.size();
+    return completedCount;
 }
 
 int UploadStateManager::getIncompleteFoldersCount() const {
     if (totalFoldersCount == 0) {
         return 0;  // Not yet scanned
     }
-    return totalFoldersCount - completedDatalogFolders.size() - pendingDatalogFolders.size();
+    int incomplete = totalFoldersCount - completedCount - pendingCount;
+    return incomplete > 0 ? incomplete : 0;
 }
 
 void UploadStateManager::setTotalFoldersCount(int count) {
@@ -217,49 +572,76 @@ void UploadStateManager::setTotalFoldersCount(int count) {
 }
 
 bool UploadStateManager::isPendingFolder(const String& folderName) {
-    return pendingDatalogFolders.find(folderName) != pendingDatalogFolders.end();
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        return false;
+    }
+    return findPendingIndex(day) >= 0;
 }
 
 void UploadStateManager::markFolderPending(const String& folderName, unsigned long timestamp) {
-    pendingDatalogFolders[folderName] = timestamp;
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        LOG_WARNF("[UploadStateManager] Invalid folder name for pending: %s", folderName.c_str());
+        return;
+    }
+
+    addPendingInternal(day, (UnixTs)timestamp, true);
     LOG_DEBUGF("[UploadStateManager] Marked folder as pending: %s (timestamp: %lu)", 
          folderName.c_str(), timestamp);
 }
 
 void UploadStateManager::removeFolderFromPending(const String& folderName) {
-    auto it = pendingDatalogFolders.find(folderName);
-    if (it != pendingDatalogFolders.end()) {
-        pendingDatalogFolders.erase(it);
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        return;
+    }
+
+    if (removePendingInternal(day, true)) {
         LOG_DEBUGF("[UploadStateManager] Removed folder from pending state: %s", folderName.c_str());
     }
 }
 
 bool UploadStateManager::shouldPromotePendingToCompleted(const String& folderName, unsigned long currentTime) {
-    auto it = pendingDatalogFolders.find(folderName);
-    if (it == pendingDatalogFolders.end()) {
-        return false;  // Not a pending folder
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        return false;
     }
-    
-    unsigned long firstSeenTime = it->second;
+
+    int idx = findPendingIndex(day);
+    if (idx < 0) {
+        return false;
+    }
+
+    unsigned long firstSeenTime = pendingFolders[idx].firstSeenTs;
     return (currentTime - firstSeenTime) >= PENDING_FOLDER_TIMEOUT_SECONDS;
 }
 
 void UploadStateManager::promotePendingToCompleted(const String& folderName) {
-    auto it = pendingDatalogFolders.find(folderName);
-    if (it != pendingDatalogFolders.end()) {
-        pendingDatalogFolders.erase(it);
-        completedDatalogFolders.insert(folderName);
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        return;
+    }
+
+    if (removePendingInternal(day, true)) {
+        addCompletedInternal(day, true);
         LOGF("[UploadStateManager] Promoted pending folder to completed: %s (empty for 7+ days)", 
              folderName.c_str());
     }
 }
 
 int UploadStateManager::getPendingFoldersCount() const {
-    return pendingDatalogFolders.size();
+    return pendingCount;
 }
 
 String UploadStateManager::getCurrentRetryFolder() const {
-    return currentRetryFolder;
+    if (currentRetryFolderDay == 0) {
+        return "";
+    }
+
+    char dayText[16] = {0};
+    dayKeyToChars(currentRetryFolderDay, dayText, sizeof(dayText));
+    return String(dayText);
 }
 
 unsigned long UploadStateManager::getLastUploadTimestamp() {
@@ -267,267 +649,599 @@ unsigned long UploadStateManager::getLastUploadTimestamp() {
 }
 
 void UploadStateManager::setLastUploadTimestamp(unsigned long timestamp) {
-    lastUploadTimestamp = timestamp;
+    setTimestampInternal((UnixTs)timestamp, true);
 }
 
 bool UploadStateManager::save(fs::FS &sd) {
     return saveState(sd);
 }
 
-bool UploadStateManager::loadState(fs::FS &sd) {
-    File file = sd.open(stateFilePath, FILE_READ);
-    if (!file) {
-        LOG("[UploadStateManager] State file does not exist - will create on first save");
-        return false;
-    }
-    
-    // Check file size to detect corruption
-    size_t fileSize = file.size();
-    if (fileSize == 0) {
-        LOG("[UploadStateManager] WARNING: State file is empty (corrupted)");
-        file.close();
-        return false;
-    }
-    
-    if (fileSize > 65536) {  // 64KB sanity check
-        LOGF("[UploadStateManager] WARNING: State file unusually large (%u bytes) - may be corrupted", fileSize);
-        file.close();
-        return false;
-    }
-    
-    // Allocate JSON document with dynamic sizing based on file size
-    // ArduinoJson recommends capacity = fileSize * 1.5 to 2.0 for deserialization overhead
-    // We use 2.0x multiplier to ensure sufficient capacity for JSON parsing
-    size_t jsonCapacity = fileSize * 2;
-    
-    // Ensure minimum capacity of 4KB for small files
-    if (jsonCapacity < 4096) {
-        jsonCapacity = 4096;
-    }
-    
-    LOG_DEBUGF("[UploadStateManager] Allocating %u bytes for JSON document (file size: %u bytes)", 
-         jsonCapacity, fileSize);
-    
-    DynamicJsonDocument doc(jsonCapacity);
-    
-    DeserializationError error = deserializeJson(doc, file);
-    file.close();
-    
-    if (error) {
-        LOGF("[UploadStateManager] ERROR: Failed to parse state file: %s", error.c_str());
-        
-        // Check if error is due to insufficient memory
-#ifdef UNIT_TEST
-        if (error == DeserializationError(DeserializationError::NoMemory)) {
-#else
-        if (error == DeserializationError::NoMemory) {
-#endif
-            LOGF("[UploadStateManager] ERROR: Insufficient memory to parse state file (needed ~%u bytes)", 
-                 jsonCapacity);
-            LOG("[UploadStateManager] Consider pruning old entries or increasing available RAM");
-        }
-        
-        LOG("[UploadStateManager] State file may be corrupted - continuing with empty state");
-        return false;
-    }
-    
-    // Validate version field
-    int version = doc["version"] | 0;
-    if (version != 1) {
-        LOGF("[UploadStateManager] WARNING: Unknown state file version: %d", version);
-        LOG("[UploadStateManager] Attempting to load anyway...");
-    }
-    
-    // Load timestamp
-    lastUploadTimestamp = doc["last_upload_timestamp"] | 0UL;
-    
-    // Load file checksums
-    fileChecksums.clear();
-#ifdef UNIT_TEST
-    // Mock ArduinoJson uses getObject() and returns std::map
-    JsonObject checksums = doc.getObject("file_checksums");
-    if (!checksums.isNull()) {
-        for (auto it = checksums.begin(); it != checksums.end(); ++it) {
-            fileChecksums[String(it->first.c_str())] = String(it->second.as<const char*>());
-        }
-    }
-#else
-    // Real ArduinoJson v6 uses operator[] and JsonPair
-    JsonObject checksums = doc["file_checksums"];
-    if (!checksums.isNull()) {
-        for (JsonPair kv : checksums) {
-            fileChecksums[String(kv.key().c_str())] = String(kv.value().as<const char*>());
-        }
-    }
-#endif
+bool UploadStateManager::upsertFileEntry(PathHash pathHash,
+                                         uint32_t fileSize,
+                                         const uint8_t* md5,
+                                         bool hasMd5,
+                                         bool persistent,
+                                         bool queue) {
+    int idx = findFileIndex(pathHash);
 
-    // Prune legacy DATALOG checksum entries to keep state small and avoid
-    // heap fragmentation from large checksum maps/documents. DATALOG files are
-    // folder-tracked; only root/SETTINGS checksum tracking is required long-term.
-    int prunedDatalogChecksums = 0;
-    for (auto it = fileChecksums.begin(); it != fileChecksums.end(); ) {
-        if (isDatalogPath(it->first)) {
-            it = fileChecksums.erase(it);
-            prunedDatalogChecksums++;
+    if (idx < 0) {
+        if (fileEntryCount >= MAX_FILE_ENTRIES) {
+            int evictIdx = -1;
+            for (uint16_t i = 0; i < fileEntryCount; ++i) {
+                if ((fileEntries[i].flags & FILE_FLAG_PERSISTENT) == 0) {
+                    evictIdx = (int)i;
+                    break;
+                }
+            }
+
+            if (evictIdx < 0) {
+                evictIdx = 0;
+            }
+
+            if ((uint16_t)evictIdx < (fileEntryCount - 1)) {
+                memmove(&fileEntries[evictIdx], &fileEntries[evictIdx + 1],
+                        sizeof(FileFingerprintEntry) * (fileEntryCount - evictIdx - 1));
+            }
+            fileEntryCount--;
+            forceCompaction = true;
+        }
+
+        idx = fileEntryCount++;
+    }
+
+    FileFingerprintEntry& entry = fileEntries[idx];
+    entry.pathHash = pathHash;
+    entry.fileSize = fileSize;
+    entry.flags = FILE_FLAG_ACTIVE | (persistent ? FILE_FLAG_PERSISTENT : 0) | (hasMd5 ? FILE_FLAG_HAS_MD5 : 0);
+
+    if (hasMd5 && md5) {
+        memcpy(entry.md5, md5, sizeof(entry.md5));
+    } else {
+        memset(entry.md5, 0, sizeof(entry.md5));
+    }
+
+    if (queue && persistent) {
+        JournalEvent ev = {};
+        ev.type = JournalEventType::SetFile;
+        ev.pathHash = pathHash;
+        ev.fileSize = fileSize;
+        ev.hasMd5 = hasMd5;
+        if (hasMd5 && md5) {
+            memcpy(ev.md5, md5, sizeof(ev.md5));
+        }
+        queueEvent(ev);
+    }
+
+    return true;
+}
+
+bool UploadStateManager::removeFileEntry(PathHash pathHash, bool queue) {
+    int idx = findFileIndex(pathHash);
+    if (idx < 0) {
+        return false;
+    }
+
+    bool persistent = (fileEntries[idx].flags & FILE_FLAG_PERSISTENT) != 0;
+
+    if ((uint16_t)idx < (fileEntryCount - 1)) {
+        memmove(&fileEntries[idx], &fileEntries[idx + 1],
+                sizeof(FileFingerprintEntry) * (fileEntryCount - idx - 1));
+    }
+    fileEntryCount--;
+
+    if (queue && persistent) {
+        JournalEvent ev = {};
+        ev.type = JournalEventType::RemoveFile;
+        ev.pathHash = pathHash;
+        queueEvent(ev);
+    }
+
+    return true;
+}
+
+bool UploadStateManager::appendJournalLine(File& file, const JournalEvent& event) {
+    char line[192] = {0};
+    char dayText[16] = {0};
+
+    switch (event.type) {
+        case JournalEventType::SetTimestamp:
+            snprintf(line, sizeof(line), "T|%lu", (unsigned long)event.timestamp);
+            break;
+        case JournalEventType::SetRetry:
+            dayKeyToChars(event.day, dayText, sizeof(dayText));
+            snprintf(line, sizeof(line), "R|%s|%u", dayText, (unsigned)event.retryCount);
+            break;
+        case JournalEventType::AddCompleted:
+            dayKeyToChars(event.day, dayText, sizeof(dayText));
+            snprintf(line, sizeof(line), "C+|%s", dayText);
+            break;
+        case JournalEventType::RemoveCompleted:
+            dayKeyToChars(event.day, dayText, sizeof(dayText));
+            snprintf(line, sizeof(line), "C-|%s", dayText);
+            break;
+        case JournalEventType::AddPending:
+            dayKeyToChars(event.day, dayText, sizeof(dayText));
+            snprintf(line, sizeof(line), "P+|%s|%lu", dayText, (unsigned long)event.timestamp);
+            break;
+        case JournalEventType::RemovePending:
+            dayKeyToChars(event.day, dayText, sizeof(dayText));
+            snprintf(line, sizeof(line), "P-|%s", dayText);
+            break;
+        case JournalEventType::SetFile: {
+            char md5Hex[33] = {0};
+            if (event.hasMd5) {
+                md5ToHex(event.md5, md5Hex);
+            } else {
+                snprintf(md5Hex, sizeof(md5Hex), "-");
+            }
+            snprintf(line,
+                     sizeof(line),
+                     "F|%016llx|%lu|%s",
+                     (unsigned long long)event.pathHash,
+                     (unsigned long)event.fileSize,
+                     md5Hex);
+            break;
+        }
+        case JournalEventType::RemoveFile:
+            snprintf(line, sizeof(line), "F-|%016llx", (unsigned long long)event.pathHash);
+            break;
+    }
+
+    return file.println(line) > 0;
+}
+
+bool UploadStateManager::flushJournal(fs::FS &sd) {
+    if (journalEventCount == 0) {
+        return true;
+    }
+
+    File file = sd.open(stateJournalPath, FILE_APPEND);
+    if (!file) {
+        LOGF("[UploadStateManager] ERROR: Failed to open journal file for append: %s", stateJournalPath.c_str());
+        return false;
+    }
+
+    for (uint16_t i = 0; i < journalEventCount; ++i) {
+        if (!appendJournalLine(file, journalEvents[i])) {
+            file.close();
+            LOG("[UploadStateManager] ERROR: Failed to append journal event");
+            return false;
+        }
+    }
+
+    file.close();
+
+    if ((uint32_t)journalLineCount + journalEventCount > 0xFFFFu) {
+        journalLineCount = 0xFFFFu;
+    } else {
+        journalLineCount = (uint16_t)(journalLineCount + journalEventCount);
+    }
+
+    journalEventCount = 0;
+    return true;
+}
+
+bool UploadStateManager::applySnapshotLine(const char* line) {
+    if (!line || line[0] == '\0') {
+        return true;
+    }
+
+    if (strncmp(line, "R|", 2) == 0) {
+        char dayToken[16] = {0};
+        unsigned long retryCount = 0;
+        if (sscanf(line, "R|%15[^|]|%lu", dayToken, &retryCount) == 2) {
+            DayKey day = 0;
+            if (!parseDayToken(dayToken, day)) {
+                return false;
+            }
+
+            setRetryInternal(day, (int)retryCount, false);
+            return true;
+        }
+        return false;
+    }
+
+    if (strncmp(line, "C|", 2) == 0) {
+        char dayToken[16] = {0};
+        if (sscanf(line, "C|%15s", dayToken) == 1) {
+            DayKey day = 0;
+            if (parseDayToken(dayToken, day)) {
+                return addCompletedInternal(day, false);
+            }
+        }
+        return false;
+    }
+
+    if (strncmp(line, "P|", 2) == 0) {
+        char dayToken[16] = {0};
+        unsigned long firstSeenTs = 0;
+        if (sscanf(line, "P|%15[^|]|%lu", dayToken, &firstSeenTs) == 2) {
+            DayKey day = 0;
+            if (parseDayToken(dayToken, day)) {
+                return addPendingInternal(day, (UnixTs)firstSeenTs, false);
+            }
+        }
+        return false;
+    }
+
+    if (strncmp(line, "F|", 2) == 0) {
+        char pathHashHex[24] = {0};
+        unsigned long fileSize = 0;
+        char md5Hex[40] = {0};
+        if (sscanf(line, "F|%23[^|]|%lu|%39s", pathHashHex, &fileSize, md5Hex) == 3) {
+            PathHash pathHash = (PathHash)strtoull(pathHashHex, nullptr, 16);
+            uint8_t md5[16] = {0};
+            bool hasMd5 = false;
+            if (strcmp(md5Hex, "-") != 0) {
+                hasMd5 = parseHexMd5(md5Hex, md5);
+                if (!hasMd5) {
+                    return false;
+                }
+            }
+
+            return upsertFileEntry(pathHash,
+                                   (uint32_t)fileSize,
+                                   hasMd5 ? md5 : nullptr,
+                                   hasMd5,
+                                   true,
+                                   false);
+        }
+        return false;
+    }
+
+    return false;
+}
+
+bool UploadStateManager::applyJournalLine(const char* line) {
+    if (!line || line[0] == '\0') {
+        return true;
+    }
+
+    if (strncmp(line, "T|", 2) == 0) {
+        unsigned long ts = 0;
+        if (sscanf(line, "T|%lu", &ts) == 1) {
+            setTimestampInternal((UnixTs)ts, false);
+            return true;
+        }
+        return false;
+    }
+
+    if (strncmp(line, "R|", 2) == 0) {
+        char dayToken[16] = {0};
+        unsigned long retryCount = 0;
+        if (sscanf(line, "R|%15[^|]|%lu", dayToken, &retryCount) == 2) {
+            DayKey day = 0;
+            if (!parseDayToken(dayToken, day)) {
+                return false;
+            }
+
+            setRetryInternal(day, (int)retryCount, false);
+            return true;
+        }
+        return false;
+    }
+
+    if (strncmp(line, "C+|", 3) == 0) {
+        char dayToken[16] = {0};
+        if (sscanf(line, "C+|%15s", dayToken) == 1) {
+            DayKey day = 0;
+            if (parseDayToken(dayToken, day)) {
+                return addCompletedInternal(day, false);
+            }
+        }
+        return false;
+    }
+
+    if (strncmp(line, "C-|", 3) == 0) {
+        char dayToken[16] = {0};
+        if (sscanf(line, "C-|%15s", dayToken) == 1) {
+            DayKey day = 0;
+            if (parseDayToken(dayToken, day)) {
+                return removeCompletedInternal(day, false);
+            }
+        }
+        return false;
+    }
+
+    if (strncmp(line, "P+|", 3) == 0) {
+        char dayToken[16] = {0};
+        unsigned long firstSeenTs = 0;
+        if (sscanf(line, "P+|%15[^|]|%lu", dayToken, &firstSeenTs) == 2) {
+            DayKey day = 0;
+            if (parseDayToken(dayToken, day)) {
+                return addPendingInternal(day, (UnixTs)firstSeenTs, false);
+            }
+        }
+        return false;
+    }
+
+    if (strncmp(line, "P-|", 3) == 0) {
+        char dayToken[16] = {0};
+        if (sscanf(line, "P-|%15s", dayToken) == 1) {
+            DayKey day = 0;
+            if (parseDayToken(dayToken, day)) {
+                return removePendingInternal(day, false);
+            }
+        }
+        return false;
+    }
+
+    if (strncmp(line, "F-|", 3) == 0) {
+        char pathHashHex[24] = {0};
+        if (sscanf(line, "F-|%23s", pathHashHex) == 1) {
+            PathHash pathHash = (PathHash)strtoull(pathHashHex, nullptr, 16);
+            return removeFileEntry(pathHash, false);
+        }
+        return false;
+    }
+
+    if (strncmp(line, "F|", 2) == 0) {
+        char pathHashHex[24] = {0};
+        unsigned long fileSize = 0;
+        char md5Hex[40] = {0};
+        if (sscanf(line, "F|%23[^|]|%lu|%39s", pathHashHex, &fileSize, md5Hex) == 3) {
+            PathHash pathHash = (PathHash)strtoull(pathHashHex, nullptr, 16);
+            uint8_t md5[16] = {0};
+            bool hasMd5 = false;
+            if (strcmp(md5Hex, "-") != 0) {
+                hasMd5 = parseHexMd5(md5Hex, md5);
+                if (!hasMd5) {
+                    return false;
+                }
+            }
+
+            return upsertFileEntry(pathHash,
+                                   (uint32_t)fileSize,
+                                   hasMd5 ? md5 : nullptr,
+                                   hasMd5,
+                                   true,
+                                   false);
+        }
+        return false;
+    }
+
+    return false;
+}
+
+bool UploadStateManager::replayJournal(fs::FS &sd) {
+    File file = sd.open(stateJournalPath, FILE_READ);
+    if (!file) {
+        journalLineCount = 0;
+        return false;
+    }
+
+    char line[256] = {0};
+    uint16_t lines = 0;
+
+    while (readLine(file, line, sizeof(line))) {
+        if (line[0] == '\0') {
+            continue;
+        }
+
+        if (!applyJournalLine(line)) {
+            LOG_WARNF("[UploadStateManager] Ignoring invalid journal line: %s", line);
+            continue;
+        }
+
+        if (lines < 0xFFFFu) {
+            lines++;
+        }
+    }
+
+    file.close();
+    journalLineCount = lines;
+    return lines > 0;
+}
+
+bool UploadStateManager::shouldCompact(fs::FS &sd) const {
+    if (forceCompaction) {
+        return true;
+    }
+
+    if (!sd.exists(stateSnapshotPath)) {
+        return true;
+    }
+
+    if (journalLineCount >= COMPACTION_LINE_THRESHOLD) {
+        return true;
+    }
+
+    if (sd.exists(stateJournalPath)) {
+        File file = sd.open(stateJournalPath, FILE_READ);
+        if (file) {
+            size_t journalSize = file.size();
+            file.close();
+            if (journalSize >= COMPACTION_SIZE_THRESHOLD_BYTES) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool UploadStateManager::compactState(fs::FS &sd) {
+    String tempPath = stateSnapshotPath + ".tmp";
+    File file = sd.open(tempPath, FILE_WRITE);
+    if (!file) {
+        LOGF("[UploadStateManager] ERROR: Failed to open temp snapshot file: %s", tempPath.c_str());
+        return false;
+    }
+
+    char line[256] = {0};
+    snprintf(line, sizeof(line), "U2|2|%lu", (unsigned long)lastUploadTimestamp);
+    if (file.println(line) == 0) {
+        file.close();
+        sd.remove(tempPath);
+        return false;
+    }
+
+    char retryDay[16] = {0};
+    dayKeyToChars(currentRetryFolderDay, retryDay, sizeof(retryDay));
+    snprintf(line, sizeof(line), "R|%s|%u", retryDay, (unsigned)currentRetryCount);
+    if (file.println(line) == 0) {
+        file.close();
+        sd.remove(tempPath);
+        return false;
+    }
+
+    for (uint16_t i = 0; i < completedCount; ++i) {
+        char dayText[16] = {0};
+        dayKeyToChars(completedFolders[i], dayText, sizeof(dayText));
+        snprintf(line, sizeof(line), "C|%s", dayText);
+        if (file.println(line) == 0) {
+            file.close();
+            sd.remove(tempPath);
+            return false;
+        }
+    }
+
+    for (uint16_t i = 0; i < pendingCount; ++i) {
+        char dayText[16] = {0};
+        dayKeyToChars(pendingFolders[i].day, dayText, sizeof(dayText));
+        snprintf(line, sizeof(line), "P|%s|%lu", dayText, (unsigned long)pendingFolders[i].firstSeenTs);
+        if (file.println(line) == 0) {
+            file.close();
+            sd.remove(tempPath);
+            return false;
+        }
+    }
+
+    for (uint16_t i = 0; i < fileEntryCount; ++i) {
+        const FileFingerprintEntry& entry = fileEntries[i];
+        if ((entry.flags & FILE_FLAG_ACTIVE) == 0 || (entry.flags & FILE_FLAG_PERSISTENT) == 0) {
+            continue;
+        }
+
+        char md5Hex[33] = {0};
+        if (entry.flags & FILE_FLAG_HAS_MD5) {
+            md5ToHex(entry.md5, md5Hex);
         } else {
-            ++it;
+            snprintf(md5Hex, sizeof(md5Hex), "-");
+        }
+
+        snprintf(line,
+                 sizeof(line),
+                 "F|%016llx|%lu|%s",
+                 (unsigned long long)entry.pathHash,
+                 (unsigned long)entry.fileSize,
+                 md5Hex);
+        if (file.println(line) == 0) {
+            file.close();
+            sd.remove(tempPath);
+            return false;
         }
     }
-    if (prunedDatalogChecksums > 0) {
-        LOGF("[UploadStateManager] Pruned %d legacy DATALOG checksum entries", prunedDatalogChecksums);
+
+    file.close();
+
+    File verify = sd.open(tempPath, FILE_READ);
+    if (!verify) {
+        sd.remove(tempPath);
+        return false;
     }
-    
-    // Load completed folders
-    completedDatalogFolders.clear();
-#ifdef UNIT_TEST
-    // Mock ArduinoJson uses getArray()
-    JsonArray folders = doc.getArray("completed_datalog_folders");
-#else
-    // Real ArduinoJson v6 uses operator[] with implicit conversion
-    JsonArray folders = doc["completed_datalog_folders"];
-#endif
-    if (!folders.isNull()) {
-        for (JsonVariant v : folders) {
-            completedDatalogFolders.insert(String(v.as<const char*>()));
+
+    size_t verifySize = verify.size();
+    verify.close();
+    if (verifySize == 0) {
+        sd.remove(tempPath);
+        return false;
+    }
+
+    if (sd.exists(stateSnapshotPath)) {
+        sd.remove(stateSnapshotPath);
+    }
+
+    if (!sd.rename(tempPath, stateSnapshotPath)) {
+        sd.remove(tempPath);
+        return false;
+    }
+
+    if (sd.exists(stateJournalPath)) {
+        sd.remove(stateJournalPath);
+    }
+
+    journalEventCount = 0;
+    journalLineCount = 0;
+    forceCompaction = false;
+
+    return true;
+}
+
+bool UploadStateManager::loadState(fs::FS &sd) {
+    clearState();
+
+    bool loadedSnapshot = false;
+
+    if (sd.exists(stateSnapshotPath)) {
+        File file = sd.open(stateSnapshotPath, FILE_READ);
+        if (!file) {
+            LOGF("[UploadStateManager] ERROR: Failed to open snapshot file: %s", stateSnapshotPath.c_str());
+            return false;
         }
-    }
-    
-    // Load pending folders (backward compatibility - initialize empty if missing)
-    pendingDatalogFolders.clear();
-#ifdef UNIT_TEST
-    // Mock ArduinoJson uses getObject()
-    JsonObject pendingFolders = doc.getObject("pending_datalog_folders");
-    if (!pendingFolders.isNull()) {
-        for (auto it = pendingFolders.begin(); it != pendingFolders.end(); ++it) {
-            pendingDatalogFolders[String(it->first.c_str())] = it->second.as<unsigned long>();
+
+        char line[256] = {0};
+        if (!readLine(file, line, sizeof(line))) {
+            file.close();
+            LOG("[UploadStateManager] WARNING: Snapshot file is empty");
+            return false;
         }
-    }
-#else
-    // Real ArduinoJson v6 uses operator[] and JsonPair
-    JsonObject pendingFolders = doc["pending_datalog_folders"];
-    if (!pendingFolders.isNull()) {
-        for (JsonPair kv : pendingFolders) {
-            pendingDatalogFolders[String(kv.key().c_str())] = kv.value().as<unsigned long>();
+
+        unsigned long version = 0;
+        unsigned long ts = 0;
+        if (sscanf(line, "U2|%lu|%lu", &version, &ts) != 2 || version != 2) {
+            file.close();
+            LOGF("[UploadStateManager] ERROR: Invalid snapshot header: %s", line);
+            return false;
         }
+
+        setTimestampInternal((UnixTs)ts, false);
+
+        while (readLine(file, line, sizeof(line))) {
+            if (line[0] == '\0') {
+                continue;
+            }
+
+            if (!applySnapshotLine(line)) {
+                LOG_WARNF("[UploadStateManager] Ignoring invalid snapshot line: %s", line);
+            }
+        }
+
+        file.close();
+        loadedSnapshot = true;
     }
-#endif
-    
-    // Load retry tracking
-    currentRetryFolder = doc["current_retry_folder"] | "";
-    currentRetryCount = doc["current_retry_count"] | 0;
-    
-    LOG("[UploadStateManager] State file loaded successfully");
-    LOG_DEBUGF("[UploadStateManager]   Tracked files: %u", fileChecksums.size());
-    LOG_DEBUGF("[UploadStateManager]   Completed folders: %u", completedDatalogFolders.size());
-    LOG_DEBUGF("[UploadStateManager]   Pending folders: %u", pendingDatalogFolders.size());
-    if (!currentRetryFolder.isEmpty()) {
-        LOG_DEBUGF("[UploadStateManager]   Current retry folder: %s (attempt %d)", 
-             currentRetryFolder.c_str(), currentRetryCount);
+
+    bool replayedJournal = replayJournal(sd);
+
+    if (!loadedSnapshot && !replayedJournal) {
+        LOG("[UploadStateManager] State snapshot/journal not found - will create on first save");
+        return false;
     }
-    
+
+    LOG("[UploadStateManager] State v2 loaded successfully");
+    LOG_DEBUGF("[UploadStateManager]   Completed folders: %u", completedCount);
+    LOG_DEBUGF("[UploadStateManager]   Pending folders: %u", pendingCount);
+    LOG_DEBUGF("[UploadStateManager]   Tracked files: %u", fileEntryCount);
+    if (currentRetryFolderDay != 0) {
+        char retryDay[16] = {0};
+        dayKeyToChars(currentRetryFolderDay, retryDay, sizeof(retryDay));
+        LOG_DEBUGF("[UploadStateManager]   Current retry folder: %s (attempt %d)", retryDay, currentRetryCount);
+    }
+
     return true;
 }
 
 bool UploadStateManager::saveState(fs::FS &sd) {
-    // Calculate required JSON document size dynamically
-    // Estimate: base overhead (200) + folders (30 bytes each) + pending folders (50 bytes each) + checksums (100 bytes each)
-    size_t estimatedSize = 200 + 
-                          (completedDatalogFolders.size() * 30) + 
-                          (pendingDatalogFolders.size() * 50) +
-                          (fileChecksums.size() * 100);
-    
-    // Add 50% overhead for JSON formatting and safety margin
-    size_t jsonCapacity = estimatedSize * 3 / 2;
-    
-    // Ensure minimum capacity of 4KB
-    if (jsonCapacity < 4096) {
-        jsonCapacity = 4096;
-    }
-    
-    LOG_DEBUGF("[UploadStateManager] Allocating %u bytes for JSON document (%u completed, %u pending, %u files)", 
-         jsonCapacity, completedDatalogFolders.size(), pendingDatalogFolders.size(), fileChecksums.size());
-    
-    // Allocate JSON document with calculated capacity
-    DynamicJsonDocument doc(jsonCapacity);
-    
-    // Save version
-    doc["version"] = 1;
-    
-    // Save timestamp
-    doc["last_upload_timestamp"] = lastUploadTimestamp;
-    
-    // Save file checksums
-    JsonObject checksums = doc.createNestedObject("file_checksums");
-    for (const auto& pair : fileChecksums) {
-        checksums[pair.first.c_str()] = pair.second.c_str();
-    }
-    
-    // Save completed folders
-    JsonArray folders = doc.createNestedArray("completed_datalog_folders");
-    for (const String& folder : completedDatalogFolders) {
-        folders.add(folder);
-    }
-    
-    // Save pending folders
-    JsonObject pendingFolders = doc.createNestedObject("pending_datalog_folders");
-    for (const auto& pair : pendingDatalogFolders) {
-        pendingFolders[pair.first.c_str()] = pair.second;
-    }
-    
-    // Save retry tracking
-    doc["current_retry_folder"] = currentRetryFolder.c_str();
-    doc["current_retry_count"] = currentRetryCount;
-    
-    // Write to temporary file first to avoid corruption
-    String tempFilePath = stateFilePath + ".tmp";
-    File file = sd.open(tempFilePath, FILE_WRITE);
-    if (!file) {
-        LOGF("[UploadStateManager] ERROR: Failed to open state file for writing: %s", tempFilePath.c_str());
+    if (!flushJournal(sd)) {
         return false;
     }
-    
-    size_t bytesWritten = serializeJson(doc, file);
-    file.close();
-    
-    if (bytesWritten == 0) {
-        LOG("[UploadStateManager] ERROR: Failed to write state file (0 bytes written)");
-        sd.remove(tempFilePath);  // Clean up failed temp file
-        return false;
-    }
-    
-    // Verify the temp file was written correctly
-    File verifyFile = sd.open(tempFilePath, FILE_READ);
-    if (!verifyFile) {
-        LOG("[UploadStateManager] ERROR: Failed to verify temp state file");
-        sd.remove(tempFilePath);
-        return false;
-    }
-    
-    size_t verifySize = verifyFile.size();
-    verifyFile.close();
-    
-    if (verifySize != bytesWritten) {
-        LOG_DEBUGF("[UploadStateManager] ERROR: State file size mismatch (wrote %u bytes, file is %u bytes)", 
-             bytesWritten, verifySize);
-        sd.remove(tempFilePath);
-        return false;
-    }
-    
-    // Remove old state file if it exists
-    if (sd.exists(stateFilePath)) {
-        if (!sd.remove(stateFilePath)) {
-            LOG_DEBUG("[UploadStateManager] WARNING: Failed to remove old state file");
-            // Continue anyway - rename might still work
+
+    if (shouldCompact(sd)) {
+        if (!compactState(sd)) {
+            LOG("[UploadStateManager] ERROR: Failed to compact state snapshot");
+            return false;
         }
     }
-    
-    // Rename temp file to actual state file
-    if (!sd.rename(tempFilePath, stateFilePath)) {
-        LOG("[UploadStateManager] ERROR: Failed to rename temp state file");
-        sd.remove(tempFilePath);  // Clean up
-        return false;
-    }
-    
-    LOG_DEBUGF("[UploadStateManager] State file saved successfully (%u bytes)", bytesWritten);
+
     return true;
 }
