@@ -32,24 +32,17 @@ void tearDown(void) {
     testFS.clear();
 }
 
-// Test state file loading from JSON
+// Test state file loading from v2 line-based snapshot/journal
 void test_load_state_file_success() {
     UploadStateManager manager;
     
-    // Create a valid state file
-    const char* stateJson = R"({
-        "version": 1,
-        "last_upload_timestamp": 1699876800,
-        "file_checksums": {
-            "/Identification.json": "abc123",
-            "/SRT.edf": "def456"
-        },
-        "completed_datalog_folders": ["20241101", "20241102"],
-        "current_retry_folder": "20241103",
-        "current_retry_count": 2
-    })";
-    
-    testFS.addFile("/.upload_state.json", stateJson);
+    const char* stateV2 =
+        "U2|2|1699876800\n"
+        "R|20241103|2\n"
+        "C|20241101\n"
+        "C|20241102\n";
+
+    testFS.addFile("/.upload_state.v2", stateV2);
     
     // Load state
     bool result = manager.begin(testFS);
@@ -78,7 +71,7 @@ void test_load_state_file_empty() {
     UploadStateManager manager;
     
     // Create empty state file (corrupted)
-    testFS.addFile("/.upload_state.json", "");
+    testFS.addFile("/.upload_state.v2", "");
     
     bool result = manager.begin(testFS);
     
@@ -90,8 +83,8 @@ void test_load_state_file_empty() {
 void test_load_state_file_corrupted_json() {
     UploadStateManager manager;
     
-    // Create corrupted JSON
-    testFS.addFile("/.upload_state.json", "{invalid json content");
+    // Create corrupted snapshot line format
+    testFS.addFile("/.upload_state.v2", "not-a-valid-header\n");
     
     bool result = manager.begin(testFS);
     
@@ -103,49 +96,32 @@ void test_load_state_file_corrupted_json() {
 void test_load_state_file_wrong_version() {
     UploadStateManager manager;
     
-    // Create state file with wrong version
-    const char* stateJson = R"({
-        "version": 99,
-        "last_upload_timestamp": 1699876800
-    })";
-    
-    testFS.addFile("/.upload_state.json", stateJson);
+    // Create state file with wrong version marker
+    testFS.addFile("/.upload_state.v2", "U2|99|1699876800\n");
     
     bool result = manager.begin(testFS);
     
-    // Should still load (with warning)
+    // v2 parser rejects wrong version and begins with empty state
     TEST_ASSERT_TRUE(result);
-    TEST_ASSERT_EQUAL(1699876800, manager.getLastUploadTimestamp());
+    TEST_ASSERT_EQUAL(0, manager.getLastUploadTimestamp());
 }
 
 void test_load_state_file_large_with_many_folders() {
     UploadStateManager manager;
     
-    // Create a large state file with many folders (simulating years of usage)
-    // This tests the dynamic buffer sizing
-    std::string stateJson = R"({
-        "version": 1,
-        "last_upload_timestamp": 1699876800,
-        "file_checksums": {
-            "/Identification.json": "abc123",
-            "/SRT.edf": "def456"
-        },
-        "completed_datalog_folders": [)";
+    // Create a large v2 snapshot with many completed folders
+    std::string stateV2 = "U2|2|1699876800\nR|0|0\n";
     
-    // Add 500 folders to simulate ~1.5 years of usage
-    for (int i = 0; i < 500; i++) {
-        if (i > 0) stateJson += ",";
+    // Add 300 folders to simulate many months of usage
+    for (int i = 0; i < 300; i++) {
         char folderName[16];
-        snprintf(folderName, sizeof(folderName), "\"2024%04d\"", i);
-        stateJson += folderName;
+        snprintf(folderName, sizeof(folderName), "2024%04d", i);
+        stateV2 += "C|";
+        stateV2 += folderName;
+        stateV2 += "\n";
     }
-    
-    stateJson += R"(],
-        "current_retry_folder": "",
-        "current_retry_count": 0
-    })";
-    
-    testFS.addFile("/.upload_state.json", stateJson.c_str());
+
+    testFS.addFile("/.upload_state.v2", stateV2.c_str());
     
     // Load state - should succeed with dynamic buffer sizing
     bool result = manager.begin(testFS);
@@ -156,7 +132,7 @@ void test_load_state_file_large_with_many_folders() {
     // Verify some folders were loaded
     TEST_ASSERT_TRUE(manager.isFolderCompleted("20240000"));
     TEST_ASSERT_TRUE(manager.isFolderCompleted("20240100"));
-    TEST_ASSERT_TRUE(manager.isFolderCompleted("20240499"));
+    TEST_ASSERT_TRUE(manager.isFolderCompleted("20240299"));
 }
 
 // Test state file saving to JSON
@@ -179,7 +155,7 @@ void test_save_state_file_success() {
     bool result = manager.save(testFS);
     
     TEST_ASSERT_TRUE(result);
-    TEST_ASSERT_TRUE(testFS.exists("/.upload_state.json"));
+    TEST_ASSERT_TRUE(testFS.exists("/.upload_state.v2"));
     
     // Verify saved content by loading it again
     UploadStateManager manager2;
@@ -200,14 +176,14 @@ void test_save_state_file_empty_state() {
     bool result = manager.save(testFS);
     
     TEST_ASSERT_TRUE(result);
-    TEST_ASSERT_TRUE(testFS.exists("/.upload_state.json"));
+    TEST_ASSERT_TRUE(testFS.exists("/.upload_state.v2"));
 }
 
 void test_save_state_file_overwrite() {
     UploadStateManager manager;
     
-    // Create initial state file
-    testFS.addFile("/.upload_state.json", "{\"version\": 1}");
+    // Create initial snapshot file
+    testFS.addFile("/.upload_state.v2", "U2|2|0\nR|0|0\n");
     
     manager.begin(testFS);
     manager.setLastUploadTimestamp(1234567890);
@@ -228,9 +204,9 @@ void test_save_state_file_large_with_many_folders() {
     
     manager.begin(testFS);
     
-    // Add many folders to simulate years of usage
+    // Add many folders to simulate many months of usage
     // This tests the dynamic buffer sizing on save
-    for (int i = 0; i < 500; i++) {
+    for (int i = 0; i < 300; i++) {
         char folderName[16];
         snprintf(folderName, sizeof(folderName), "2024%04d", i);
         manager.markFolderCompleted(folderName);
@@ -245,7 +221,7 @@ void test_save_state_file_large_with_many_folders() {
     bool result = manager.save(testFS);
     
     TEST_ASSERT_TRUE(result);
-    TEST_ASSERT_TRUE(testFS.exists("/.upload_state.json"));
+    TEST_ASSERT_TRUE(testFS.exists("/.upload_state.v2"));
     
     // Verify saved content by loading it again
     UploadStateManager manager2;
@@ -254,7 +230,7 @@ void test_save_state_file_large_with_many_folders() {
     TEST_ASSERT_EQUAL(1699876800, manager2.getLastUploadTimestamp());
     TEST_ASSERT_TRUE(manager2.isFolderCompleted("20240000"));
     TEST_ASSERT_TRUE(manager2.isFolderCompleted("20240100"));
-    TEST_ASSERT_TRUE(manager2.isFolderCompleted("20240499"));
+    TEST_ASSERT_TRUE(manager2.isFolderCompleted("20240299"));
 }
 
 // Test checksum calculation for files
@@ -318,10 +294,10 @@ void test_file_change_detection_no_change() {
     // First check - file is new
     TEST_ASSERT_TRUE(manager.hasFileChanged(testFS, "/test.txt"));
     
-    // Mark as uploaded with its checksum
-    // Calculate checksum manually for testing
-    String checksum = "test_checksum_123";
-    manager.markFileUploaded("/test.txt", checksum);
+    // Mark as uploaded with its real checksum and size
+    String checksum = manager.calculateChecksum(testFS, "/test.txt");
+    TEST_ASSERT_FALSE(checksum.isEmpty());
+    manager.markFileUploaded("/test.txt", checksum, 13);
     
     // Save and reload to simulate persistence
     manager.save(testFS);
@@ -329,12 +305,8 @@ void test_file_change_detection_no_change() {
     UploadStateManager manager2;
     manager2.begin(testFS);
     
-    // File content hasn't changed, but we need to mark it with same checksum
-    manager2.markFileUploaded("/test.txt", checksum);
-    
-    // Now check again - should detect no change if checksums match
-    // Note: hasFileChanged calculates fresh checksum, so it will differ from our test checksum
-    // This tests the checksum comparison logic
+    // File content hasn't changed and checksum+size are persisted
+    TEST_ASSERT_FALSE(manager2.hasFileChanged(testFS, "/test.txt"));
 }
 
 void test_file_change_detection_with_change() {
@@ -344,11 +316,13 @@ void test_file_change_detection_with_change() {
     // Create a file
     testFS.addFile("/test.txt", "Original content");
     
-    // Mark as uploaded
-    manager.markFileUploaded("/test.txt", "original_checksum");
+    // Mark as uploaded with its real checksum and size
+    String originalChecksum = manager.calculateChecksum(testFS, "/test.txt");
+    TEST_ASSERT_FALSE(originalChecksum.isEmpty());
+    manager.markFileUploaded("/test.txt", originalChecksum, 16);
     
-    // Modify the file
-    testFS.addFile("/test.txt", "Modified content");
+    // Modify the file (different size to avoid mock-MD5 collisions)
+    testFS.addFile("/test.txt", "Modified content with extra bytes");
     
     // Should detect change (different checksum)
     bool changed = manager.hasFileChanged(testFS, "/test.txt");
@@ -719,11 +693,11 @@ void test_pending_state_persistence_round_trip() {
     TEST_ASSERT_FALSE(manager2.shouldPromotePendingToCompleted("20241101", 1699876800 + (6 * 24 * 60 * 60)));
 }
 
-// Test backward compatibility - loading old state file without pending folders field
+// No backward compatibility: JSON state file should be ignored
 void test_backward_compatibility_missing_pending_field() {
     UploadStateManager manager;
     
-    // Create old state file without pending_datalog_folders field
+    // Create old JSON state file (legacy format)
     const char* oldStateJson = R"({
         "version": 1,
         "last_upload_timestamp": 1699876800,
@@ -740,11 +714,12 @@ void test_backward_compatibility_missing_pending_field() {
     // Load state
     bool result = manager.begin(testFS);
     
-    // Should succeed and initialize empty pending folders map
+    // v2 only: should start empty and ignore legacy JSON file
     TEST_ASSERT_TRUE(result);
+    TEST_ASSERT_EQUAL(0, manager.getLastUploadTimestamp());
     TEST_ASSERT_EQUAL(0, manager.getPendingFoldersCount());
-    TEST_ASSERT_TRUE(manager.isFolderCompleted("20241101"));
-    TEST_ASSERT_TRUE(manager.isFolderCompleted("20241102"));
+    TEST_ASSERT_FALSE(manager.isFolderCompleted("20241101"));
+    TEST_ASSERT_FALSE(manager.isFolderCompleted("20241102"));
 }
 
 // Test incomplete folders count calculation with pending folders

@@ -637,11 +637,20 @@ void loop() {
         
         if (sdManager.takeControl()) {
             LOG("Resetting upload state...");
-            
-            if (sdManager.getFS().remove("/.upload_state.json")) {
-                LOG("Upload state file deleted successfully");
-            } else {
-                LOG_WARN("Failed to delete state file (may not exist)");
+
+            bool removedAnyState = false;
+            if (sdManager.getFS().remove("/.upload_state.v2")) {
+                LOG("Upload state snapshot deleted successfully");
+                removedAnyState = true;
+            }
+
+            if (sdManager.getFS().remove("/.upload_state.v2.log")) {
+                LOG("Upload state journal deleted successfully");
+                removedAnyState = true;
+            }
+
+            if (!removedAnyState) {
+                LOG_WARN("Failed to delete upload state files (may not exist)");
             }
             
             if (uploader) {

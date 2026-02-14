@@ -19,7 +19,7 @@ Config::Config() :
     // Cloud upload defaults
     cloudBaseUrl("https://sleephq.com"),
     cloudDeviceId(0),
-    maxDays(0),  // Default: all days
+    maxDays(365),  // Default: upload only last 365 days
     recentFolderDays(2),  // Default: re-check today + yesterday
     cloudInsecureTls(false),  // Default: use root CA validation
     
@@ -496,14 +496,18 @@ bool Config::loadFromSD(fs::FS &sd) {
     cloudTeamId = doc["CLOUD_TEAM_ID"] | "";
     cloudBaseUrl = doc["CLOUD_BASE_URL"] | "https://sleephq.com";
     cloudDeviceId = doc["CLOUD_DEVICE_ID"] | 0;
-    maxDays = doc["MAX_DAYS"] | 0;
+    maxDays = doc["MAX_DAYS"] | 365;
     recentFolderDays = doc["RECENT_FOLDER_DAYS"] | 2;
     cloudInsecureTls = doc["CLOUD_INSECURE_TLS"] | false;
     
-    // Validate MAX_DAYS
-    if (maxDays < 0) {
-        LOG_WARN("MAX_DAYS cannot be negative, setting to 0 (all days)");
-        maxDays = 0;
+    // Validate MAX_DAYS: keep within one-year horizon to match state retention.
+    // 0 is treated as invalid (no unlimited mode) to avoid surprise full-history uploads.
+    if (maxDays <= 0) {
+        LOG_WARN("MAX_DAYS must be between 1 and 366, setting to 365");
+        maxDays = 365;
+    } else if (maxDays > 366) {
+        LOG_WARN("MAX_DAYS cannot exceed 366, clamping to 366");
+        maxDays = 366;
     }
     
     // Validate RECENT_FOLDER_DAYS

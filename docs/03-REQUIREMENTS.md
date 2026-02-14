@@ -18,7 +18,7 @@
 | Parameter | Type | Default | Role in new architecture |
 |---|---|---|---|
 | `RECENT_FOLDER_DAYS` | int | `2` | Defines fresh vs old data boundary (B) |
-| `MAX_DAYS` | int | `0` (all) | Hard cutoff — older folders ignored entirely |
+| `MAX_DAYS` | int (1-366) | `365` | Hard cutoff — older folders ignored entirely |
 | `BOOT_DELAY_SECONDS` | int | `30` | Initial delay before first SD access |
 | `GMT_OFFSET_HOURS` | int | `0` | Timezone for schedule calculations |
 | `LOG_TO_SD_CARD` | bool | `false` | Debug logging only; can block CPAP SD access. Use only briefly in scheduled mode outside therapy times. |
@@ -73,6 +73,9 @@ Unsupported legacy keys:
 | `EXCLUSIVE_ACCESS_MINUTES` | 1–30 | Clamp to range, warn |
 | `COOLDOWN_MINUTES` | 1–60 | Clamp to range, warn |
 | `RECENT_FOLDER_DAYS` | 0–30 | Existing validation (keep) |
+| `MAX_DAYS` | 1–366 | `<=0` → 365, `>366` → 366, warn |
+
+**Known behavior:** `MAX_DAYS` filtering requires valid NTP time. If time is not synced yet, all DATALOG folders are processed for that cycle.
 
 ---
 

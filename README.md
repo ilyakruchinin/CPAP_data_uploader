@@ -298,28 +298,26 @@ The device respects your CPAP machine's need for SD card access by keeping uploa
 
 ## Project Status
 
-**Current Version:** v0.4.3-pre (development)
+**Current Version:** see "Releases" section for version information
 
 **Status:** ✅ Production Ready + Power Management
 - Hardware tested and validated
 - Integration tested with real CPAP data
 - All unit tests passing (145 tests)
-- SMB/CIFS upload fully implemented
+- SMB/CIFS and upload fully implemented
 - Web interface remains responsive during uploads
 - Automatic retry mechanism with progress tracking
 - Automatic directory creation verified and working
+- FreeRTOS tasks for true concurrent web server operation during uploads
 - **NEW**: Configurable power management for reduced current consumption
 
 **Supported Upload Methods:**
 - ✅ SMB/CIFS (Windows shares, NAS, Samba)
+- ✅ SleepHQ direct upload (planned)
 - ⏳ WebDAV (planned)
-- ⏳ SleepHQ direct upload (planned)
 
 ## Future Improvements
-
-- Implement FreeRTOS tasks for true concurrent web server operation during uploads
 - Add WebDAV upload support
-- Add SleepHQ direct upload support
 
 ## Support & Documentation
 
