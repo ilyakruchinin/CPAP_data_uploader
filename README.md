@@ -1,18 +1,18 @@
 # ESP32 CPAP Data Uploader
 
-Automatically upload CPAP therapy data from your SD card to network storage. Tested with ResMed CPAP machines, may work with other brands that use SD cards.
+Automatically upload CPAP therapy data from your SD card to network storage.
+
+**Machine support is currently limited to ResMed SD card formats only** (Series 9, Series 10, Series 11).
 
 **Features:**
 - Automatic daily uploads to Windows shares, NAS, or Samba servers
-- **Direct upload to SleepHQ** cloud service for sleep data analysis
-- **Dual-backend support** — upload to both local NAS and SleepHQ simultaneously
 - **Over-The-Air (OTA) firmware updates** via web interface
-- Interval-based uploads (every N minutes) or daily scheduling
 - Secure credential storage in ESP32 flash memory (optional)
 - Respects CPAP machine access to SD card
 - Tracks uploaded files (no duplicates)
 - Smart empty folder handling (waits 7 days before marking folders complete)
-- Scheduled uploads with timezone support
+- Smart mode (recommended): starts shortly after therapy ends using SD activity + inactivity detection
+- Scheduled mode: predictable upload window with timezone support
 - Web interface for monitoring and testing
 - Automatic retry mechanism with progress tracking
 - Automatic directory creation on remote shares
@@ -36,6 +36,14 @@ See the [User Guide](release/README.md) for complete setup and usage instruction
 - 4MB Flash memory
 - SD card interface (compatible with CPAP SD cards)
 - WiFi 2.4GHz
+
+## Supported CPAP Machines (ResMed only)
+
+- **Series 9** (e.g. S9 AutoSet, Lumis)
+- **Series 10** (e.g. AirSense, AirCurve)
+- **Series 11** (e.g. Elite, AutoSet)
+
+Other brands/models are not currently supported.
 
 ## For Developers
 
@@ -64,9 +72,8 @@ Insert the SD card and power on. The device will automatically upload new CPAP d
 
 ## Configuration Example
 
-Create `config.json` on your SD card. See [Configuration Reference](docs/CONFIGURATION.md) for all options.
+Create `config.json` on your SD card:
 
-### SMB Upload (NAS/Windows share)
 ```json
 {
   "WIFI_SSID": "YourNetworkName",
@@ -75,37 +82,16 @@ Create `config.json` on your SD card. See [Configuration Reference](docs/CONFIGU
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
-  "UPLOAD_HOUR": 12,
-  "GMT_OFFSET_HOURS": -8
-}
-```
-
-### SleepHQ Cloud Upload
-```json
-{
-  "WIFI_SSID": "YourNetworkName",
-  "WIFI_PASS": "YourPassword",
-  "ENDPOINT_TYPE": "CLOUD",
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "UPLOAD_HOUR": 14,
-  "GMT_OFFSET_HOURS": -8
-}
-```
-
-### Dual Backend (SMB + SleepHQ)
-```json
-{
-  "WIFI_SSID": "YourNetworkName",
-  "WIFI_PASS": "YourPassword",
-  "ENDPOINT": "//192.168.1.100/cpap_backups",
-  "ENDPOINT_TYPE": "SMB,CLOUD",
-  "ENDPOINT_USER": "username",
-  "ENDPOINT_PASS": "password",
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "UPLOAD_HOUR": 14,
-  "GMT_OFFSET_HOURS": -8
+  "UPLOAD_MODE": "smart",
+  "UPLOAD_START_HOUR": 8,
+  "UPLOAD_END_HOUR": 22,
+  "INACTIVITY_SECONDS": 125,
+  "EXCLUSIVE_ACCESS_MINUTES": 5,
+  "COOLDOWN_MINUTES": 10,
+  "GMT_OFFSET_HOURS": -8,
+  "CPU_SPEED_MHZ": 240,
+  "WIFI_TX_PWR": "high",
+  "WIFI_PWR_SAVING": "none"
 }
 ```
 
@@ -226,6 +212,13 @@ If you need to change WiFi credentials, endpoint settings, or other configuratio
 - Use `"STORE_CREDENTIALS_PLAIN_TEXT": true` to keep credentials visible for debugging
 - Serial output shows detailed credential loading and migration process
 
+## Upload Modes
+
+- **smart** (**recommended**): detects therapy end via SD activity + inactivity threshold, then uploads recent data as soon as possible.
+- **scheduled**: runs uploads inside the configured upload window.
+
+In both modes, older backlog folders are uploaded during the configured upload window.
+
 
 
 ## Build Targets
@@ -282,13 +275,18 @@ For devices without OTA support or when OTA fails:
 
 1. **Device reads configuration** from `config.json` on SD card
 2. **Connects to WiFi** and synchronizes time with internet
-3. **Waits for scheduled time** (once per day at configured hour)
-4. **Uploads new files** to your network share
+3. **Waits for upload eligibility based on mode**
+   - **Smart mode:** starts shortly after therapy ends (activity detection)
+   - **Scheduled mode:** uploads during configured window
+4. **Uploads required CPAP data** to your network share
    - Takes brief control of SD card (default 5 seconds)
-   - Uploads DATALOG folders, root files, and settings
+   - Uploads `DATALOG/` folders and `SETTINGS/` files
+   - Uploads root files **if present**: `STR.edf`, `Identification.crc`, `Identification.tgt` (ResMed 9/10), `Identification.json` (ResMed 11)
    - Tracks what's been uploaded (no duplicates)
    - Releases SD card for CPAP machine use
 5. **Repeats daily** automatically
+
+`journal.jnl` is intentionally not part of the required upload set.
 
 The device respects your CPAP machine's need for SD card access by keeping upload sessions short and releasing control immediately after each session.
 
@@ -300,39 +298,34 @@ The device respects your CPAP machine's need for SD card access by keeping uploa
 
 ## Project Status
 
-**Current Version:** v0.5.0-pre (development)
+**Current Version:** v0.4.3-pre (development)
 
-**Status:** ✅ Production Ready + Cloud Upload
+**Status:** ✅ Production Ready + Power Management
 - Hardware tested and validated
 - Integration tested with real CPAP data
-- All unit tests passing (175 tests)
+- All unit tests passing (145 tests)
 - SMB/CIFS upload fully implemented
-- SleepHQ cloud upload fully implemented (OAuth, multipart, TLS)
-- Dual-backend support (SMB + Cloud simultaneously)
 - Web interface remains responsive during uploads
 - Automatic retry mechanism with progress tracking
 - Automatic directory creation verified and working
-- Configurable power management for reduced current consumption
+- **NEW**: Configurable power management for reduced current consumption
 
 **Supported Upload Methods:**
 - ✅ SMB/CIFS (Windows shares, NAS, Samba)
-- ✅ SleepHQ direct upload (OAuth, HTTPS, content hashing)
-- ✅ Dual-backend (SMB + SleepHQ simultaneously)
 - ⏳ WebDAV (planned)
+- ⏳ SleepHQ direct upload (planned)
 
 ## Future Improvements
 
 - Implement FreeRTOS tasks for true concurrent web server operation during uploads
 - Add WebDAV upload support
+- Add SleepHQ direct upload support
 
 ## Support & Documentation
 
-- **Configuration Reference:** [docs/CONFIGURATION.md](docs/CONFIGURATION.md) - All config.json options explained
-- **Upload Flow Diagrams:** [docs/UPLOAD_FLOW.md](docs/UPLOAD_FLOW.md) - Visual reference for upload lifecycle
 - **User Guide:** [release/README.md](release/README.md) - Setup and usage instructions
 - **Developer Guide:** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) - Build and contribute
-- **Feature Flags:** [docs/FEATURE_FLAGS.md](docs/FEATURE_FLAGS.md) - Build-time backend selection
-- **Troubleshooting:** [docs/BUILD_TROUBLESHOOTING.md](docs/BUILD_TROUBLESHOOTING.md) - Common build issues
+- **Troubleshooting:** See user guide or developer guide
 - **Issues:** Report bugs or request features via GitHub issues
 
 ## License

@@ -37,13 +37,8 @@ private:
     String endpointType;  // SMB, CLOUD, SMB,CLOUD
     String endpointUser;
     String endpointPassword;
-    int uploadHour;
-    int sessionDurationSeconds;
-    int maxRetryAttempts;
     int gmtOffsetHours;
     int bootDelaySeconds;
-    int sdReleaseIntervalSeconds;
-    int sdReleaseWaitMs;
     bool logToSdCard;
     bool isValid;
     
@@ -54,9 +49,16 @@ private:
     String cloudBaseUrl;
     int cloudDeviceId;
     int maxDays;
-    int uploadIntervalMinutes;
     int recentFolderDays;
     bool cloudInsecureTls;
+    
+    // Upload FSM settings
+    String uploadMode;             // "scheduled" or "smart"
+    int uploadStartHour;           // 0-23, start of upload window
+    int uploadEndHour;             // 0-23, end of upload window
+    int inactivitySeconds;         // Z: seconds of bus silence before upload
+    int exclusiveAccessMinutes;    // X: max minutes of exclusive SD access
+    int cooldownMinutes;           // Y: minutes to release SD between upload cycles
     
     // Cached endpoint type flags (computed once during loadFromSD)
     bool _hasSmbEndpoint;
@@ -114,13 +116,8 @@ public:
     const String& getEndpointType() const;
     const String& getEndpointUser() const;
     const String& getEndpointPassword() const;
-    int getUploadHour() const;
-    int getSessionDurationSeconds() const;
-    int getMaxRetryAttempts() const;
     int getGmtOffsetHours() const;
     int getBootDelaySeconds() const;
-    int getSdReleaseIntervalSeconds() const;
-    int getSdReleaseWaitMs() const;
     bool getLogToSdCard() const;
     bool valid() const;
     
@@ -131,12 +128,20 @@ public:
     const String& getCloudBaseUrl() const;
     int getCloudDeviceId() const;
     int getMaxDays() const;
-    int getUploadIntervalMinutes() const;
     int getRecentFolderDays() const;
     bool getCloudInsecureTls() const;
     bool hasCloudEndpoint() const;
     bool hasSmbEndpoint() const;
     bool hasWebdavEndpoint() const;
+    
+    // Upload FSM getters
+    const String& getUploadMode() const;
+    int getUploadStartHour() const;
+    int getUploadEndHour() const;
+    int getInactivitySeconds() const;
+    int getExclusiveAccessMinutes() const;
+    int getCooldownMinutes() const;
+    bool isSmartMode() const;
     
     // Power management getters
     int getCpuSpeedMhz() const;

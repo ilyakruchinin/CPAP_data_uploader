@@ -44,9 +44,12 @@ void test_config_load_valid() {
         "ENDPOINT_TYPE": "SMB",
         "ENDPOINT_USER": "testuser",
         "ENDPOINT_PASS": "testpass",
-        "UPLOAD_HOUR": 14,
-        "SESSION_DURATION_SECONDS": 10,
-        "MAX_RETRY_ATTEMPTS": 5,
+        "UPLOAD_MODE": "scheduled",
+        "UPLOAD_START_HOUR": 14,
+        "UPLOAD_END_HOUR": 16,
+        "INACTIVITY_SECONDS": 140,
+        "EXCLUSIVE_ACCESS_MINUTES": 10,
+        "COOLDOWN_MINUTES": 12,
         "GMT_OFFSET_HOURS": -8
     })";
     
@@ -64,9 +67,12 @@ void test_config_load_valid() {
     TEST_ASSERT_EQUAL_STRING("SMB", config.getEndpointType().c_str());
     TEST_ASSERT_EQUAL_STRING("testuser", config.getEndpointUser().c_str());
     TEST_ASSERT_EQUAL_STRING("testpass", config.getEndpointPassword().c_str());
-    TEST_ASSERT_EQUAL(14, config.getUploadHour());
-    TEST_ASSERT_EQUAL(10, config.getSessionDurationSeconds());
-    TEST_ASSERT_EQUAL(5, config.getMaxRetryAttempts());
+    TEST_ASSERT_EQUAL_STRING("scheduled", config.getUploadMode().c_str());
+    TEST_ASSERT_EQUAL(14, config.getUploadStartHour());
+    TEST_ASSERT_EQUAL(16, config.getUploadEndHour());
+    TEST_ASSERT_EQUAL(140, config.getInactivitySeconds());
+    TEST_ASSERT_EQUAL(10, config.getExclusiveAccessMinutes());
+    TEST_ASSERT_EQUAL(12, config.getCooldownMinutes());
     TEST_ASSERT_EQUAL(-8, config.getGmtOffsetHours());
 }
 
@@ -89,13 +95,14 @@ void test_config_load_with_defaults() {
     TEST_ASSERT_EQUAL_STRING("//server/share", config.getEndpoint().c_str());
     
     // Check default values
-    TEST_ASSERT_EQUAL(12, config.getUploadHour());  // Default noon
-    TEST_ASSERT_EQUAL(300, config.getSessionDurationSeconds());  // Default 300 seconds
-    TEST_ASSERT_EQUAL(3, config.getMaxRetryAttempts());  // Default 3 attempts
+    TEST_ASSERT_EQUAL_STRING("smart", config.getUploadMode().c_str());
+    TEST_ASSERT_EQUAL(9, config.getUploadStartHour());
+    TEST_ASSERT_EQUAL(21, config.getUploadEndHour());
+    TEST_ASSERT_EQUAL(125, config.getInactivitySeconds());
+    TEST_ASSERT_EQUAL(5, config.getExclusiveAccessMinutes());
+    TEST_ASSERT_EQUAL(10, config.getCooldownMinutes());
     TEST_ASSERT_EQUAL(0, config.getGmtOffsetHours());  // Default UTC
     TEST_ASSERT_EQUAL(30, config.getBootDelaySeconds());  // Default 30 seconds
-    TEST_ASSERT_EQUAL(2, config.getSdReleaseIntervalSeconds());  // Default 2 seconds
-    TEST_ASSERT_EQUAL(500, config.getSdReleaseWaitMs());  // Default 500ms
     TEST_ASSERT_FALSE(config.getLogToSdCard());  // Default false (no SD logging)
 }
 
@@ -241,12 +248,13 @@ void test_config_positive_gmt_offset() {
     TEST_ASSERT_EQUAL(1, config.getGmtOffsetHours());  // +1 hour (CET)
 }
 
-// Test configuration with various upload hours
-void test_config_upload_hours() {
+// Test configuration with upload window hours
+void test_config_upload_window_hours() {
     std::string configContent = R"({
         "WIFI_SSID": "TestNetwork",
         "ENDPOINT": "//server/share",
-        "UPLOAD_HOUR": 23
+        "UPLOAD_START_HOUR": 23,
+        "UPLOAD_END_HOUR": 5
     })";
     
     mockSD.addFile("/config.json", configContent);
@@ -255,15 +263,16 @@ void test_config_upload_hours() {
     bool loaded = config.loadFromSD(mockSD);
     
     TEST_ASSERT_TRUE(loaded);
-    TEST_ASSERT_EQUAL(23, config.getUploadHour());
+    TEST_ASSERT_EQUAL(23, config.getUploadStartHour());
+    TEST_ASSERT_EQUAL(5, config.getUploadEndHour());
 }
 
-// Test configuration with long session duration
-void test_config_long_session_duration() {
+// Test configuration with exclusive access duration
+void test_config_exclusive_access_minutes() {
     std::string configContent = R"({
         "WIFI_SSID": "TestNetwork",
         "ENDPOINT": "//server/share",
-        "SESSION_DURATION_SECONDS": 300
+        "EXCLUSIVE_ACCESS_MINUTES": 15
     })";
     
     mockSD.addFile("/config.json", configContent);
@@ -272,34 +281,15 @@ void test_config_long_session_duration() {
     bool loaded = config.loadFromSD(mockSD);
     
     TEST_ASSERT_TRUE(loaded);
-    TEST_ASSERT_EQUAL(300, config.getSessionDurationSeconds());  // 5 minutes
+    TEST_ASSERT_EQUAL(15, config.getExclusiveAccessMinutes());
 }
 
-// Test configuration with high retry attempts
-void test_config_high_retry_attempts() {
-    std::string configContent = R"({
-        "WIFI_SSID": "TestNetwork",
-        "ENDPOINT": "//server/share",
-        "MAX_RETRY_ATTEMPTS": 10
-    })";
-    
-    mockSD.addFile("/config.json", configContent);
-    
-    Config config;
-    bool loaded = config.loadFromSD(mockSD);
-    
-    TEST_ASSERT_TRUE(loaded);
-    TEST_ASSERT_EQUAL(10, config.getMaxRetryAttempts());
-}
-
-// Test new boot delay and SD release configuration
-void test_config_boot_delay_and_sd_release() {
+// Test boot delay and SD logging configuration
+void test_config_boot_delay_and_logging() {
     std::string configContent = R"({
         "WIFI_SSID": "TestNetwork",
         "ENDPOINT": "//server/share",
         "BOOT_DELAY_SECONDS": 60,
-        "SD_RELEASE_INTERVAL_SECONDS": 5,
-        "SD_RELEASE_WAIT_MS": 1000,
         "LOG_TO_SD_CARD": true
     })";
     
@@ -310,21 +300,21 @@ void test_config_boot_delay_and_sd_release() {
     
     TEST_ASSERT_TRUE(loaded);
     TEST_ASSERT_EQUAL(60, config.getBootDelaySeconds());
-    TEST_ASSERT_EQUAL(5, config.getSdReleaseIntervalSeconds());
-    TEST_ASSERT_EQUAL(1000, config.getSdReleaseWaitMs());
     TEST_ASSERT_TRUE(config.getLogToSdCard());
 }
 
-// Test configuration with all timing fields
-void test_config_all_timing_fields() {
+// Test configuration with all FSM timing fields
+void test_config_all_fsm_timing_fields() {
     std::string configContent = R"({
         "WIFI_SSID": "TestNetwork",
         "ENDPOINT": "//server/share",
-        "SESSION_DURATION_SECONDS": 60,
-        "MAX_RETRY_ATTEMPTS": 5,
+        "UPLOAD_MODE": "smart",
+        "UPLOAD_START_HOUR": 7,
+        "UPLOAD_END_HOUR": 21,
+        "INACTIVITY_SECONDS": 180,
+        "EXCLUSIVE_ACCESS_MINUTES": 6,
+        "COOLDOWN_MINUTES": 9,
         "BOOT_DELAY_SECONDS": 45,
-        "SD_RELEASE_INTERVAL_SECONDS": 3,
-        "SD_RELEASE_WAIT_MS": 750,
         "LOG_TO_SD_CARD": false
     })";
     
@@ -334,11 +324,13 @@ void test_config_all_timing_fields() {
     bool loaded = config.loadFromSD(mockSD);
     
     TEST_ASSERT_TRUE(loaded);
-    TEST_ASSERT_EQUAL(60, config.getSessionDurationSeconds());
-    TEST_ASSERT_EQUAL(5, config.getMaxRetryAttempts());
+    TEST_ASSERT_EQUAL_STRING("smart", config.getUploadMode().c_str());
+    TEST_ASSERT_EQUAL(7, config.getUploadStartHour());
+    TEST_ASSERT_EQUAL(21, config.getUploadEndHour());
+    TEST_ASSERT_EQUAL(180, config.getInactivitySeconds());
+    TEST_ASSERT_EQUAL(6, config.getExclusiveAccessMinutes());
+    TEST_ASSERT_EQUAL(9, config.getCooldownMinutes());
     TEST_ASSERT_EQUAL(45, config.getBootDelaySeconds());
-    TEST_ASSERT_EQUAL(3, config.getSdReleaseIntervalSeconds());
-    TEST_ASSERT_EQUAL(750, config.getSdReleaseWaitMs());
     TEST_ASSERT_FALSE(config.getLogToSdCard());
 }
 
@@ -583,7 +575,7 @@ void test_config_censoring_accuracy() {
         "ENDPOINT_TYPE": "SMB",
         "ENDPOINT_USER": "testuser",
         "ENDPOINT_PASS": "AlsoCensored",
-        "UPLOAD_HOUR": 12
+        "UPLOAD_MODE": "scheduled"
     })";
     
     mockSD.addFile("/config.json", configContent);
@@ -1050,14 +1042,15 @@ void test_config_default_example_fits_in_buffer() {
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
-  "UPLOAD_HOUR": 12,
+  "UPLOAD_MODE": "scheduled",
+  "UPLOAD_START_HOUR": 8,
+  "UPLOAD_END_HOUR": 22,
+  "INACTIVITY_SECONDS": 125,
+  "EXCLUSIVE_ACCESS_MINUTES": 5,
+  "COOLDOWN_MINUTES": 10,
 
-  "SESSION_DURATION_SECONDS": 30,
-  "MAX_RETRY_ATTEMPTS": 3,
   "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
   "GMT_OFFSET_HOURS": 0,
-
-  "LOG_TO_SD_CARD": false,
 
   "CPU_SPEED_MHZ": 240,
   "WIFI_TX_PWR": "high",
@@ -1083,9 +1076,12 @@ void test_config_default_example_fits_in_buffer() {
     TEST_ASSERT_EQUAL_STRING("YourNetworkName", config.getWifiSSID().c_str());
     TEST_ASSERT_EQUAL_STRING("//192.168.1.100/cpap_backups", config.getEndpoint().c_str());
     TEST_ASSERT_EQUAL_STRING("SMB", config.getEndpointType().c_str());
-    TEST_ASSERT_EQUAL(12, config.getUploadHour());
-    TEST_ASSERT_EQUAL(30, config.getSessionDurationSeconds());
-    TEST_ASSERT_EQUAL(3, config.getMaxRetryAttempts());
+    TEST_ASSERT_EQUAL_STRING("scheduled", config.getUploadMode().c_str());
+    TEST_ASSERT_EQUAL(8, config.getUploadStartHour());
+    TEST_ASSERT_EQUAL(22, config.getUploadEndHour());
+    TEST_ASSERT_EQUAL(125, config.getInactivitySeconds());
+    TEST_ASSERT_EQUAL(5, config.getExclusiveAccessMinutes());
+    TEST_ASSERT_EQUAL(10, config.getCooldownMinutes());
     TEST_ASSERT_EQUAL(0, config.getGmtOffsetHours());
     TEST_ASSERT_FALSE(config.getLogToSdCard());
     TEST_ASSERT_EQUAL(240, config.getCpuSpeedMhz());
@@ -1113,14 +1109,15 @@ void test_config_worst_case_max_size() {
         "  \"ENDPOINT_TYPE\": \"WEBDAV\",\n"
         "  \"ENDPOINT_USER\": \"" + maxEndpointUser + "\",\n"
         "  \"ENDPOINT_PASS\": \"" + maxEndpointPass + "\",\n"
-        "  \"UPLOAD_HOUR\": 23,\n"
-        "  \"SESSION_DURATION_SECONDS\": 300,\n"
-        "  \"MAX_RETRY_ATTEMPTS\": 10,\n"
+        "  \"UPLOAD_MODE\": \"smart\",\n"
+        "  \"UPLOAD_START_HOUR\": 0,\n"
+        "  \"UPLOAD_END_HOUR\": 23,\n"
+        "  \"INACTIVITY_SECONDS\": 3600,\n"
+        "  \"EXCLUSIVE_ACCESS_MINUTES\": 30,\n"
+        "  \"COOLDOWN_MINUTES\": 60,\n"
         "  \"_comment_timezone_1\": \"GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9\",\n"
         "  \"GMT_OFFSET_HOURS\": -12,\n"
         "  \"BOOT_DELAY_SECONDS\": 120,\n"
-        "  \"SD_RELEASE_INTERVAL_SECONDS\": 10,\n"
-        "  \"SD_RELEASE_WAIT_MS\": 2000,\n"
         "  \"LOG_TO_SD_CARD\": true,\n"
         "  \"CPU_SPEED_MHZ\": 160,\n"
         "  \"WIFI_TX_PWR\": \"low\",\n"
@@ -1177,11 +1174,10 @@ int main(int argc, char **argv) {
     // Configuration value tests
     RUN_TEST(test_config_negative_gmt_offset);
     RUN_TEST(test_config_positive_gmt_offset);
-    RUN_TEST(test_config_upload_hours);
-    RUN_TEST(test_config_long_session_duration);
-    RUN_TEST(test_config_high_retry_attempts);
-    RUN_TEST(test_config_boot_delay_and_sd_release);
-    RUN_TEST(test_config_all_timing_fields);
+    RUN_TEST(test_config_upload_window_hours);
+    RUN_TEST(test_config_exclusive_access_minutes);
+    RUN_TEST(test_config_boot_delay_and_logging);
+    RUN_TEST(test_config_all_fsm_timing_fields);
     
     // Credential security tests (Preferences-based)
     RUN_TEST(test_config_plain_text_mode);

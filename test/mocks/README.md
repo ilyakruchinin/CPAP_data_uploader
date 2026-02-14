@@ -162,8 +162,10 @@ void test_json_parsing() {
     // Create a JSON config file
     std::string jsonContent = R"({
         "WIFI_SSID": "TestNetwork",
-        "UPLOAD_HOUR": 14,
-        "GMT_OFFSET_SECONDS": -28800
+        "UPLOAD_MODE": "scheduled",
+        "UPLOAD_START_HOUR": 14,
+        "UPLOAD_END_HOUR": 16,
+        "GMT_OFFSET_HOURS": -8
     })";
     mockSD.addFile("/config.json", jsonContent);
     
@@ -177,12 +179,16 @@ void test_json_parsing() {
     
     // Access values with defaults
     String ssid = doc["WIFI_SSID"] | "";
-    int hour = doc["UPLOAD_HOUR"] | 12;
-    long offset = doc["GMT_OFFSET_SECONDS"] | 0L;
+    String mode = doc["UPLOAD_MODE"] | "scheduled";
+    int startHour = doc["UPLOAD_START_HOUR"] | 8;
+    int endHour = doc["UPLOAD_END_HOUR"] | 22;
+    int offset = doc["GMT_OFFSET_HOURS"] | 0;
     
     TEST_ASSERT_EQUAL_STRING("TestNetwork", ssid.c_str());
-    TEST_ASSERT_EQUAL(14, hour);
-    TEST_ASSERT_EQUAL(-28800, offset);
+    TEST_ASSERT_EQUAL_STRING("scheduled", mode.c_str());
+    TEST_ASSERT_EQUAL(14, startHour);
+    TEST_ASSERT_EQUAL(16, endHour);
+    TEST_ASSERT_EQUAL(-8, offset);
 }
 
 void test_json_nested_objects() {

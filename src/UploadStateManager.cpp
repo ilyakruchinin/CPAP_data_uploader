@@ -8,6 +8,10 @@
 #include "esp32/rom/md5_hash.h"
 #endif
 
+static inline bool isDatalogPath(const String& path) {
+    return path.startsWith("/DATALOG/");
+}
+
 UploadStateManager::UploadStateManager() 
     : stateFilePath("/.upload_state.json"),
       lastUploadTimestamp(0),
@@ -52,7 +56,7 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
     struct MD5Context md5_ctx;
     MD5Init(&md5_ctx);
     
-    const size_t bufferSize = 512;
+    const size_t bufferSize = 4096;
     uint8_t buffer[bufferSize];
     size_t totalBytesRead = 0;
     size_t expectedSize = file.size();
@@ -97,62 +101,55 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
     return checksumStr;
 }
 
-String UploadStateManager::calculateChecksumFromBuffer(const uint8_t* data, size_t size) {
-    struct MD5Context md5_ctx;
-    MD5Init(&md5_ctx);
-    MD5Update(&md5_ctx, data, size);
-    
-    uint8_t hash[16];
-    MD5Final(hash, &md5_ctx);
-    
-    String checksumStr = "";
-    for (int i = 0; i < 16; i++) {
-        char hex[3];
-        sprintf(hex, "%02x", hash[i]);
-        checksumStr += hex;
-    }
-    return checksumStr;
-}
-
 bool UploadStateManager::hasFileChanged(fs::FS &sd, const String& filePath) {
-    // Calculate current checksum
+    auto checksumIt = fileChecksums.find(filePath);
+    
+    // Fast path: compare file size first (O(1), one file open)
+    // CPAP files typically grow when new data is appended, so size change
+    // catches ~95% of modifications without reading the file.
+    auto sizeIt = fileSizes.find(filePath);
+    if (sizeIt != fileSizes.end()) {
+        File file = sd.open(filePath, FILE_READ);
+        if (!file) return false;  // Can't read — treat as unchanged
+        unsigned long currentSize = file.size();
+        file.close();
+        
+        if (currentSize != sizeIt->second) {
+            LOG_DEBUGF("[UploadStateManager] Size changed: %s (%lu -> %lu)",
+                       filePath.c_str(), sizeIt->second, currentSize);
+            return true;  // Size differs — definitely changed
+        }
+
+        // Size unchanged and we're in size-only tracking mode (no checksum stored)
+        if (checksumIt == fileChecksums.end() || checksumIt->second.isEmpty()) {
+            return false;
+        }
+    }
+
+    // No stored checksum and no size record — treat as new/changed
+    if (checksumIt == fileChecksums.end()) {
+        return true;
+    }
+    
+    // Slow path: size matches (or no stored size) — compare MD5 checksums
     String currentChecksum = calculateChecksum(sd, filePath);
     if (currentChecksum.isEmpty()) {
-        // File doesn't exist or can't be read
-        return false;
+        return false;  // Can't read file
     }
     
-    // Check if we have a stored checksum
-    auto it = fileChecksums.find(filePath);
-    if (it == fileChecksums.end()) {
-        // No stored checksum, file is new
-        return true;
+    return (checksumIt->second != currentChecksum);
+}
+
+void UploadStateManager::markFileUploaded(const String& filePath, const String& checksum, unsigned long fileSize) {
+    if (!checksum.isEmpty()) {
+        fileChecksums[filePath] = checksum;
+    } else {
+        // Size-only tracking entry (used for recent DATALOG re-scan optimization)
+        fileChecksums.erase(filePath);
     }
-    
-    // Compare checksums
-    return (it->second != currentChecksum);
-}
-
-void UploadStateManager::markFileUploaded(const String& filePath, const String& checksum) {
-    fileChecksums[filePath] = checksum;
-}
-
-bool UploadStateManager::hasFileSizeChanged(const String& filePath, unsigned long currentSize) {
-    auto it = fileSizes.find(filePath);
-    if (it == fileSizes.end()) {
-        // No stored size — file is new (never uploaded)
-        return true;
+    if (fileSize > 0) {
+        fileSizes[filePath] = fileSize;
     }
-    return (it->second != currentSize);
-}
-
-void UploadStateManager::markFileUploadedWithSize(const String& filePath, unsigned long size) {
-    fileSizes[filePath] = size;
-}
-
-void UploadStateManager::markFileUploadedWithSize(const String& filePath, unsigned long size, const String& checksum) {
-    fileSizes[filePath] = size;
-    fileChecksums[filePath] = checksum;
 }
 
 bool UploadStateManager::isFolderCompleted(const String& folderName) {
@@ -363,24 +360,22 @@ bool UploadStateManager::loadState(fs::FS &sd) {
         }
     }
 #endif
-    
-    // Load file sizes (for size-based change detection)
-    fileSizes.clear();
-#ifdef UNIT_TEST
-    JsonObject sizes = doc.getObject("file_sizes");
-    if (!sizes.isNull()) {
-        for (auto it = sizes.begin(); it != sizes.end(); ++it) {
-            fileSizes[String(it->first.c_str())] = it->second.as<unsigned long>();
+
+    // Prune legacy DATALOG checksum entries to keep state small and avoid
+    // heap fragmentation from large checksum maps/documents. DATALOG files are
+    // folder-tracked; only root/SETTINGS checksum tracking is required long-term.
+    int prunedDatalogChecksums = 0;
+    for (auto it = fileChecksums.begin(); it != fileChecksums.end(); ) {
+        if (isDatalogPath(it->first)) {
+            it = fileChecksums.erase(it);
+            prunedDatalogChecksums++;
+        } else {
+            ++it;
         }
     }
-#else
-    JsonObject sizes = doc["file_sizes"];
-    if (!sizes.isNull()) {
-        for (JsonPair kv : sizes) {
-            fileSizes[String(kv.key().c_str())] = kv.value().as<unsigned long>();
-        }
+    if (prunedDatalogChecksums > 0) {
+        LOGF("[UploadStateManager] Pruned %d legacy DATALOG checksum entries", prunedDatalogChecksums);
     }
-#endif
     
     // Load completed folders
     completedDatalogFolders.clear();
@@ -439,8 +434,7 @@ bool UploadStateManager::saveState(fs::FS &sd) {
     size_t estimatedSize = 200 + 
                           (completedDatalogFolders.size() * 30) + 
                           (pendingDatalogFolders.size() * 50) +
-                          (fileChecksums.size() * 100) +
-                          (fileSizes.size() * 60);
+                          (fileChecksums.size() * 100);
     
     // Add 50% overhead for JSON formatting and safety margin
     size_t jsonCapacity = estimatedSize * 3 / 2;
@@ -466,12 +460,6 @@ bool UploadStateManager::saveState(fs::FS &sd) {
     JsonObject checksums = doc.createNestedObject("file_checksums");
     for (const auto& pair : fileChecksums) {
         checksums[pair.first.c_str()] = pair.second.c_str();
-    }
-    
-    // Save file sizes
-    JsonObject sizesObj = doc.createNestedObject("file_sizes");
-    for (const auto& pair : fileSizes) {
-        sizesObj[pair.first.c_str()] = pair.second;
     }
     
     // Save completed folders

@@ -25,8 +25,8 @@ This document is for developers who want to build, modify, or contribute to the 
 ### Upload Management
 
 - **UploadStateManager** - Tracks which files/folders have been uploaded using checksums
-- **TimeBudgetManager** - Enforces time limits on SD card access (respects CPAP priority)
-- **ScheduleManager** - Manages daily upload scheduling with NTP time synchronization
+- **ScheduleManager** - Manages upload scheduling with NTP time synchronization
+- **UploadFSM** - Finite state machine controlling the upload lifecycle (IDLE → LISTENING → ACQUIRING → UPLOADING → RELEASING → COOLDOWN)
 
 ### Upload Backends
 
@@ -70,7 +70,6 @@ Power settings are applied automatically during startup and maintain full web se
 │   ├── WiFiManager.cpp      # WiFi connection handling
 │   ├── FileUploader.cpp     # File upload orchestration
 │   ├── UploadStateManager.cpp # Upload state tracking
-│   ├── TimeBudgetManager.cpp  # Time budget enforcement
 │   ├── ScheduleManager.cpp    # Upload scheduling
 │   ├── SMBUploader.cpp        # SMB upload implementation
 │   ├── TestWebServer.cpp      # Test web server (optional)
@@ -80,12 +79,13 @@ Power settings are applied automatically during startup and maintain full web se
 ├── include/                  # Header files
 │   ├── pins_config.h        # Pin definitions for SD WIFI PRO
 │   └── *.h                  # Component headers
-├── test/                     # Unit tests (72 tests, all passing)
-│   ├── test_time_budget_manager/
+├── test/                     # Unit tests
 │   ├── test_config/
-│   ├── test_webserver/
+│   ├── test_credential_migration/
+│   ├── test_logger_circular_buffer/
 │   ├── test_native/
 │   ├── test_schedule_manager/
+│   ├── test_upload_state_manager/
 │   └── mocks/               # Mock implementations
 ├── components/               # ESP-IDF components (not in git)
 │   └── libsmb2/             # SMB2/3 client library (cloned by setup script)
@@ -217,7 +217,6 @@ The system supports direct upload to SleepHQ cloud service via REST API. This ca
   "ENDPOINT_TYPE": "CLOUD",
   "CLOUD_CLIENT_ID": "your-sleephq-client-id",
   "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "UPLOAD_HOUR": 14,
   "GMT_OFFSET_HOURS": -8
 }
 ```
@@ -236,7 +235,6 @@ Upload to both a local NAS and SleepHQ simultaneously:
   "ENDPOINT_PASS": "smbpass",
   "CLOUD_CLIENT_ID": "your-sleephq-client-id",
   "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "UPLOAD_HOUR": 14,
   "GMT_OFFSET_HOURS": -8
 }
 ```
@@ -252,7 +250,6 @@ Upload to both a local NAS and SleepHQ simultaneously:
 | `CLOUD_BASE_URL` | No | `https://sleephq.com` | API base URL |
 | `CLOUD_INSECURE_TLS` | No | `false` | Skip TLS certificate validation (not recommended) |
 | `MAX_DAYS` | No | `0` (all) | Only upload DATALOG folders from the last N days |
-| `UPLOAD_INTERVAL_MINUTES` | No | `0` (daily) | Upload every N minutes instead of once daily |
 
 #### Upload Flow
 
@@ -274,9 +271,9 @@ Session Start
 
 #### TLS Security
 
-- **Default:** GTS Root R4 (Google Trust Services) root CA certificate is embedded in firmware for TLS validation of `sleephq.com`
+- **Default:** ISRG Root X1 (Let's Encrypt) root CA certificate is embedded in firmware for TLS validation of `sleephq.com`
 - **Insecure fallback:** Set `CLOUD_INSECURE_TLS: true` to disable certificate validation (useful for testing with proxies, not recommended for production)
-- The embedded certificate expires June 22, 2036
+- The embedded certificate expires June 4, 2035
 
 #### Content Hash
 
@@ -287,18 +284,6 @@ content_hash = MD5(file_content + filename)
 ```
 
 Where `filename` is the bare filename without path (e.g., `BRP.edf`).
-
-#### Interval-Based Scheduling
-
-By default, uploads occur once daily at `UPLOAD_HOUR`. For more frequent uploads (e.g., when testing or when near-real-time data is desired):
-
-```json
-{
-  "UPLOAD_INTERVAL_MINUTES": 60
-}
-```
-
-This overrides the daily schedule and uploads every 60 minutes regardless of `UPLOAD_HOUR`.
 
 #### MAX_DAYS Filtering
 
@@ -323,7 +308,7 @@ This skips DATALOG folders older than 30 days. The filter compares the folder na
 #### Memory Impact
 
 Cloud upload adds approximately:
-- **Flash:** +110KB over base (with GTS Root R4 CA cert)
+- **Flash:** +110KB over base (with ISRG Root X1 CA cert)
 - **RAM:** +264 bytes static; upload buffers (4KB) allocated during file transfer
 - **Dual-backend (SMB + Cloud):** Flash ~40%, RAM ~14.9% of available
 
@@ -431,14 +416,14 @@ build_flags =
 
 **SD Card Logging:** For advanced debugging, logs can be written to SD card by setting `LOG_TO_SD_CARD: true` in `config.json`. 
 
-⚠️ **WARNING: SD card logging is for debugging only and can cause conflicts when accessing the SD card for CPAP data uploads. Only enable when troubleshooting issues and disable for normal operation.**
+⚠️ **WARNING: SD card logging is for debugging only and can prevent the CPAP machine from reliably accessing the SD card. Only enable it temporarily for troubleshooting, and only when `UPLOAD_MODE` is `"scheduled"` with an upload window outside normal therapy times. Disable it immediately afterward.**
 
 When enabled:
 - Logs are written to `/debug_log.txt` on the SD card
 - All log messages (including serial and buffer logs) are also written to the file
 - File is opened in append mode for each log message
 - If file creation fails, SD logging is automatically disabled
-- Can interfere with CPAP machine SD card access
+- Can interfere with or block CPAP machine SD card access
 
 ### Memory Usage
 
@@ -469,24 +454,18 @@ pio test -e native
 Run specific test suite:
 ```bash
 pio test -e native -f test_config
-pio test -e native -f test_time_budget_manager
 pio test -e native -f test_schedule_manager
+pio test -e native -f test_upload_state_manager
 ```
 
 ### Test Coverage
 
-Current test results: **175 test cases, all passing**
-
-- `test_time_budget_manager`: 25 tests - Time budget and rate calculation
-- `test_config`: 41 tests - Configuration parsing, validation, and cloud options
+- `test_config`: 33 tests - Configuration parsing and validation  
 - `test_credential_migration`: 6 tests - Secure credential storage
-- `test_sd_scan_failure`: 7 tests - SD card error handling
-- `test_webserver`: 9 tests - Web server endpoints
+- `test_logger_circular_buffer`: Logger circular buffer tests
 - `test_native`: 9 tests - Mock infrastructure
 - `test_upload_state_manager`: 42 tests - Upload state tracking
 - `test_schedule_manager`: 22 tests - Scheduling and NTP
-- `test_fileuploader_webserver`: 1 test - Integration testing
-- `test_logger_circular_buffer`: 13 tests - Circular buffer logging
 
 ### Hardware Testing
 
@@ -850,12 +829,13 @@ pio test -e native -f test_config
 - Acceptable binary footprint (~220-270KB)
 - Active maintenance
 
-### Why Time Budgeting?
+### Why Exclusive Access FSM?
 
-CPAP machines need regular SD card access. Time budgeting ensures:
-- Short upload sessions, default 5 seconds, configurable.
-- CPAP machine gets priority
-- Uploads resume automatically
+CPAP machines need regular SD card access. The FSM-based exclusive access model ensures:
+- SD card bus inactivity is confirmed before taking control
+- Upload time is bounded by configurable exclusive access minutes
+- Cooldown periods between upload cycles give the CPAP machine uninterrupted access
+- Uploads resume automatically across multiple cycles
 
 ### Why Circular Buffer Logging?
 
@@ -872,12 +852,12 @@ CPAP machines need regular SD card access. Time budgeting ensures:
 
 ### Why Embedded Root CA Certificate?
 
-The SleepHQ cloud uploader embeds the GTS Root R4 (Google Trust Services) root CA certificate directly in firmware:
+The SleepHQ cloud uploader embeds the ISRG Root X1 (Let's Encrypt) root CA certificate directly in firmware:
 - Avoids dependency on external certificate stores
 - ESP32 has no system CA bundle by default
-- GTS Root R4 covers `sleephq.com` (which uses Google Trust Services)
-- Certificate expires 2036 — well beyond expected device lifetime
-- Optional `CLOUD_INSECURE_TLS` fallback if SleepHQ changes CA provider
+- ISRG Root X1 covers `sleephq.com` and most modern HTTPS sites
+- Certificate expires 2035 — well beyond expected device lifetime
+- Optional `CLOUD_INSECURE_TLS` fallback for development/testing
 
 ### Why Import Lifecycle?
 
@@ -911,22 +891,18 @@ SleepHQ requires an import session workflow (create → upload files → process
 
 ### Upload Performance
 
-- Default rate: 40 KB/s (conservative estimate)
 - Actual rate: Varies by network and share, during tests the transfer achieved 130KB/s
-- Rate tracking: Running average of last 5 uploads
-- Adaptive budgeting: Increases on repeated failures
+- Upload time bounded by EXCLUSIVE_ACCESS_MINUTES config parameter
+- Multiple upload cycles separated by COOLDOWN_MINUTES
 
 ---
 
 ## References
 
-- [CONFIGURATION.md](CONFIGURATION.md) - Complete configuration reference
-- [UPLOAD_FLOW.md](UPLOAD_FLOW.md) - Upload flow diagrams
 - [BUILD_TROUBLESHOOTING.md](BUILD_TROUBLESHOOTING.md) - Build issues
 - [FEATURE_FLAGS.md](FEATURE_FLAGS.md) - Backend selection
 - [LIBSMB2_INTEGRATION.md](LIBSMB2_INTEGRATION.md) - SMB integration details
 - [PlatformIO Docs](https://docs.platformio.org/)
 - [ESP32 Arduino Core](https://github.com/espressif/arduino-esp32)
 - [libsmb2 GitHub](https://github.com/sahlberg/libsmb2)
-- [SleepHQ API Docs](https://sleephq.com/api-docs/index.html)
 
