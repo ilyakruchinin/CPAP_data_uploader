@@ -437,7 +437,7 @@ Current build sizes (with SMB enabled):
 - **Flash:** ~77.8% (1,223,321 / 1,572,864 bytes) - 1.5MB app partition
 - **RAM:** ~14.9% (48,776 / 327,680 bytes) - Static allocation
 
-**Dynamic Memory Analysis:** The `.upload_state.json` file grows with DATALOG folder count (~30 bytes per folder, ~100 bytes per file checksum), and the system now dynamically allocates DynamicJsonDocument buffers sized at 2x the file size for loading and 1.5x estimated size for saving, allowing it to handle thousands of folders limited only by available RAM (~280KB free, supporting ~10+ years of daily CPAP usage before memory exhaustion).
+**Dynamic Memory Analysis:** Upload state now uses a v2 line-based snapshot (`/.upload_state.v2`) plus append-only journal (`/.upload_state.v2.log`) with fixed-size in-memory structures. This avoids large `DynamicJsonDocument` allocations and reduces heap churn/fragmentation during frequent state updates.
 
 ---
 
@@ -536,7 +536,7 @@ git push origin v0.3.0
 4. **Test Upload**
    - [ ] Files uploaded to SMB share (if SMB enabled)
    - [ ] Files uploaded to SleepHQ (if Cloud enabled)
-   - [ ] `.upload_state.json` created on SD card
+   - [ ] `.upload_state.v2` and `.upload_state.v2.log` created on SD card
    - [ ] No errors in serial output
 
 5. **Test Web Interface** (if enabled)
