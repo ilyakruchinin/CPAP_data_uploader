@@ -159,7 +159,7 @@ void TestWebServer::handleRoot() {
     html += "</style></head><body><div class='wrap'>";
     
     // Send initial chunk with headers
-    server->send(200, "text/html", html);
+    server->send(200, "text/html; charset=utf-8", html);
 
     // ── Header ──
     html = "<h1>CPAP Data Uploader</h1>";
@@ -837,7 +837,7 @@ void TestWebServer::handleOTAPage() {
     html += "</script>";
     html += "</body></html>";
     
-    server->send(200, "text/html", html);
+    server->send(200, "text/html; charset=utf-8", html);
 }
 
 // POST /ota-upload - Handle firmware file upload
@@ -1135,5 +1135,5 @@ void TestWebServer::handleMonitorPage() {
     
     html += "</body></html>";
     
-    server->send(200, "text/html", html);
+    server->send(200, "text/html; charset=utf-8", html);
 }
