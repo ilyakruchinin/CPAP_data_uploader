@@ -32,6 +32,7 @@ private:
     String teamId;
     String currentImportId;
     bool connected;
+    bool lowMemoryKeepAliveWarned;
     
     // TLS client
     WiFiClientSecure* tlsClient;

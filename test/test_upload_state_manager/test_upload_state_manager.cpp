@@ -112,8 +112,8 @@ void test_load_state_file_large_with_many_folders() {
     // Create a large v2 snapshot with many completed folders
     std::string stateV2 = "U2|2|1699876800\nR|0|0\n";
     
-    // Add 500 folders to simulate ~1.5 years of usage
-    for (int i = 0; i < 500; i++) {
+    // Add 300 folders to simulate many months of usage
+    for (int i = 0; i < 300; i++) {
         char folderName[16];
         snprintf(folderName, sizeof(folderName), "2024%04d", i);
         stateV2 += "C|";
@@ -132,7 +132,7 @@ void test_load_state_file_large_with_many_folders() {
     // Verify some folders were loaded
     TEST_ASSERT_TRUE(manager.isFolderCompleted("20240000"));
     TEST_ASSERT_TRUE(manager.isFolderCompleted("20240100"));
-    TEST_ASSERT_TRUE(manager.isFolderCompleted("20240499"));
+    TEST_ASSERT_TRUE(manager.isFolderCompleted("20240299"));
 }
 
 // Test state file saving to JSON
@@ -204,9 +204,9 @@ void test_save_state_file_large_with_many_folders() {
     
     manager.begin(testFS);
     
-    // Add many folders to simulate years of usage
+    // Add many folders to simulate many months of usage
     // This tests the dynamic buffer sizing on save
-    for (int i = 0; i < 500; i++) {
+    for (int i = 0; i < 300; i++) {
         char folderName[16];
         snprintf(folderName, sizeof(folderName), "2024%04d", i);
         manager.markFolderCompleted(folderName);
@@ -230,7 +230,7 @@ void test_save_state_file_large_with_many_folders() {
     TEST_ASSERT_EQUAL(1699876800, manager2.getLastUploadTimestamp());
     TEST_ASSERT_TRUE(manager2.isFolderCompleted("20240000"));
     TEST_ASSERT_TRUE(manager2.isFolderCompleted("20240100"));
-    TEST_ASSERT_TRUE(manager2.isFolderCompleted("20240499"));
+    TEST_ASSERT_TRUE(manager2.isFolderCompleted("20240299"));
 }
 
 // Test checksum calculation for files

@@ -249,7 +249,7 @@ Upload to both a local NAS and SleepHQ simultaneously:
 | `CLOUD_DEVICE_ID` | No | `0` | SleepHQ device ID (sent with import creation) |
 | `CLOUD_BASE_URL` | No | `https://sleephq.com` | API base URL |
 | `CLOUD_INSECURE_TLS` | No | `false` | Skip TLS certificate validation (not recommended) |
-| `MAX_DAYS` | No | `0` (all) | Only upload DATALOG folders from the last N days |
+| `MAX_DAYS` | No | `365` | Only upload DATALOG folders from the last N days (supported range: 1-366) |
 
 #### Upload Flow
 
