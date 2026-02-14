@@ -1,17 +1,17 @@
 # ESP32 CPAP Data Uploader - User Guide
 
-This package contains precompiled firmware for automatically uploading CPAP data from your SD card to a network share.
+This package contains precompiled firmware for automatically uploading CPAP data from your SD card to a network share or the Cloud (**SleepHQ**).
 
 ## What This Does
 
-- Automatically uploads CPAP data files from SD card to your network storage (Windows share, NAS, etc.)
-- Uploads once per day at a scheduled time
+- Automatically uploads CPAP data files from SD card to your network storage or the Cloud (SleepHQ)
+- Uploads automatically when therapy ends (Smart Mode) or at a scheduled time
 - Respects CPAP machine access to the SD card (short upload sessions)
 - Tracks which files have been uploaded (no duplicates)
 - Automatically creates directories on remote shares as needed
-- **Tested with ResMed CPAP machines** (may work with other brands)
+- **Supported CPAP Machines:** ResMed Series 9, 10, and 11 (other brands not supported)
 
-**Capacity:** The firmware can track upload state for **10+ years** of daily CPAP usage (3,000+ folders). The 8GB SD WIFI PRO card can store approximately **8+ years** (3,000+ days) of CPAP data based on typical usage (~2.7 MB per day).
+**Capacity:** The firmware tracks upload state for the last **1 year** (rolling window). Older data is automatically ignored based on the `MAX_DAYS` configuration (default 365). The 8GB SD WIFI PRO card can store approximately **8+ years** (3,000+ days) of CPAP data based on typical usage (~2.7 MB per day).
 
 ---
 
@@ -90,22 +90,33 @@ Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
 
 ### 2. Create Configuration File
 
-Create a file named `config.json` in the root of your SD card with your settings:
+Create a file named `config.json` in the root of your SD card.
 
+**Option A: Cloud Upload (SleepHQ)**
 ```json
 {
   "WIFI_SSID": "YourNetworkName",
   "WIFI_PASS": "YourNetworkPassword",
-  "ENDPOINT": "//192.168.1.100/cpap_backups",
+
+  "ENDPOINT_TYPE": "CLOUD",
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+
+  "GMT_OFFSET_HOURS": 0
+}
+```
+
+**Option B: Network Share (SMB)**
+```json
+{
+  "WIFI_SSID": "YourNetworkName",
+  "WIFI_PASS": "YourNetworkPassword",
+  
   "ENDPOINT_TYPE": "SMB",
+  "ENDPOINT": "//192.168.1.100/cpap_backups",
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
-  "UPLOAD_MODE": "smart",
-  "UPLOAD_START_HOUR": 8,
-  "UPLOAD_END_HOUR": 22,
-  "INACTIVITY_SECONDS": 125,
-  "EXCLUSIVE_ACCESS_MINUTES": 5,
-  "COOLDOWN_MINUTES": 10,
+  
   "GMT_OFFSET_HOURS": 0
 }
 ```
@@ -160,15 +171,26 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
   - With subfolder: `"//192.168.1.5/backups/cpap_data"`
 
 **ENDPOINT_TYPE** (required)
-- Type of network share
-- Value: `"SMB"` (currently only SMB/CIFS is supported)
+- Type of upload destination
+- Values: 
+  - `"SMB"` - Upload to network share
+  - `"CLOUD"` - Upload to SleepHQ
+  - `"SMB,CLOUD"` - Upload to both (simultaneously)
 
-**ENDPOINT_USER** (required)
+**CLOUD_CLIENT_ID** (required for CLOUD)
+- Your SleepHQ Client ID
+- Example: `"your-client-id"`
+
+**CLOUD_CLIENT_SECRET** (required for CLOUD)
+- Your SleepHQ Client Secret
+- Example: `"your-client-secret"`
+
+**ENDPOINT_USER** (required for SMB)
 - Username for the network share
 - Example: `"john"` or `"DOMAIN\\john"`
 - Use empty string `""` for guest access (if share allows)
 
-**ENDPOINT_PASS** (required)
+**ENDPOINT_PASS** (required for SMB)
 - Password for the network share
 - Example: `"password123"`
 - Use empty string `""` for guest access
@@ -198,6 +220,12 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - Pause between upload sessions
 - Range: 1-60
 
+**MAX_DAYS** (optional, default: 365)
+- Maximum number of days in the past to check for upload eligibility
+- Range: 1-366
+- Helps prevent infinite loops on very old data and manages memory usage
+- **Note:** Requires valid time synchronization (NTP) to function correctly
+
 **GMT_OFFSET_HOURS** (optional, default: 0)
 - Your timezone offset from GMT/UTC in hours
 - Used for local time calculations (upload window + status display)
@@ -209,6 +237,21 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
   - `+10` = Australian Eastern Time (AEST)
 - For daylight saving time, adjust the offset (e.g., `-7` for PDT instead of `-8` for PST)
 
+### Power Management Settings
+
+**CPU_SPEED_MHZ** (optional, default: 240)
+- CPU frequency in MHz (80, 160, 240)
+- Lower values save power but slow down uploads
+- Recommended for low power: `160`
+
+**WIFI_TX_PWR** (optional, default: "high")
+- WiFi transmission power ("low", "mid", "high")
+- Lower values reduce range but save power
+
+**WIFI_PWR_SAVING** (optional, default: "none")
+- WiFi power saving mode ("none", "mid", "max")
+- "max" saves significant power but may increase latency
+
 ### Debugging Settings
 
 **LOG_TO_SD_CARD** (optional, default: false)
@@ -217,9 +260,60 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - Use only temporarily for troubleshooting, and only with `UPLOAD_MODE`=`"scheduled"` and an upload window outside normal therapy times
 - Automatically disabled if file operations fail
 - Example: `true` or `false`
+
+### Credential Security
+
+The system automatically secures your WiFi and endpoint passwords by moving them to the ESP32's internal flash memory.
+
+**How it works:**
+1. You put plain text passwords in `config.json`
+2. On first boot, the device reads them and saves them to secure storage
+3. The device updates `config.json` replacing passwords with `***STORED_IN_FLASH***`
+4. On subsequent boots, it uses the secure values
+
+**To update a password:**
+- Just replace `***STORED_IN_FLASH***` with your new plain text password in `config.json`
+- The device will detect the change, update the secure storage, and re-censor the file
+
+**To disable security (for debugging):**
+- Add `"STORE_CREDENTIALS_PLAIN_TEXT": true` to your `config.json`
+- Passwords will remain visible in the file
+
 ---
 
 ## Common Configuration Examples
+
+### SleepHQ (Cloud Only)
+```json
+{
+  "WIFI_SSID": "HomeNetwork",
+  "WIFI_PASS": "password",
+  "ENDPOINT_TYPE": "CLOUD",
+  "CLOUD_CLIENT_ID": "your-client-id",
+  "CLOUD_CLIENT_SECRET": "your-client-secret",
+  "UPLOAD_MODE": "smart",
+  "GMT_OFFSET_HOURS": 0
+}
+```
+
+### Dual Upload (SMB + SleepHQ)
+```json
+{
+  "WIFI_SSID": "HomeNetwork",
+  "WIFI_PASS": "password",
+  
+  "ENDPOINT_TYPE": "SMB,CLOUD",
+  "ENDPOINT": "//nas.local/backups",
+  "ENDPOINT_USER": "user",
+  "ENDPOINT_PASS": "pass",
+  
+  "CLOUD_CLIENT_ID": "your-client-id",
+  "CLOUD_CLIENT_SECRET": "your-client-secret",
+  
+  "UPLOAD_MODE": "smart",
+  "GMT_OFFSET_HOURS": 0
+}
+```
 
 ### US Pacific Time (PST/PDT)
 ```json
@@ -292,12 +386,13 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 1. Waits for upload eligibility based on configured mode (`UPLOAD_MODE`)
    - Smart mode: shortly after therapy ends (activity + inactivity detection)
    - Scheduled mode: during configured upload window
-2. Takes control of SD card (CPAP must wait briefly)
+2. Takes control of SD card (only when CPAP is idle)
 3. Uploads new/changed files in priority order:
    - DATALOG folders (newest first)
    - Root files if present (`STR.edf`, `Identification.crc`, `Identification.tgt`, `Identification.json`)
    - SETTINGS files
-4. Automatically creates directories on remote share if they don't exist
+4. **SMB:** Automatically creates directories on remote share
+   **Cloud:** Associates data with your SleepHQ account
 5. Releases SD card after session or time budget exhausted
 6. Saves progress to `.upload_state.v2` (snapshot) and `.upload_state.v2.log` (append-only journal)
 
@@ -307,10 +402,9 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - Never uploads the same file twice
 
 ### SD Card Sharing
-- Only takes control when needed for uploads
-- Keeps sessions short (default 5 seconds)
-- Releases control immediately after session
-- CPAP machine can access card anytime device doesn't have control
+- **Passive Operation:** Only accesses the card when the CPAP machine is idle (no therapy recording)
+- **Short Sessions:** Limits exclusive access time (default 5 minutes) to ensure CPAP can reclaim access if needed
+- **Automatic Release:** Releases control immediately after session or if therapy starts
 
 ---
 
@@ -354,6 +448,7 @@ The firmware includes an optional test web server for development and troublesho
 ### Available Features
 
 **Status Page** (`http://<device-ip>/`)
+- Auto-refreshes every 5 seconds
 - System uptime and current time
 - WiFi signal strength (color-coded)
 - Next scheduled upload time
@@ -364,6 +459,11 @@ The firmware includes an optional test web server for development and troublesho
 **Trigger Upload** (`http://<device-ip>/trigger-upload`)
 - Force immediate upload (bypasses schedule)
 - Useful for testing without waiting
+
+**SD Activity Monitor** (`http://<device-ip>/monitor`)
+- Real-time graph of SD card read/write activity
+- Useful for diagnosing CPAP machine interference
+- Helps verify "Smart Mode" inactivity detection
 
 **View Status** (`http://<device-ip>/status`)
 - JSON format system status
@@ -444,6 +544,18 @@ The firmware includes an optional test web server for development and troublesho
 - Ensure file is named exactly `config.json` (lowercase)
 - Place file in root of SD card (not in a folder)
 - Verify file is valid JSON (use online JSON validator)
+
+### Cloud / SleepHQ Issues
+
+**Authentication Failed**
+- Verify `CLOUD_CLIENT_ID` and `CLOUD_CLIENT_SECRET` in `config.json`
+- Ensure no extra spaces or hidden characters in the credentials
+- Check logs for "401 Unauthorized" or "403 Forbidden" errors
+
+**Upload Failed**
+- Check internet connection (Cloud upload requires internet)
+- Verify `GMT_OFFSET_HOURS` is correct (timestamps matter)
+- View logs for specific API error messages
 
 ### SMB Connection Issues
 
@@ -608,6 +720,31 @@ python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0
 - `README.md` - This file
 
 ---
+
+## Legal & Trademarks
+
+- **SleepHQ** is a trademark of its respective owner. This project is an unofficial client and is not affiliated with, endorsed by, or associated with SleepHQ.
+  - This project uses the officially published [SleepHQ API](https://sleephq.com/api-docs) and does not rely on any non-official methods.
+  - This project is **not intended to compete** with the official [Magic Uploader](https://shop.sleephq.com/products/magic-uploader-pro). We strongly encourage users to support the platform by purchasing the official solution, which comes with vendor support and requires no technical setup (flashing).
+- **ResMed** is a trademark of ResMed. This software is not affiliated with ResMed.
+- All other trademarks are the property of their respective owners.
+
+### Disclaimer & No Warranty
+
+**USE AT YOUR OWN RISK.**
+
+This project (including source code, pre-compiled binaries, and documentation) is provided "as is" and **without any warranty of any kind**, express or implied.
+
+**By using this software, you acknowledge and agree that:**
+1.  **You are solely responsible** for the safety and operation of your CPAP machine and data.
+2.  The authors and contributors **guarantee nothing** regarding the reliability, safety, or suitability of this software.
+3.  **We are not liable** for any damage to your CPAP machine, SD card, loss of therapy data, or any other direct or indirect damage resulting from the use of this project.
+4.  **Warranty Implication:** Using third-party accessories or software with your medical device may void its warranty. You accept this risk entirely.
+
+This software interacts directly with medical device hardware and file systems. While every effort has been made to ensure safety, bugs or hardware incompatibilities can occur.
+
+**GPL-3.0 License Disclaimer:**
+> THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW. EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM IS WITH YOU. SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
 
 ## Support
 
