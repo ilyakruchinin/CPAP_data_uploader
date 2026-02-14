@@ -223,9 +223,11 @@ Testing showed that TLS streaming alone was necessary but not sufficient in long
 
 2. **Fixes implemented (no reboot workaround)**
     * Removed soft-reboot recovery path entirely (no `HEAP_EXHAUSTED`, no reboot counter flow).
-    * Recent DATALOG re-scan now uses **size-only** change tracking.
+    * Upload state moved to **v2 line-based snapshot+journal** (`/.upload_state.v2`, `/.upload_state.v2.log`).
+    * In-memory state now uses bounded fixed-size arrays (deterministic RAM footprint).
+    * Recent DATALOG re-scan uses **size-only** change tracking.
     * DATALOG checksums are no longer persisted; checksum tracking remains for root/SETTINGS files.
-    * Legacy `/DATALOG/...` checksum entries are pruned on state load.
+    * Persistence uses append-only journal writes with periodic compaction, instead of high-churn full JSON rewrites.
     * Per-file immediate state save in `uploadSingleFile()` was removed; persistence happens at folder/session boundaries.
 
 3. **Observed outcome**
