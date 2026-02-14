@@ -255,11 +255,12 @@ UPLOADING state entered
 
 3.  **Memory Stability**: All uploads use the streaming path with small fixed buffers (4KB).
     - The RAM-heavy in-memory path for small files was removed.
-    - Upload state churn was reduced:
+    - Upload state uses v2 bounded structures + incremental persistence:
+      - fixed-size in-memory arrays for folders/retry/file fingerprints
+      - append-only journal (`/.upload_state.v2.log`) with periodic snapshot compaction (`/.upload_state.v2`)
       - recent DATALOG uses size-only tracking
-      - legacy DATALOG checksum entries are pruned on load
       - per-file immediate state saves were removed from `uploadSingleFile()`
-    - *Impact*: less allocation churn in `DynamicJsonDocument` paths and better TLS handshake survivability.
+    - *Impact*: predictable RAM footprint and lower heap fragmentation risk during TLS-heavy sessions.
 
 **Key rules**:
 - No `checkAndReleaseSD()` calls during upload. The ESP holds exclusive access for the
