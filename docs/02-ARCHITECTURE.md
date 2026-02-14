@@ -156,7 +156,7 @@ scan confirms no new data exists, the day is marked completed → IDLE.
 | **IDLE** | Scheduled mode only. Waiting for upload window to open. Checks periodically (every 60s). Not used in smart mode. | Until window opens (scheduled) |
 | **LISTENING** | PCNT sampling bus activity. Tracking consecutive silence. | Until Z seconds of silence (default 125s — see 01-FINDINGS.md §6) |
 | **ACQUIRING** | Taking SD card control, initializing SD_MMC. | ~500ms (brief transition) |
-| **UPLOADING** | ESP has exclusive SD access. Upload runs as a **FreeRTOS task on Core 0**, keeping the web server responsive on Core 1. TLS connection reused across files (HTTP keep-alive). No periodic SD releases. | Up to X minutes or until all files done |
+| **UPLOADING** | ESP has exclusive SD access. Upload runs as a **FreeRTOS task on Core 0**, keeping the web server responsive on Core 1. No periodic SD releases. Cloud imports are finalized per DATALOG folder. | Up to X minutes or until all files done |
 | **RELEASING** | Finishing current file, unmounting SD, releasing mux to host. | ~100ms (brief transition) |
 | **COOLDOWN** | Card released to CPAP. Non-blocking wait. Web server still responsive. | Y minutes |
 | **COMPLETE** | All files uploaded for this cycle. | Transition state |
@@ -173,6 +173,8 @@ The current firmware already categorizes data well:
 - **DATALOG folders** (`/DATALOG/YYYYMMDD/`): Therapy data, one folder per day.
   Sorted newest-first. Tracked by `UploadStateManager` (completed, pending, incomplete).
 - **Root/SETTINGS files** (`/` and `/SETTINGS/`): Device configuration, identification.
+  Required root set (if present): `STR.edf`, `Identification.crc`, `Identification.tgt` (ResMed 9/10),
+  `Identification.json` (ResMed 11). `journal.jnl` is intentionally excluded.
   Tracked by per-file checksums.
 - **Recent folders** (`isRecentFolder()`): DATALOG folders within `RECENT_FOLDER_DAYS` (B).
   These are re-scanned even when marked complete, to detect changed files.
@@ -186,33 +188,34 @@ fresh/old data split:
 | Category | Criteria | Scheduling |
 |---|---|---|
 | **Fresh** | `isRecentFolder(folderName) == true` (within B days) | Smart: anytime. Scheduled: window only. |
-| **Fresh** | Root/SETTINGS files | Same as fresh DATALOG |
+| **Per-import mandatory (cloud)** | Root/SETTINGS files | Uploaded during each cloud import finalization cycle |
 | **Old** | `isRecentFolder(folderName) == false` AND within MAX_DAYS | Both modes: window only |
 | **Ignored** | Older than MAX_DAYS | Never uploaded |
 
 ### 3.3 Upload Completeness Rule
 
-**Root/SETTINGS files are MANDATORY for a valid upload.** An upload of DATALOG folders
-without the accompanying root and SETTINGS files (e.g., `Identification.json`,
-`STR.edf`, machine settings) is not considered a valid import by SleepHQ or other
-backends. These files are small and must always be included to finalize the upload,
-even if the X-minute timer has expired.
+**For cloud imports, root/SETTINGS files are MANDATORY per import cycle.**
 
-This means the X-minute timer only gates **DATALOG folder processing**. Once DATALOG
-folders are done (or timer expired mid-DATALOG), root/SETTINGS files are always
-uploaded before transitioning to RELEASING.
+Current behavior finalizes each DATALOG folder as a separate cloud import cycle:
+1. Upload DATALOG files for one folder
+2. Upload mandatory root files + SETTINGS files (`force=true`)
+3. `processImport()`
+
+This avoids partial imports and constrains per-import memory lifetime. The X-minute
+timer still gates DATALOG folder traversal, but any active import is finalized before
+ending the session.
 
 ### 3.4 Upload Priority Order
 
 Within each upload session (UPLOADING state):
 
-1. **Fresh DATALOG folders** (newest first) — timer X applies per-folder
-2. **Old DATALOG folders** (newest first, only in window) — timer X applies per-folder
-3. **Root/SETTINGS files** (MANDATORY) — always uploaded, timer does NOT skip these
+1. **Fresh DATALOG folders** (newest first) — timer X applies
+2. **Old DATALOG folders** (newest first, only in window) — timer X applies
+3. **For each uploaded folder**: finalize cloud import with mandatory root/SETTINGS,
+   then process import
 
-Root/SETTINGS are uploaded last because they finalize the import. This matches the
-SleepHQ import lifecycle: upload data files first, then metadata/config files, then
-process the import.
+This per-folder finalization pattern is the current design for cloud reliability and
+heap stability.
 
 ---
 
@@ -225,30 +228,18 @@ UPLOADING state entered
     │
     ├─ Phase 1: Fresh DATALOG folders (newest first)
     │   ├─ For each folder:
-    │   │   ├─ Check timer: X minutes expired? → finish current file, exit phase
-    │   │   ├─ For each file in folder:
-    │   │   │   ├─ Check if already uploaded (checksum match) → skip
-    │   │   │   ├─ Upload to all active backends (SMB/WebDAV/Cloud)
-    │   │   │   ├─ Record checksum, update state
-    │   │   │   └─ Handle web requests between files (ENABLE_TEST_WEBSERVER)
-    │   │   └─ Mark folder completed
-    │   └─ All fresh folders done (or timer expired → exit phase)
+    │   │   ├─ Check timer: X minutes expired? → finalize active import, exit
+    │   │   ├─ Upload changed files in folder
+    │   │   ├─ Mark folder completed
+    │   │   └─ Cloud: finalize import for this folder
+    │   │       (mandatory root + SETTINGS upload, then processImport)
+    │   └─ End phase
     │
     ├─ Phase 2: Old DATALOG folders (only if in upload window)
-    │   ├─ Check timer: X minutes expired? → exit phase
-    │   ├─ For each folder (newest first):
-    │   │   ├─ Same file-by-file upload logic as Phase 1
-    │   │   └─ Mark folder completed
-    │   └─ All old folders done (or timer expired → exit phase)
+    │   ├─ Same per-folder logic as Phase 1
+    │   └─ End phase
     │
-    ├─ Phase 3: Root/SETTINGS files *** MANDATORY — NEVER SKIPPED ***
-    │   ├─ Timer does NOT gate this phase
-    │   ├─ Root files (Identification.json, STR.edf, etc.): FORCED upload (ensure valid import)
-    │   ├─ SETTINGS folder: Conditional upload (only if changed)
-    │   └─ These files are small and fast
-    │
-    └─ All files uploaded → COMPLETE
-       OR DATALOG timer expired but root/SETTINGS done → RELEASING
+    └─ Save state once per session boundary and return COMPLETE or TIMEOUT
 ```
 
 ### 4.1 Upload Efficiency Optimizations (Single-Pass)
@@ -263,17 +254,20 @@ UPLOADING state entered
     - *Impact*: Eliminates the 1-2 second TLS handshake overhead for every file after the first one.
 
 3.  **Memory Stability**: All uploads use the streaming path with small fixed buffers (4KB).
-    - The RAM-heavy in-memory path for small files was removed to prevent heap fragmentation.
-    - *Impact*: Stable heap usage (~110KB free) even during long multi-file sessions.
+    - The RAM-heavy in-memory path for small files was removed.
+    - Upload state churn was reduced:
+      - recent DATALOG uses size-only tracking
+      - legacy DATALOG checksum entries are pruned on load
+      - per-file immediate state saves were removed from `uploadSingleFile()`
+    - *Impact*: less allocation churn in `DynamicJsonDocument` paths and better TLS handshake survivability.
 
 **Key rules**:
 - No `checkAndReleaseSD()` calls during upload. The ESP holds exclusive access for the
   entire session. This eliminates the ~1.5 second penalty per release cycle.
-- **Root/SETTINGS files are never skipped by the X-minute timer.** They are small, fast
-  to upload, and required for the upload to be considered valid by backends.
-- The X-minute timer only controls how many DATALOG folders are processed per session.
-  If the timer expires mid-DATALOG, the current file finishes, then root/SETTINGS are
-  uploaded, then the session ends with RELEASING (to resume DATALOG next cycle).
+- **For cloud uploads, root/SETTINGS are mandatory for each finalized import cycle.**
+  They are small, fast, and required for import validity.
+- The X-minute timer controls DATALOG folder traversal. If timer expires, the uploader
+  finalizes any active cloud import, saves state, and exits the session cleanly.
 
 ---
 
@@ -389,11 +383,11 @@ The web page shows a **progressive, auto-updating activity timeline**:
 
 | Component | Changes |
 |---|---|
-| `Config` | New params: UPLOAD_MODE, START/END_HOUR, INACTIVITY_SECONDS, EXCLUSIVE_ACCESS_MINUTES, COOLDOWN_MINUTES. Deprecate: UPLOAD_HOUR, SD_RELEASE_INTERVAL_SECONDS, SD_RELEASE_WAIT_MS, UPLOAD_INTERVAL_MINUTES. |
+| `Config` | Uses FSM timing params only: UPLOAD_MODE, START/END_HOUR, INACTIVITY_SECONDS, EXCLUSIVE_ACCESS_MINUTES, COOLDOWN_MINUTES. Legacy timing keys are unsupported. |
 | `ScheduleManager` | Rewrite: support upload window (two hours), upload mode enum, `isInUploadWindow()` replacing `isUploadTime()`. |
 | `SDCardManager` | Remove `digitalRead(CS_SENSE)` check from `takeControl()`. Activity detection moves to TrafficMonitor (called from main FSM). |
-| `FileUploader` | Remove `checkAndReleaseSD()`. Add phase-based upload with mandatory root/SETTINGS finalization. Accept data category filter. |
-| `UploadStateManager` | Add file-size tracking for fast change detection (skip MD5 when size differs). |
+| `FileUploader` | Remove `checkAndReleaseSD()`. Add phase-based upload with per-folder cloud finalization and session-level state save cadence. |
+| `UploadStateManager` | Add size-first change detection, size-only tracking for recent DATALOG re-scan, and pruning of legacy DATALOG checksum entries to limit state size/heap churn. |
 | `CPAPMonitor` | Replace stub with TrafficMonitor integration. |
 
 ### 7.2 New Components
@@ -406,9 +400,12 @@ The web page shows a **progressive, auto-updating activity timeline**:
 ### 7.3 Components Unchanged
 
 - `WiFiManager` — no changes
-- `SMBUploader` / `WebDAVUploader` / `SleepHQUploader` — no changes (upload backends)
+- `SMBUploader` / `WebDAVUploader` — no architectural changes
 - `Logger` — no changes
 - `TestWebServer` — updates: expose FSM state, SD activity monitor page/endpoint, remove SD release status
+
+`SleepHQUploader` and `UploadStateManager` received memory-stability changes and should
+not be treated as unchanged.
 
 ---
 
@@ -462,70 +459,12 @@ Timeline (smart mode, morning after therapy):
 
 ---
 
-## 9. Open Questions
+## 9. Current Decisions (Resolved)
 
-> These questions should be answered before implementation begins.
-
-### Q1: Upload Window Direction
-
-I'm interpreting `UPLOAD_START_HOUR=8, UPLOAD_END_HOUR=22` as **"uploads allowed 8am to
-10pm"** (the safe daytime hours). The protected therapy hours (10pm–8am) are **outside**
-this window.
-
-- In **scheduled mode**: ALL uploads only within 8am–10pm
-- In **smart mode**: fresh data anytime, old data only within 8am–10pm
-
-**Is this correct?** Or do start/end define the therapy window (inverted logic)?
-
-### Q2: Cross-Midnight Window
-
-If `START=22, END=6`, should the upload window wrap around midnight (22:00→06:00)?
-This would be unusual (uploading during typical therapy hours) but should be supported
-for flexibility.
-
-### Q3: Smart Mode COMPLETE → Re-scan Timing ✅ RESOLVED
-
-**Answer**: Smart mode uses a **continuous loop** (Option B variant). After COMPLETE,
-the FSM always goes through RELEASING → COOLDOWN → LISTENING → ACQUIRING → UPLOADING.
-The upload cycle itself scans the SD card and discovers new data naturally. There is no
-separate "re-scan" step — the scan IS the upload cycle. If no new data is found, the
-cycle completes immediately and loops back. The cooldown period (Y minutes) prevents
-excessive SD card access. IDLE is never used in smart mode.
-
-### Q4: Web "Upload Now" Behavior
-
-Should the web interface "Upload Now" button:
-- (a) Skip inactivity check entirely (immediate SD takeover)
-- (b) Use a shortened inactivity check (e.g., 5 seconds instead of Z)
-- (c) Still require full Z-second inactivity check
-
-Currently it does (a). Recommend keeping (a) since it's a manual override — the user
-knows the CPAP is not in use.
-
-### Q5: Backward Compatibility
-
-Should old config params be supported as fallbacks?
-
-| Old Param | New Equivalent | Fallback? |
-|---|---|---|
-| `UPLOAD_HOUR` | `UPLOAD_START_HOUR` (same value), `UPLOAD_END_HOUR` (+2 hours) | Suggested |
-| `SESSION_DURATION_SECONDS` | `EXCLUSIVE_ACCESS_MINUTES` (÷60) | Suggested |
-| `SD_RELEASE_INTERVAL_SECONDS` | Removed (no periodic release) | Ignored with warning |
-| `SD_RELEASE_WAIT_MS` | Removed | Ignored with warning |
-| `UPLOAD_INTERVAL_MINUTES` | `UPLOAD_MODE=smart` (if >0) | Suggested |
-
-### Q6: MAX_DAYS vs RECENT_FOLDER_DAYS Interaction
-
-Current behavior: `MAX_DAYS` is a hard cutoff (older folders completely ignored).
-`RECENT_FOLDER_DAYS` (B) defines re-scan window for changed files.
-
-Proposed: B now **also** defines the fresh/old scheduling split.
-MAX_DAYS remains as the absolute oldest limit. Data between B and MAX_DAYS is "old"
-(uploaded only in window). Data older than MAX_DAYS is ignored entirely.
-
-```
-|--- ignored ---|--- old data ---|--- fresh data ---|
-              MAX_DAYS           B days ago         today
-```
-
-**Is this correct?**
+1. `UPLOAD_START_HOUR`/`UPLOAD_END_HOUR` define the allowed upload window.
+2. Cross-midnight windows are supported.
+3. Smart mode remains a continuous loop (no dedicated re-scan state).
+4. Web "Upload Now" is a manual override and may skip inactivity wait.
+5. Legacy upload timing flags are not supported; use FSM keys (`UPLOAD_MODE`, `UPLOAD_START_HOUR`, `UPLOAD_END_HOUR`, `INACTIVITY_SECONDS`, `EXCLUSIVE_ACCESS_MINUTES`, `COOLDOWN_MINUTES`).
+6. `RECENT_FOLDER_DAYS` defines fresh vs old; `MAX_DAYS` is hard cutoff.
+7. Heap recovery is handled by allocation-churn reduction, not reboot orchestration.

@@ -181,6 +181,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     }
     
     // ── Phase 1: Fresh DATALOG folders (newest first) ──
+    int consecutiveFailures = 0;
     if (!timerExpired && needFresh) {
         LOG("[FileUploader] Phase 1: Fresh DATALOG folders");
         
@@ -188,14 +189,38 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             if (isTimerExpired()) {
                 LOG("[FileUploader] X-minute timer expired during fresh DATALOG phase");
                 timerExpired = true;
+                // Finalize any partial import before timing out
+                if (cloudImportCreated) finalizeCloudImport(sdManager, sd);
                 break;
             }
             
-            if (uploadDatalogFolder(sdManager, folderName)) {
+            bool folderOk = uploadDatalogFolder(sdManager, folderName);
+            
+            // Finalize this folder's import (mandatory files + processImport + TLS reset)
+            if (cloudImportCreated) {
+                finalizeCloudImport(sdManager, sd);
                 anyUploaded = true;
+            }
+            
+            if (!folderOk) {
+                if (!cloudImportCreated) {
+                    consecutiveFailures++;
+                } else {
+                    consecutiveFailures = 0;
+                }
+                LOGF("[FileUploader] Folder %s had errors, trying next folder", folderName.c_str());
+                cloudImportFailed = false;
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+                if (sleephqUploader && !sleephqUploader->isTlsAlive()) {
+                    sleephqUploader->resetConnection();
+                }
+#endif
+                if (consecutiveFailures >= 2) {
+                    LOG("[FileUploader] Heap fragmented beyond recovery in this session, stopping early");
+                    break;
+                }
             } else {
-                LOGF("[FileUploader] Folder upload interrupted: %s", folderName.c_str());
-                break;
+                consecutiveFailures = 0;
             }
             
 #ifdef ENABLE_TEST_WEBSERVER
@@ -213,14 +238,38 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 if (isTimerExpired()) {
                     LOG("[FileUploader] X-minute timer expired during old DATALOG phase");
                     timerExpired = true;
+                    // Finalize any partial import before timing out
+                    if (cloudImportCreated) finalizeCloudImport(sdManager, sd);
                     break;
                 }
                 
-                if (uploadDatalogFolder(sdManager, folderName)) {
+                bool folderOk = uploadDatalogFolder(sdManager, folderName);
+                
+                // Finalize this folder's import (mandatory files + processImport + TLS reset)
+                if (cloudImportCreated) {
+                    finalizeCloudImport(sdManager, sd);
                     anyUploaded = true;
+                }
+                
+                if (!folderOk) {
+                    if (!cloudImportCreated) {
+                        consecutiveFailures++;
+                    } else {
+                        consecutiveFailures = 0;
+                    }
+                    LOGF("[FileUploader] Folder %s had errors, trying next folder", folderName.c_str());
+                    cloudImportFailed = false;
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+                    if (sleephqUploader && !sleephqUploader->isTlsAlive()) {
+                        sleephqUploader->resetConnection();
+                    }
+#endif
+                    if (consecutiveFailures >= 2) {
+                        LOG("[FileUploader] Heap fragmented beyond recovery in this session, stopping early");
+                        break;
+                    }
                 } else {
-                    LOGF("[FileUploader] Folder upload interrupted: %s", folderName.c_str());
-                    break;
+                    consecutiveFailures = 0;
                 }
                 
 #ifdef ENABLE_TEST_WEBSERVER
@@ -232,56 +281,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         }
     }
     
-    // ── Phase 3: Root/SETTINGS files (only if DATALOG files were uploaded) ──
-    if (anyUploaded) {
-        LOG("[FileUploader] Phase 3: Root/SETTINGS files");
-        
-        // 1. Mandatory Root Files (Force upload every session)
-        // These files are critical for import context and must be included even if unchanged
-        std::vector<String> rootFiles = {
-            "/Identification.json",
-            "/Identification.crc",
-            "/Identification.tgt",
-            "/STR.edf",
-            "/journal.jnl"
-        };
-        
-        for (const String& filePath : rootFiles) {
-            // Upload with force=true to skip hasFileChanged check
-            if (sd.exists(filePath)) {
-                uploadSingleFile(sdManager, filePath, true);
-            }
-            
-#ifdef ENABLE_TEST_WEBSERVER
-            if (webServer) webServer->handleClient();
-#endif
-        }
-        
-        // 2. Settings Files (Upload only if changed)
-        std::vector<String> settingsFiles = scanSettingsFiles(sd);
-        
-        for (const String& filePath : settingsFiles) {
-            // Upload with force=false (default) to respect hasFileChanged
-            uploadSingleFile(sdManager, filePath, false);
-            
-#ifdef ENABLE_TEST_WEBSERVER
-            if (webServer) webServer->handleClient();
-#endif
-        }
-    } else {
-        LOG("[FileUploader] Skipping root/SETTINGS - no DATALOG files uploaded this session");
-    }
-    
-    // Process cloud import if active
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (sleephqUploader && config->hasCloudEndpoint()) {
-        if (!sleephqUploader->getCurrentImportId().isEmpty()) {
-            if (!sleephqUploader->processImport()) {
-                LOG_WARN("[FileUploader] Failed to process cloud import");
-            }
-        }
-    }
-#endif
+    // Phase 3 removed — mandatory files + processImport now handled per-folder by finalizeCloudImport()
     
     // Save upload state
     if (!stateManager->save(sd)) {
@@ -571,6 +571,53 @@ bool FileUploader::ensureCloudImport() {
 }
 
 
+// Finalize current cloud import: upload mandatory files, process, reset for next folder
+void FileUploader::finalizeCloudImport(SDCardManager* sdManager, fs::FS &sd) {
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (!cloudImportCreated || !sleephqUploader || !config->hasCloudEndpoint()) return;
+    
+    LOG("[FileUploader] Finalizing cloud import with mandatory files...");
+    
+    // Upload mandatory root files for ResMed/SleepHQ imports (force=true, each import needs them)
+    // Upload only supported root artifacts; ignore unrelated root files.
+    const char* rootPaths[] = {
+        "/Identification.json", "/Identification.crc", "/Identification.tgt",
+        "/STR.edf"
+    };
+    for (const char* path : rootPaths) {
+        if (sd.exists(path)) {
+            uploadSingleFile(sdManager, String(path), true);
+        }
+    }
+    
+    // Upload settings files (force=true for each import)
+    std::vector<String> settingsFiles = scanSettingsFiles(sd);
+    for (const String& filePath : settingsFiles) {
+        uploadSingleFile(sdManager, filePath, true);
+    }
+    
+    // Process the import (uses raw TLS if connection alive, falls back to HTTPClient)
+    if (!sleephqUploader->getCurrentImportId().isEmpty()) {
+        if (!sleephqUploader->processImport()) {
+            LOG_WARN("[FileUploader] Failed to process cloud import for this folder");
+        }
+    }
+    
+    // Reset import flags for next folder's import cycle
+    cloudImportCreated = false;
+    cloudImportFailed = false;
+    
+    // If connection died, free TLS memory (~40KB) so next folder can establish a new one
+    if (!sleephqUploader->isTlsAlive()) {
+        sleephqUploader->resetConnection();
+        LOG("[FileUploader] Connection lost, TLS memory freed for next folder");
+    } else {
+        LOG("[FileUploader] Import cycle complete, connection kept alive for next folder");
+    }
+#endif
+}
+
+
 // Upload all files in a DATALOG folder
 bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& folderName) {
     fs::FS &sd = sdManager->getFS();
@@ -648,7 +695,8 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
     }
     
     // Check if this is a recently completed folder being re-scanned
-    bool isRecentRescan = stateManager->isFolderCompleted(folderName) && isRecentFolder(folderName);
+    bool isRecent = isRecentFolder(folderName);
+    bool isRecentRescan = stateManager->isFolderCompleted(folderName) && isRecent;
     
     // Upload each file
     int uploadedCount = 0;
@@ -779,15 +827,10 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
             return false;  // Stop processing this folder
         }
         
-        // Store per-file checksum + size so hasFileChanged() can detect changes on re-scan
-        // Use checksum from upload if available (saves a read), otherwise calculate it
-        String checksum = fileChecksum;
-        if (checksum.isEmpty()) {
-            checksum = stateManager->calculateChecksum(sd, localPath);
-        }
-        
-        if (!checksum.isEmpty()) {
-            stateManager->markFileUploaded(localPath, checksum, fileSize);
+        // For DATALOG files, only recent folders need change tracking for re-scans.
+        // Track size only (no per-file MD5) to minimize heap churn/fragmentation.
+        if (isRecent) {
+            stateManager->markFileUploaded(localPath, "", fileSize);
         }
         
         uploadedCount++;
@@ -950,7 +993,6 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
     
     if (!checksum.isEmpty()) {
         stateManager->markFileUploaded(filePath, checksum, fileSize);
-        stateManager->save(sd);
     }
     
     LOGF("[FileUploader] Successfully uploaded: %s (%lu bytes)", filePath.c_str(), bytesTransferred);

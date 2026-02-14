@@ -8,6 +8,10 @@
 #include "esp32/rom/md5_hash.h"
 #endif
 
+static inline bool isDatalogPath(const String& path) {
+    return path.startsWith("/DATALOG/");
+}
+
 UploadStateManager::UploadStateManager() 
     : stateFilePath("/.upload_state.json"),
       lastUploadTimestamp(0),
@@ -98,14 +102,9 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
 }
 
 bool UploadStateManager::hasFileChanged(fs::FS &sd, const String& filePath) {
-    // Fast path: check if we have any record of this file
     auto checksumIt = fileChecksums.find(filePath);
-    if (checksumIt == fileChecksums.end()) {
-        // No stored checksum — file is new, definitely changed
-        return true;
-    }
     
-    // Fast path: compare file size first (O(1), no file read)
+    // Fast path: compare file size first (O(1), one file open)
     // CPAP files typically grow when new data is appended, so size change
     // catches ~95% of modifications without reading the file.
     auto sizeIt = fileSizes.find(filePath);
@@ -120,6 +119,16 @@ bool UploadStateManager::hasFileChanged(fs::FS &sd, const String& filePath) {
                        filePath.c_str(), sizeIt->second, currentSize);
             return true;  // Size differs — definitely changed
         }
+
+        // Size unchanged and we're in size-only tracking mode (no checksum stored)
+        if (checksumIt == fileChecksums.end() || checksumIt->second.isEmpty()) {
+            return false;
+        }
+    }
+
+    // No stored checksum and no size record — treat as new/changed
+    if (checksumIt == fileChecksums.end()) {
+        return true;
     }
     
     // Slow path: size matches (or no stored size) — compare MD5 checksums
@@ -132,7 +141,12 @@ bool UploadStateManager::hasFileChanged(fs::FS &sd, const String& filePath) {
 }
 
 void UploadStateManager::markFileUploaded(const String& filePath, const String& checksum, unsigned long fileSize) {
-    fileChecksums[filePath] = checksum;
+    if (!checksum.isEmpty()) {
+        fileChecksums[filePath] = checksum;
+    } else {
+        // Size-only tracking entry (used for recent DATALOG re-scan optimization)
+        fileChecksums.erase(filePath);
+    }
     if (fileSize > 0) {
         fileSizes[filePath] = fileSize;
     }
@@ -346,6 +360,22 @@ bool UploadStateManager::loadState(fs::FS &sd) {
         }
     }
 #endif
+
+    // Prune legacy DATALOG checksum entries to keep state small and avoid
+    // heap fragmentation from large checksum maps/documents. DATALOG files are
+    // folder-tracked; only root/SETTINGS checksum tracking is required long-term.
+    int prunedDatalogChecksums = 0;
+    for (auto it = fileChecksums.begin(); it != fileChecksums.end(); ) {
+        if (isDatalogPath(it->first)) {
+            it = fileChecksums.erase(it);
+            prunedDatalogChecksums++;
+        } else {
+            ++it;
+        }
+    }
+    if (prunedDatalogChecksums > 0) {
+        LOGF("[UploadStateManager] Pruned %d legacy DATALOG checksum entries", prunedDatalogChecksums);
+    }
     
     // Load completed folders
     completedDatalogFolders.clear();

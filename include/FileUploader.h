@@ -30,9 +30,9 @@ class TestWebServer;
 
 // Result of an exclusive-access upload session
 enum class UploadResult {
-    COMPLETE,    // All eligible files uploaded
-    TIMEOUT,     // X-minute timer expired (partial upload, not an error)
-    ERROR        // Upload failure
+    COMPLETE,        // All eligible files uploaded
+    TIMEOUT,         // X-minute timer expired (partial upload, not an error)
+    ERROR            // Upload failure
 };
 
 // Filter for which data categories to upload
@@ -78,6 +78,8 @@ private:
     
     // Helper: lazily create cloud import session on first actual upload
     bool ensureCloudImport();
+    // Helper: finalize current import with mandatory files + processImport + reset
+    void finalizeCloudImport(class SDCardManager* sdManager, fs::FS &sd);
     bool cloudImportCreated;
     bool cloudImportFailed;  // True if ensureCloudImport() failed; skip cloud backend for session
 
