@@ -34,6 +34,7 @@ SleepHQUploader::SleepHQUploader(Config* cfg)
       tokenObtainedAt(0),
       tokenExpiresIn(0),
       connected(false),
+      lowMemoryKeepAliveWarned(false),
       tlsClient(nullptr) {
 }
 
@@ -685,6 +686,9 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
     // BUT: If memory is low (fragmented), we MUST preserve the existing connection
     // because we might not be able to allocate a new SSL context if we close it.
     bool lowMemory = (maxAlloc < 50000); // 50KB threshold (SSL needs ~40KB contiguous)
+    if (!lowMemory) {
+        lowMemoryKeepAliveWarned = false;
+    }
     bool useKeepAlive = (lockedFileSize <= 5 * 1024) || lowMemory;
     
     if (tlsClient && tlsClient->connected()) {
@@ -693,7 +697,10 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
             tlsClient->stop(); 
             yield();
         } else if (lowMemory && lockedFileSize > 5 * 1024) {
-            LOG_WARNF("[SleepHQ] Low memory (%u bytes contiguous) - forcing keep-alive to preserve SSL context", maxAlloc);
+            if (!lowMemoryKeepAliveWarned) {
+                LOG_WARNF("[SleepHQ] Low memory (%u bytes contiguous) - forcing keep-alive to preserve SSL context", maxAlloc);
+                lowMemoryKeepAliveWarned = true;
+            }
             useKeepAlive = true; // override keep-alive policy
         }
     }
@@ -780,9 +787,11 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
             return false;
         }
 
-        // Check if heap has enough contiguous memory for SSL handshake (~40KB needed)
+        // Check if heap has enough contiguous memory for SSL handshake.
+        // Empirically, requests can still succeed a bit below 40KB on some builds,
+        // so keep a safety floor without over-blocking recoverable sessions.
         uint32_t maxAlloc = ESP.getMaxAllocHeap();
-        if (!tlsClient->connected() && maxAlloc < 40000) {
+        if (!tlsClient->connected() && maxAlloc < 36000) {
             LOG_ERRORF("[SleepHQ] Insufficient contiguous heap for SSL (%u bytes), skipping request", maxAlloc);
             return false;
         }

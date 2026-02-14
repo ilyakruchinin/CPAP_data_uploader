@@ -322,6 +322,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
 // Scan DATALOG folders and sort by date (newest first)
 std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCompleted) {
     std::vector<String> folders;
+    int eligibleFolderCount = 0;
     
     File root = sd.open("/DATALOG");
     if (!root) {
@@ -375,6 +376,10 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
                 file = root.openNextFile();
                 continue;
             }
+
+            // Count all eligible DATALOG folders (completed, incomplete, and empty-pending)
+            // so progress can report remaining data folders across cooldown cycles.
+            eligibleFolderCount++;
             
             // Check if folder is already completed
             if (stateManager->isFolderCompleted(folderName)) {
@@ -433,6 +438,10 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, bool includeCom
         LOG_DEBUG("[FileUploader] Either all folders are uploaded or DATALOG is empty");
     } else {
         LOG_DEBUGF("[FileUploader] Found %d incomplete DATALOG folders", folders.size());
+    }
+
+    if (stateManager) {
+        stateManager->setTotalFoldersCount(eligibleFolderCount);
     }
     
     return folders;

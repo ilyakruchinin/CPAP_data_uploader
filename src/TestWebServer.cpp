@@ -111,6 +111,7 @@ void TestWebServer::handleRoot() {
     String html = "<!DOCTYPE html><html><head>";
     html += "<title>CPAP Data Uploader</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<meta http-equiv='refresh' content='5'>";
     html += "<style>";
     html += "*{box-sizing:border-box;margin:0;padding:0}";
     html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
@@ -239,13 +240,17 @@ void TestWebServer::handleRoot() {
         if (dataTotal == 0 && pending == 0) {
             html += "<div class='row'><span class='k'>Status</span><span class='v'>Waiting for first scan</span></div>";
         } else {
+            if (scheduleManager && config && config->getMaxDays() > 0 && !scheduleManager->isTimeSynced()) {
+                html += "<div class='row' style='margin-top:6px'><span class='k'>Warning</span><span class='v' style='color:#ffaa44'>Time not synced: MAX_DAYS cutoff is inactive, so all DATALOG folders may be processed this cycle</span></div>";
+            }
+
             if (dataTotal > 0) {
                 int pct = (completed * 100 / dataTotal);
                 html += "<div class='row'><span class='k'>Data folders</span><span class='v'>" + String(completed) + " / " + String(dataTotal) + " uploaded</span></div>";
                 html += "<div class='prog-bar'><div class='prog-fill' style='width:" + String(pct) + "%'></div></div>";
 
                 if (incomplete > 0) {
-                    html += "<div class='row' style='margin-top:6px'><span class='k'>Remaining</span><span class='v' style='color:#ffaa44'>" + String(incomplete) + " data folders</span></div>";
+                    html += "<div class='row' style='margin-top:6px'><span class='k'>Pending data folders</span><span class='v' style='color:#ffaa44'>" + String(incomplete) + " (will continue in next cycle)</span></div>";
                 } else {
                     html += "<div class='row' style='margin-top:6px'><span class='k'>Data upload status</span><span class='v' style='color:#66dd88'>Complete</span></div>";
                 }
@@ -353,12 +358,14 @@ void TestWebServer::handleStatus() {
         
         json += "\"completed_folders\":" + String(completedFolders) + ",";
         json += "\"incomplete_folders\":" + String(incompleteFolders) + ",";
+        json += "\"pending_data_folders\":" + String(incompleteFolders) + ",";
         json += "\"pending_folders\":" + String(pendingFolders) + ",";
         json += "\"total_folders\":" + String(totalFolders) + ",";
         json += "\"upload_state_initialized\":" + String((totalFolders + pendingFolders) > 0 ? "true" : "false");
     } else {
         json += "\"completed_folders\":0,";
         json += "\"incomplete_folders\":0,";
+        json += "\"pending_data_folders\":0,";
         json += "\"pending_folders\":0,";
         json += "\"total_folders\":0,";
         json += "\"upload_state_initialized\":false";
