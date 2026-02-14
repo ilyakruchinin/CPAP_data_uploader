@@ -11,13 +11,8 @@ const char* Config::CENSORED_VALUE = "***STORED_IN_FLASH***";
 const size_t Config::JSON_FILE_MAX_SIZE;
 
 Config::Config() : 
-    uploadHour(12),  // Default: noon
-    sessionDurationSeconds(300),  // Default: 300 seconds (5 minutes)
-    maxRetryAttempts(3),  // Default: 3 attempts
     gmtOffsetHours(0),  // Default: UTC
     bootDelaySeconds(30),  // Default: 30 seconds
-    sdReleaseIntervalSeconds(2),  // Default: 2 seconds
-    sdReleaseWaitMs(500),  // Default: 500ms
     logToSdCard(false),  // Default: do not log to SD card (debugging only)
     isValid(false),
     
@@ -25,9 +20,16 @@ Config::Config() :
     cloudBaseUrl("https://sleephq.com"),
     cloudDeviceId(0),
     maxDays(0),  // Default: all days
-    uploadIntervalMinutes(0),  // Default: use daily schedule
     recentFolderDays(2),  // Default: re-check today + yesterday
     cloudInsecureTls(false),  // Default: use root CA validation
+    
+    // Upload FSM defaults
+    uploadMode("smart"),
+    uploadStartHour(9),
+    uploadEndHour(21),
+    inactivitySeconds(125),
+    exclusiveAccessMinutes(5),
+    cooldownMinutes(10),
     
     _hasSmbEndpoint(false),
     _hasCloudEndpoint(false),
@@ -484,14 +486,9 @@ bool Config::loadFromSD(fs::FS &sd) {
     endpointType = doc["ENDPOINT_TYPE"] | "";
     endpointUser = doc["ENDPOINT_USER"] | "";
     
-    // Parse new configuration fields with defaults
-    uploadHour = doc["UPLOAD_HOUR"] | 12;
-    sessionDurationSeconds = doc["SESSION_DURATION_SECONDS"] | 300;
-    maxRetryAttempts = doc["MAX_RETRY_ATTEMPTS"] | 3;
+    // Parse configuration fields with defaults
     gmtOffsetHours = doc["GMT_OFFSET_HOURS"] | 0;
     bootDelaySeconds = doc["BOOT_DELAY_SECONDS"] | 30;
-    sdReleaseIntervalSeconds = doc["SD_RELEASE_INTERVAL_SECONDS"] | 2;
-    sdReleaseWaitMs = doc["SD_RELEASE_WAIT_MS"] | 1500;
     logToSdCard = doc["LOG_TO_SD_CARD"] | false;
     
     // Cloud upload settings
@@ -500,7 +497,6 @@ bool Config::loadFromSD(fs::FS &sd) {
     cloudBaseUrl = doc["CLOUD_BASE_URL"] | "https://sleephq.com";
     cloudDeviceId = doc["CLOUD_DEVICE_ID"] | 0;
     maxDays = doc["MAX_DAYS"] | 0;
-    uploadIntervalMinutes = doc["UPLOAD_INTERVAL_MINUTES"] | 0;
     recentFolderDays = doc["RECENT_FOLDER_DAYS"] | 2;
     cloudInsecureTls = doc["CLOUD_INSECURE_TLS"] | false;
     
@@ -510,17 +506,66 @@ bool Config::loadFromSD(fs::FS &sd) {
         maxDays = 0;
     }
     
-    // Validate UPLOAD_INTERVAL_MINUTES
-    if (uploadIntervalMinutes < 0) {
-        LOG_WARN("UPLOAD_INTERVAL_MINUTES cannot be negative, setting to 0 (daily schedule)");
-        uploadIntervalMinutes = 0;
-    }
-    
     // Validate RECENT_FOLDER_DAYS
     if (recentFolderDays < 0) {
         LOG_WARN("RECENT_FOLDER_DAYS cannot be negative, setting to 2");
         recentFolderDays = 2;
     }
+    
+    // Upload FSM settings
+    uploadMode = doc["UPLOAD_MODE"] | "smart";
+    uploadStartHour = doc["UPLOAD_START_HOUR"] | 9;
+    uploadEndHour = doc["UPLOAD_END_HOUR"] | 21;
+    inactivitySeconds = doc["INACTIVITY_SECONDS"] | 125;
+    exclusiveAccessMinutes = doc["EXCLUSIVE_ACCESS_MINUTES"] | 5;
+    cooldownMinutes = doc["COOLDOWN_MINUTES"] | 10;
+    
+    // Validate upload mode
+    if (uploadMode != "scheduled" && uploadMode != "smart") {
+        LOG_WARNF("Invalid UPLOAD_MODE '%s', defaulting to 'smart'", uploadMode.c_str());
+        uploadMode = "smart";
+    }
+    
+    // Validate hours (0-23)
+    if (uploadStartHour < 0 || uploadStartHour > 23) {
+        LOG_WARN("UPLOAD_START_HOUR must be 0-23, setting to 9");
+        uploadStartHour = 9;
+    }
+    if (uploadEndHour < 0 || uploadEndHour > 23) {
+        LOG_WARN("UPLOAD_END_HOUR must be 0-23, setting to 21");
+        uploadEndHour = 21;
+    }
+    
+    // Validate inactivity seconds (minimum 10s, maximum 3600s)
+    if (inactivitySeconds < 10) {
+        LOG_WARN("INACTIVITY_SECONDS below minimum (10s), setting to 10");
+        inactivitySeconds = 10;
+    } else if (inactivitySeconds > 3600) {
+        LOG_WARN("INACTIVITY_SECONDS above maximum (3600s), setting to 3600");
+        inactivitySeconds = 3600;
+    }
+    
+    // Validate exclusive access minutes (minimum 1, maximum 30)
+    if (exclusiveAccessMinutes < 1) {
+        LOG_WARN("EXCLUSIVE_ACCESS_MINUTES below minimum (1), setting to 1");
+        exclusiveAccessMinutes = 1;
+    } else if (exclusiveAccessMinutes > 30) {
+        LOG_WARN("EXCLUSIVE_ACCESS_MINUTES above maximum (30), setting to 30");
+        exclusiveAccessMinutes = 30;
+    }
+    
+    // Validate cooldown minutes (minimum 1, maximum 60)
+    if (cooldownMinutes < 1) {
+        LOG_WARN("COOLDOWN_MINUTES below minimum (1), setting to 1");
+        cooldownMinutes = 1;
+    } else if (cooldownMinutes > 60) {
+        LOG_WARN("COOLDOWN_MINUTES above maximum (60), setting to 60");
+        cooldownMinutes = 60;
+    }
+    
+    LOGF("Upload FSM: mode=%s, window=%d-%d, inactivity=%ds, exclusive=%dmin, cooldown=%dmin",
+         uploadMode.c_str(), uploadStartHour, uploadEndHour,
+         inactivitySeconds, exclusiveAccessMinutes, cooldownMinutes);
     
     // Power management settings with validation
     cpuSpeedMhz = doc["CPU_SPEED_MHZ"] | 240;
@@ -711,9 +756,6 @@ bool Config::loadFromSD(fs::FS &sd) {
         if (maxDays > 0) {
             LOGF("MAX_DAYS: %d (only upload last %d days of data)", maxDays, maxDays);
         }
-        if (uploadIntervalMinutes > 0) {
-            LOGF("Upload interval: every %d minutes", uploadIntervalMinutes);
-        }
         if (recentFolderDays > 0) {
             LOGF("Recent folder re-check: %d days", recentFolderDays);
         }
@@ -733,13 +775,8 @@ const String& Config::getEndpoint() const { return endpoint; }
 const String& Config::getEndpointType() const { return endpointType; }
 const String& Config::getEndpointUser() const { return endpointUser; }
 const String& Config::getEndpointPassword() const { return endpointPassword; }
-int Config::getUploadHour() const { return uploadHour; }
-int Config::getSessionDurationSeconds() const { return sessionDurationSeconds; }
-int Config::getMaxRetryAttempts() const { return maxRetryAttempts; }
 int Config::getGmtOffsetHours() const { return gmtOffsetHours; }
 int Config::getBootDelaySeconds() const { return bootDelaySeconds; }
-int Config::getSdReleaseIntervalSeconds() const { return sdReleaseIntervalSeconds; }
-int Config::getSdReleaseWaitMs() const { return sdReleaseWaitMs; }
 bool Config::getLogToSdCard() const { return logToSdCard; }
 bool Config::valid() const { return isValid; }
 
@@ -754,7 +791,6 @@ const String& Config::getCloudTeamId() const { return cloudTeamId; }
 const String& Config::getCloudBaseUrl() const { return cloudBaseUrl; }
 int Config::getCloudDeviceId() const { return cloudDeviceId; }
 int Config::getMaxDays() const { return maxDays; }
-int Config::getUploadIntervalMinutes() const { return uploadIntervalMinutes; }
 int Config::getRecentFolderDays() const { return recentFolderDays; }
 bool Config::getCloudInsecureTls() const { return cloudInsecureTls; }
 
@@ -766,6 +802,15 @@ bool Config::hasWebdavEndpoint() const { return _hasWebdavEndpoint; }
 int Config::getCpuSpeedMhz() const { return cpuSpeedMhz; }
 WifiTxPower Config::getWifiTxPower() const { return wifiTxPower; }
 WifiPowerSaving Config::getWifiPowerSaving() const { return wifiPowerSaving; }
+
+// Upload FSM getters
+const String& Config::getUploadMode() const { return uploadMode; }
+int Config::getUploadStartHour() const { return uploadStartHour; }
+int Config::getUploadEndHour() const { return uploadEndHour; }
+int Config::getInactivitySeconds() const { return inactivitySeconds; }
+int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
+int Config::getCooldownMinutes() const { return cooldownMinutes; }
+bool Config::isSmartMode() const { return uploadMode == "smart"; }
 
 // Helper methods for enum conversion
 WifiTxPower Config::parseWifiTxPower(const String& str) {

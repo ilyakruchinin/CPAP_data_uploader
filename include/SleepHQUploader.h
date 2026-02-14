@@ -9,8 +9,6 @@
 #include <WiFiClientSecure.h>
 #include "Config.h"
 
-class SDCardManager;  // Forward declaration for SD release during network I/O
-
 /**
  * SleepHQUploader - Uploads CPAP data to SleepHQ cloud service via REST API
  * 
@@ -33,8 +31,6 @@ private:
     // API state
     String teamId;
     String currentImportId;
-    int deviceId;  // Auto-discovered or from config
-    String machineName;  // User's machine name (from /teams/{id}/machines)
     bool connected;
     
     // TLS client
@@ -44,17 +40,17 @@ private:
     bool httpRequest(const String& method, const String& path, 
                      const String& body, const String& contentType,
                      String& responseBody, int& httpCode);
-    
-    // Single-read streaming upload with progressive hash computation.
-    // Reads the file exactly once: each chunk is hashed and sent over TLS.
-    // content_hash is placed after the file in the multipart body.
-    // SD card is released between chunks when sdManager is provided.
     bool httpMultipartUpload(const String& path, const String& fileName,
-                             const String& filePath, unsigned long fileSize,
+                             const String& filePath, const String& contentHash,
+                             unsigned long lockedFileSize,
                              fs::FS &sd, unsigned long& bytesTransferred,
                              String& responseBody, int& httpCode,
-                             SDCardManager* sdManager = nullptr,
-                             String* outContentHash = nullptr);
+                             String* calculatedChecksum = nullptr,
+                             bool useKeepAlive = true);
+    
+    // Content hash: MD5(file_content + filename)
+    String computeContentHash(fs::FS &sd, const String& localPath, const String& fileName,
+                               unsigned long& hashedSize);
     
     // OAuth
     bool authenticate();
@@ -62,11 +58,11 @@ private:
     
     // API operations
     bool discoverTeamId();
-    bool discoverDeviceId();
-    bool discoverMachineInfo();
     
     // TLS setup
     void setupTLS();
+    void resetTLS();
+    void configureTLS();
 
 public:
     SleepHQUploader(Config* cfg);
@@ -74,18 +70,11 @@ public:
     
     bool begin();
     bool upload(const String& localPath, const String& remotePath, 
-                fs::FS &sd, unsigned long& bytesTransferred,
-                SDCardManager* sdManager = nullptr);
-    
-    // Upload from pre-buffered data (no SD access needed).
-    // Used by batch upload to avoid per-file SD mount/unmount overhead.
-    bool uploadFromBuffer(const uint8_t* fileData, size_t fileSize,
-                          const String& fileName, const String& filePath,
-                          unsigned long& bytesTransferred);
-    
+                fs::FS &sd, unsigned long& bytesTransferred, String& fileChecksum);
     void end();
-    void disconnectTls();  // Free TLS buffers (~32KB) without ending the session
+    void resetConnection();  // Tear down TLS to reclaim heap between imports
     bool isConnected() const;
+    bool isTlsAlive() const;  // Check if raw TLS connection is still active
     
     // Import session management (called by FileUploader)
     bool createImport();

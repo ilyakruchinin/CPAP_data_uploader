@@ -6,7 +6,6 @@
 #include <vector>
 #include "Config.h"
 #include "UploadStateManager.h"
-#include "TimeBudgetManager.h"
 #include "ScheduleManager.h"
 #include "WiFiManager.h"
 #include "SDCardManager.h"
@@ -29,27 +28,30 @@ class TestWebServer;
 #include "SleepHQUploader.h"
 #endif
 
+// Result of an exclusive-access upload session
+enum class UploadResult {
+    COMPLETE,        // All eligible files uploaded
+    TIMEOUT,         // X-minute timer expired (partial upload, not an error)
+    ERROR            // Upload failure
+};
+
+// Filter for which data categories to upload
+enum class DataFilter {
+    FRESH_ONLY,  // Only fresh DATALOG + root/SETTINGS (mandatory)
+    OLD_ONLY,    // Only old DATALOG folders + root/SETTINGS (mandatory)
+    ALL_DATA     // Everything
+};
+
 class FileUploader {
 private:
     Config* config;
     UploadStateManager* stateManager;
-    TimeBudgetManager* budgetManager;
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
     
 #ifdef ENABLE_TEST_WEBSERVER
     TestWebServer* webServer;  // Optional web server for handling requests during uploads
 #endif
-    
-    // Periodic SD card release tracking
-    unsigned long lastSdReleaseTime;
-    
-    // Helper method for periodic SD card release
-    bool checkAndReleaseSD(class SDCardManager* sdManager);
-    
-    // Ensure SD card is retaken after a backend released it during network I/O.
-    // Also gives CPAP a guaranteed window between every file upload.
-    bool ensureSdAndReleaseBetweenFiles(class SDCardManager* sdManager);
     
     // Uploader instances (only compiled if feature flag is enabled)
 #ifdef ENABLE_SMB_UPLOAD
@@ -65,39 +67,33 @@ private:
     // File scanning
     std::vector<String> scanDatalogFolders(fs::FS &sd, bool includeCompleted = false);
     std::vector<String> scanFolderFiles(fs::FS &sd, const String& folderPath);
-    std::vector<String> scanRootAndSettingsFiles(fs::FS &sd, bool forceAll = false);
+    std::vector<String> scanSettingsFiles(fs::FS &sd);
     
     // Upload logic
     bool uploadDatalogFolder(class SDCardManager* sdManager, const String& folderName);
-    bool uploadSingleFile(class SDCardManager* sdManager, const String& filePath, bool forceUpload = false);
+    bool uploadSingleFile(class SDCardManager* sdManager, const String& filePath, bool force = false);
     
     // Helper: check if a DATALOG folder name (YYYYMMDD) is within the recent window
     bool isRecentFolder(const String& folderName) const;
     
     // Helper: lazily create cloud import session on first actual upload
-    bool ensureCloudImport(SDCardManager* sdManager = nullptr);
+    bool ensureCloudImport();
+    // Helper: finalize current import with mandatory files + processImport + reset
+    void finalizeCloudImport(class SDCardManager* sdManager, fs::FS &sd);
     bool cloudImportCreated;
     bool cloudImportFailed;  // True if ensureCloudImport() failed; skip cloud backend for session
-    bool companionFilesUploaded;  // True if Phase 2 successfully uploaded root/SETTINGS companion files
-    
-    // Session management
-    bool startUploadSession(fs::FS &sd);
-    void endUploadSession(fs::FS &sd, SDCardManager* sdManager = nullptr);
 
 public:
     FileUploader(Config* cfg, WiFiManager* wifi);
     ~FileUploader();
     
-    bool begin(fs::FS &sd, SDCardManager* sdManager = nullptr);
-    bool shouldUpload();
-    bool uploadNewFiles(class SDCardManager* sdManager, bool forceUpload = false);
-    bool scanPendingFolders(class SDCardManager* sdManager);  // Scan SD card without uploading
-    bool performDeltaScan(class SDCardManager* sdManager);    // Compare remote vs local file counts
-    bool performDeepScan(class SDCardManager* sdManager);     // Compare remote vs local file sizes
+    bool begin(fs::FS &sd);
+    
+    // FSM-driven exclusive access upload
+    UploadResult uploadWithExclusiveAccess(class SDCardManager* sdManager, int maxMinutes, DataFilter filter);
     
     // Getters for internal components (for web interface access)
     UploadStateManager* getStateManager() { return stateManager; }
-    TimeBudgetManager* getBudgetManager() { return budgetManager; }
     ScheduleManager* getScheduleManager() { return scheduleManager; }
     bool hasIncompleteFolders() { return stateManager && stateManager->getIncompleteFoldersCount() > 0; }
     

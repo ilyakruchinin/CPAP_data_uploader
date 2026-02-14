@@ -100,9 +100,12 @@ Create a file named `config.json` in the root of your SD card with your settings
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
-  "UPLOAD_HOUR": 12,
-  "SESSION_DURATION_SECONDS": 30,
-  "MAX_RETRY_ATTEMPTS": 3,
+  "UPLOAD_MODE": "smart",
+  "UPLOAD_START_HOUR": 8,
+  "UPLOAD_END_HOUR": 22,
+  "INACTIVITY_SECONDS": 125,
+  "EXCLUSIVE_ACCESS_MINUTES": 5,
+  "COOLDOWN_MINUTES": 10,
   "GMT_OFFSET_HOURS": 0
 }
 ```
@@ -117,7 +120,7 @@ Create a file named `config.json` in the root of your SD card with your settings
 {
   "WIFI_SSID": "MyNetwork",
   "WIFI_PASS": "password",
-  "UPLOAD_HOUR": 12,  ← Remove this comma if it's the last line
+  "COOLDOWN_MINUTES": 10,  ← Remove this comma if it's the last line
 }
 ```
 
@@ -128,7 +131,7 @@ Invalid JSON syntax will prevent configuration loading, causing WiFi connection 
 Insert the SD card into your CPAP machine's SD slot and power it on. The device will:
 1. Connect to WiFi
 2. Sync time with internet
-3. Wait for the scheduled upload time
+3. Wait for upload eligibility based on mode
 4. Upload new files to your network share
 
 ---
@@ -172,44 +175,46 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 
 ### Schedule Settings
 
-**UPLOAD_HOUR** (optional, default: 12)
-- Hour of day (0-23) when uploads should occur in GMT/UTC time
-- Uses 24-hour format
-- **Important:** This is in GMT/UTC, not your local time. Use GMT_OFFSET_HOURS to adjust for your timezone.
-- Examples:
-  - `12` = noon GMT
-  - `0` = midnight GMT
-  - `14` = 2 PM GMT
-  - `23` = 11 PM GMT
+**UPLOAD_MODE** (optional, default: `"smart"`)
+- `"scheduled"`: uploads in the configured time window
+- `"smart"` (recommended): starts shortly after therapy ends (activity + inactivity detection)
 
-**SESSION_DURATION_SECONDS** (optional, default: 5)
-- Maximum time (in seconds) to hold SD card access per session
-- Keeps sessions short so CPAP machine can access card
-- Recommended: 5-10 seconds
-- Increase if you have very large files
+**UPLOAD_START_HOUR** (optional, default: 9)
+- Start of upload window (0-23, local time)
 
-**MAX_RETRY_ATTEMPTS** (optional, default: 3)
-- Number of retry attempts before increasing time budget
-- After this many interrupted uploads, time budget multiplies
-- Recommended: 3
+**UPLOAD_END_HOUR** (optional, default: 21)
+- End of upload window (0-23, local time)
+- If start == end, uploads are allowed 24/7
+
+**INACTIVITY_SECONDS** (optional, default: 125)
+- Required SD bus idle time before smart mode starts uploading
+- Range: 10-3600
+
+**EXCLUSIVE_ACCESS_MINUTES** (optional, default: 5)
+- Maximum time per upload session while holding SD access
+- Range: 1-30
+
+**COOLDOWN_MINUTES** (optional, default: 10)
+- Pause between upload sessions
+- Range: 1-60
 
 **GMT_OFFSET_HOURS** (optional, default: 0)
 - Your timezone offset from GMT/UTC in hours
-- Used to convert UPLOAD_HOUR from GMT to your local time
+- Used for local time calculations (upload window + status display)
 - Examples:
   - `0` = UTC/GMT
-  - `-8` = Pacific Time (PST) - if UPLOAD_HOUR is 12, uploads at 4 AM PST
-  - `-5` = Eastern Time (EST) - if UPLOAD_HOUR is 12, uploads at 7 AM EST
-  - `+1` = Central European Time (CET) - if UPLOAD_HOUR is 12, uploads at 1 PM CET
-  - `+10` = Australian Eastern Time (AEST) - if UPLOAD_HOUR is 12, uploads at 10 PM AEST
+  - `-8` = Pacific Time (PST)
+  - `-5` = Eastern Time (EST)
+  - `+1` = Central European Time (CET)
+  - `+10` = Australian Eastern Time (AEST)
 - For daylight saving time, adjust the offset (e.g., `-7` for PDT instead of `-8` for PST)
 
 ### Debugging Settings
 
 **LOG_TO_SD_CARD** (optional, default: false)
 - Enable logging system messages to `/debug.log` file on SD card
-- **WARNING**: Only enable for debugging purposes
-- May cause SD card access conflicts with CPAP machine
+- **WARNING**: Can prevent the CPAP machine from reliably accessing the SD card
+- Use only temporarily for troubleshooting, and only with `UPLOAD_MODE`=`"scheduled"` and an upload window outside normal therapy times
 - Automatically disabled if file operations fail
 - Example: `true` or `false`
 ---
@@ -225,7 +230,12 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "john",
   "ENDPOINT_PASS": "password",
-  "UPLOAD_HOUR": 12,
+  "UPLOAD_MODE": "scheduled",
+  "UPLOAD_START_HOUR": 8,
+  "UPLOAD_END_HOUR": 22,
+  "INACTIVITY_SECONDS": 125,
+  "EXCLUSIVE_ACCESS_MINUTES": 5,
+  "COOLDOWN_MINUTES": 10,
   "GMT_OFFSET_HOURS": -8
 }
 ```
@@ -239,7 +249,12 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "user",
   "ENDPOINT_PASS": "password",
-  "UPLOAD_HOUR": 14,
+  "UPLOAD_MODE": "scheduled",
+  "UPLOAD_START_HOUR": 7,
+  "UPLOAD_END_HOUR": 21,
+  "INACTIVITY_SECONDS": 125,
+  "EXCLUSIVE_ACCESS_MINUTES": 5,
+  "COOLDOWN_MINUTES": 10,
   "GMT_OFFSET_HOURS": 1
 }
 ```
@@ -253,7 +268,12 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "",
   "ENDPOINT_PASS": "",
-  "UPLOAD_HOUR": 12,
+  "UPLOAD_MODE": "smart",
+  "UPLOAD_START_HOUR": 8,
+  "UPLOAD_END_HOUR": 22,
+  "INACTIVITY_SECONDS": 125,
+  "EXCLUSIVE_ACCESS_MINUTES": 5,
+  "COOLDOWN_MINUTES": 10,
   "GMT_OFFSET_HOURS": 0
 }
 ```
@@ -269,11 +289,13 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 4. Loads upload history from `.upload_state.json` (if exists)
 
 ### Daily Upload Cycle
-1. Waits until configured `UPLOAD_HOUR`
+1. Waits for upload eligibility based on configured mode (`UPLOAD_MODE`)
+   - Smart mode: shortly after therapy ends (activity + inactivity detection)
+   - Scheduled mode: during configured upload window
 2. Takes control of SD card (CPAP must wait briefly)
 3. Uploads new/changed files in priority order:
    - DATALOG folders (newest first)
-   - Root files (Identification.json, STR.edf, journal.jnl)
+   - Root files if present (`STR.edf`, `Identification.crc`, `Identification.tgt`, `Identification.json`)
    - SETTINGS files
 4. Automatically creates directories on remote share if they don't exist
 5. Releases SD card after session or time budget exhausted
@@ -440,13 +462,14 @@ The firmware includes an optional test web server for development and troublesho
 ### Upload Issues
 
 **Files not uploading**
-- Check it's past the UPLOAD_HOUR time
+- For scheduled mode: check current local time is inside `UPLOAD_START_HOUR`-`UPLOAD_END_HOUR`
+- For smart mode: verify therapy has ended and inactivity threshold elapsed
 - Verify internet connection for time sync
 - Check SMB connection is working
 - View logs via web interface: `http://<device-ip>/logs`
 
 **Upload incomplete**
-- Increase SESSION_DURATION_SECONDS if files are large
+- Increase `EXCLUSIVE_ACCESS_MINUTES` if files are large
 - Check available space on network share
 - Verify network stability
 - Check logs for specific errors
@@ -498,10 +521,10 @@ http://<device-ip>/logs
 /
 ├── config.json              # Your configuration (you create this)
 ├── .upload_state.json       # Upload tracking (auto-created)
-├── Identification.json      # CPAP identification
-├── Identification.crc       # Checksum
-├── STR.edf                  # Summary data
-├── journal.jnl              # Journal file
+├── Identification.json      # ResMed 11 identification (if present)
+├── Identification.crc       # Identification checksum (if present)
+├── Identification.tgt       # ResMed 9/10 identification (if present)
+├── STR.edf                  # Summary data (if present)
 ├── DATALOG/                 # Therapy data folders
 │   ├── 20241114/           # Date-named folders (YYYYMMDD)
 │   │   ├── file1.edf
@@ -518,8 +541,8 @@ Files are uploaded maintaining the same structure:
 //server/share/
 ├── Identification.json
 ├── Identification.crc
+├── Identification.tgt
 ├── STR.edf
-├── journal.jnl
 ├── DATALOG/
 │   ├── 20241114/
 │   │   ├── file1.edf
@@ -573,7 +596,13 @@ python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0
 - `upload-standard.bat` - Windows standard firmware upload script
 - `upload.sh` - macOS/Linux upload script (supports both firmware types)
 - `requirements.txt` - Python dependencies (esptool)
-- `config.json.example` - Configuration template
+- `config.json.example` - Generic configuration template
+- `config.json.example.smb` - SMB-focused template
+- `config.json.example.smb-simple` - SMB minimal template (mandatory fields only)
+- `config.json.example.sleephq` - SleepHQ-focused template
+- `config.json.example.sleephq-simple` - SleepHQ minimal template (mandatory fields only)
+- `config.json.example.both` - SMB + SleepHQ template
+- `config.json.example.both-simple` - SMB + SleepHQ minimal template (mandatory fields only)
 - `README.md` - This file
 
 ---
@@ -583,7 +612,6 @@ python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0
 For issues, questions, or contributions, visit the project repository.
 
 **Hardware:** ESP32-PICO-D4 (SD WIFI PRO)  
-**Firmware Version:** v0.3.3
 
 **Requirements:**
 - Python 3.7+ (https://python.org)
