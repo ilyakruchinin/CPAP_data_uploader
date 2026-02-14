@@ -97,9 +97,9 @@ In `loadFromSD()`:
 
 ```
 // New parameters
-uploadMode = doc["UPLOAD_MODE"] | "scheduled";
-uploadStartHour = doc["UPLOAD_START_HOUR"] | 8;
-uploadEndHour = doc["UPLOAD_END_HOUR"] | 22;
+uploadMode = doc["UPLOAD_MODE"] | "smart";
+uploadStartHour = doc["UPLOAD_START_HOUR"] | 9;
+uploadEndHour = doc["UPLOAD_END_HOUR"] | 21;
 inactivitySeconds = doc["INACTIVITY_SECONDS"] | 125;
 exclusiveAccessMinutes = doc["EXCLUSIVE_ACCESS_MINUTES"] | 5;
 cooldownMinutes = doc["COOLDOWN_MINUTES"] | 10;

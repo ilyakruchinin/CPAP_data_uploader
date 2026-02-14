@@ -416,14 +416,14 @@ build_flags =
 
 **SD Card Logging:** For advanced debugging, logs can be written to SD card by setting `LOG_TO_SD_CARD: true` in `config.json`. 
 
-⚠️ **WARNING: SD card logging is for debugging only and can cause conflicts when accessing the SD card for CPAP data uploads. Only enable when troubleshooting issues and disable for normal operation.**
+⚠️ **WARNING: SD card logging is for debugging only and can prevent the CPAP machine from reliably accessing the SD card. Only enable it temporarily for troubleshooting, and only when `UPLOAD_MODE` is `"scheduled"` with an upload window outside normal therapy times. Disable it immediately afterward.**
 
 When enabled:
 - Logs are written to `/debug_log.txt` on the SD card
 - All log messages (including serial and buffer logs) are also written to the file
 - File is opened in append mode for each log message
 - If file creation fails, SD logging is automatically disabled
-- Can interfere with CPAP machine SD card access
+- Can interfere with or block CPAP machine SD card access
 
 ### Memory Usage
 

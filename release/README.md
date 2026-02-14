@@ -175,14 +175,14 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 
 ### Schedule Settings
 
-**UPLOAD_MODE** (optional, default: `"scheduled"`)
+**UPLOAD_MODE** (optional, default: `"smart"`)
 - `"scheduled"`: uploads in the configured time window
 - `"smart"` (recommended): starts shortly after therapy ends (activity + inactivity detection)
 
-**UPLOAD_START_HOUR** (optional, default: 8)
+**UPLOAD_START_HOUR** (optional, default: 9)
 - Start of upload window (0-23, local time)
 
-**UPLOAD_END_HOUR** (optional, default: 22)
+**UPLOAD_END_HOUR** (optional, default: 21)
 - End of upload window (0-23, local time)
 - If start == end, uploads are allowed 24/7
 
@@ -213,8 +213,8 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 
 **LOG_TO_SD_CARD** (optional, default: false)
 - Enable logging system messages to `/debug.log` file on SD card
-- **WARNING**: Only enable for debugging purposes
-- May cause SD card access conflicts with CPAP machine
+- **WARNING**: Can prevent the CPAP machine from reliably accessing the SD card
+- Use only temporarily for troubleshooting, and only with `UPLOAD_MODE`=`"scheduled"` and an upload window outside normal therapy times
 - Automatically disabled if file operations fail
 - Example: `true` or `false`
 ---
@@ -596,7 +596,13 @@ python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0
 - `upload-standard.bat` - Windows standard firmware upload script
 - `upload.sh` - macOS/Linux upload script (supports both firmware types)
 - `requirements.txt` - Python dependencies (esptool)
-- `config.json.example` - Configuration template
+- `config.json.example` - Generic configuration template
+- `config.json.example.smb` - SMB-focused template
+- `config.json.example.smb-simple` - SMB minimal template (mandatory fields only)
+- `config.json.example.sleephq` - SleepHQ-focused template
+- `config.json.example.sleephq-simple` - SleepHQ minimal template (mandatory fields only)
+- `config.json.example.both` - SMB + SleepHQ template
+- `config.json.example.both-simple` - SMB + SleepHQ minimal template (mandatory fields only)
 - `README.md` - This file
 
 ---
@@ -606,7 +612,6 @@ python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0
 For issues, questions, or contributions, visit the project repository.
 
 **Hardware:** ESP32-PICO-D4 (SD WIFI PRO)  
-**Firmware Version:** v0.3.3
 
 **Requirements:**
 - Python 3.7+ (https://python.org)

@@ -2,16 +2,22 @@
   "WIFI_SSID": "YourNetworkName",
   "WIFI_PASS": "YourNetworkPassword",
 
+  "ENDPOINT_TYPE": "SMB,CLOUD",
+  
   "ENDPOINT": "//192.168.1.100/cpap_backups",
-  "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
+
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+
   "UPLOAD_MODE": "smart",
   "UPLOAD_START_HOUR": 8,
   "UPLOAD_END_HOUR": 22,
   "INACTIVITY_SECONDS": 125,
   "EXCLUSIVE_ACCESS_MINUTES": 5,
   "COOLDOWN_MINUTES": 10,
+
   "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
   "GMT_OFFSET_HOURS": 0,
 
