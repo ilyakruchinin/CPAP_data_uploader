@@ -6,9 +6,9 @@
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `UPLOAD_MODE` | string | `"scheduled"` | `"scheduled"` or `"smart"` |
-| `UPLOAD_START_HOUR` | int (0-23) | `8` | Start of allowed upload window |
-| `UPLOAD_END_HOUR` | int (0-23) | `22` | End of allowed upload window |
+| `UPLOAD_MODE` | string | `"smart"` | `"scheduled"` or `"smart"` |
+| `UPLOAD_START_HOUR` | int (0-23) | `9` | Start of allowed upload window |
+| `UPLOAD_END_HOUR` | int (0-23) | `21` | End of allowed upload window |
 | `INACTIVITY_SECONDS` | int | `125` | Bus silence required before upload (Z). Default based on preliminary AirSense 11 observations (see 01-FINDINGS.md §6). |
 | `EXCLUSIVE_ACCESS_MINUTES` | int | `5` | Max time ESP holds SD card exclusively (X) |
 | `COOLDOWN_MINUTES` | int | `10` | Time card is released between sessions (Y) |
@@ -21,7 +21,7 @@
 | `MAX_DAYS` | int | `0` (all) | Hard cutoff — older folders ignored entirely |
 | `BOOT_DELAY_SECONDS` | int | `30` | Initial delay before first SD access |
 | `GMT_OFFSET_HOURS` | int | `0` | Timezone for schedule calculations |
-| `LOG_TO_SD_CARD` | bool | `false` | Debug logging to SD |
+| `LOG_TO_SD_CARD` | bool | `false` | Debug logging only; can block CPAP SD access. Use only briefly in scheduled mode outside therapy times. |
 | All WiFi/endpoint/cloud params | — | — | No changes |
 
 ### 1.3 Legacy Timing Parameters (Unsupported)
@@ -66,9 +66,9 @@ Unsupported legacy keys:
 
 | Parameter | Validation | On failure |
 |---|---|---|
-| `UPLOAD_MODE` | Must be `"scheduled"` or `"smart"` | Default to `"scheduled"`, warn |
-| `UPLOAD_START_HOUR` | 0–23 | Default to 8, warn |
-| `UPLOAD_END_HOUR` | 0–23 | Default to 22, warn |
+| `UPLOAD_MODE` | Must be `"scheduled"` or `"smart"` | Default to `"smart"`, warn |
+| `UPLOAD_START_HOUR` | 0–23 | Default to 9, warn |
+| `UPLOAD_END_HOUR` | 0–23 | Default to 21, warn |
 | `INACTIVITY_SECONDS` | 10–3600 | Clamp to range, warn |
 | `EXCLUSIVE_ACCESS_MINUTES` | 1–30 | Clamp to range, warn |
 | `COOLDOWN_MINUTES` | 1–60 | Clamp to range, warn |

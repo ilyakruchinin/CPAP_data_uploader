@@ -95,9 +95,9 @@ void test_config_load_with_defaults() {
     TEST_ASSERT_EQUAL_STRING("//server/share", config.getEndpoint().c_str());
     
     // Check default values
-    TEST_ASSERT_EQUAL_STRING("scheduled", config.getUploadMode().c_str());
-    TEST_ASSERT_EQUAL(8, config.getUploadStartHour());
-    TEST_ASSERT_EQUAL(22, config.getUploadEndHour());
+    TEST_ASSERT_EQUAL_STRING("smart", config.getUploadMode().c_str());
+    TEST_ASSERT_EQUAL(9, config.getUploadStartHour());
+    TEST_ASSERT_EQUAL(21, config.getUploadEndHour());
     TEST_ASSERT_EQUAL(125, config.getInactivitySeconds());
     TEST_ASSERT_EQUAL(5, config.getExclusiveAccessMinutes());
     TEST_ASSERT_EQUAL(10, config.getCooldownMinutes());
@@ -1051,8 +1051,6 @@ void test_config_default_example_fits_in_buffer() {
 
   "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
   "GMT_OFFSET_HOURS": 0,
-
-  "LOG_TO_SD_CARD": false,
 
   "CPU_SPEED_MHZ": 240,
   "WIFI_TX_PWR": "high",

@@ -24,9 +24,9 @@ Config::Config() :
     cloudInsecureTls(false),  // Default: use root CA validation
     
     // Upload FSM defaults
-    uploadMode("scheduled"),
-    uploadStartHour(8),
-    uploadEndHour(22),
+    uploadMode("smart"),
+    uploadStartHour(9),
+    uploadEndHour(21),
     inactivitySeconds(125),
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
@@ -513,27 +513,27 @@ bool Config::loadFromSD(fs::FS &sd) {
     }
     
     // Upload FSM settings
-    uploadMode = doc["UPLOAD_MODE"] | "scheduled";
-    uploadStartHour = doc["UPLOAD_START_HOUR"] | 8;
-    uploadEndHour = doc["UPLOAD_END_HOUR"] | 22;
+    uploadMode = doc["UPLOAD_MODE"] | "smart";
+    uploadStartHour = doc["UPLOAD_START_HOUR"] | 9;
+    uploadEndHour = doc["UPLOAD_END_HOUR"] | 21;
     inactivitySeconds = doc["INACTIVITY_SECONDS"] | 125;
     exclusiveAccessMinutes = doc["EXCLUSIVE_ACCESS_MINUTES"] | 5;
     cooldownMinutes = doc["COOLDOWN_MINUTES"] | 10;
     
     // Validate upload mode
     if (uploadMode != "scheduled" && uploadMode != "smart") {
-        LOG_WARNF("Invalid UPLOAD_MODE '%s', defaulting to 'scheduled'", uploadMode.c_str());
-        uploadMode = "scheduled";
+        LOG_WARNF("Invalid UPLOAD_MODE '%s', defaulting to 'smart'", uploadMode.c_str());
+        uploadMode = "smart";
     }
     
     // Validate hours (0-23)
     if (uploadStartHour < 0 || uploadStartHour > 23) {
-        LOG_WARN("UPLOAD_START_HOUR must be 0-23, setting to 8");
-        uploadStartHour = 8;
+        LOG_WARN("UPLOAD_START_HOUR must be 0-23, setting to 9");
+        uploadStartHour = 9;
     }
     if (uploadEndHour < 0 || uploadEndHour > 23) {
-        LOG_WARN("UPLOAD_END_HOUR must be 0-23, setting to 22");
-        uploadEndHour = 22;
+        LOG_WARN("UPLOAD_END_HOUR must be 0-23, setting to 21");
+        uploadEndHour = 21;
     }
     
     // Validate inactivity seconds (minimum 10s, maximum 3600s)
