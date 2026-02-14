@@ -1,28 +1,31 @@
 # ESP32 CPAP Data Uploader
 
-Automatically upload CPAP therapy data from your SD card to network storage.
+Automatically upload CPAP therapy data from your SD card to network storage or the Cloud (SleepHQ).
 
 **Machine support is currently limited to ResMed SD card formats only** (Series 9, Series 10, Series 11).
 
 **Features:**
-- Automatic daily uploads to Windows shares, NAS, or Samba servers
+- Automatic uploads to Windows shares, NAS, Samba servers or the Cloud (**SleepHQ**)
+- **"Smart" upload mode** (uploads for recent data start automatically within minutes of therapy end)
+  - <u>Automatic detection of CPAP therapy session ending</u> (based on SD card activity)
+  - **You get your last night of sleep data within a few minutes after taking your mask off**
+- Scheduled upload mode: predictable upload window with timezone support
 - **Over-The-Air (OTA) firmware updates** via web interface
 - Secure credential storage in ESP32 flash memory (optional)
-- Respects CPAP machine access to SD card
+- Respects CPAP machine access to SD card (only "holds" the SD card for the bare minimum required time)
+  - Quick file uploads with TLS connection reuse and exclusive file access (no time budget sharing with CPAP machine)
 - Tracks uploaded files (no duplicates)
 - Smart empty folder handling (waits 7 days before marking folders complete)
-- Smart mode (recommended): starts shortly after therapy ends using SD activity + inactivity detection
-- Scheduled mode: predictable upload window with timezone support
-- Web interface for monitoring and testing
+- <u>Web interface</u> for monitoring and testing (responsive, runs as a separate task on another core)
 - Automatic retry mechanism with progress tracking
-- Automatic directory creation on remote shares
+- Automatic directory creation on remote shares for SMB protocol
 
 ## For End Users
 
 **Want to use this?** Download the latest release package with precompiled firmware and easy upload tools.
 
 ### Known issues
-- Sometimes the CPAP machine will complain about SD card not working. This is likely caused by CPAP machine attempting to access the SD card at the same time as our firmware. When this happens just reinsert the SD card.
+~~- Sometimes the CPAP machine will complain about SD card not working. This is likely caused by CPAP machine attempting to access the SD card at the same time as our firmware. When this happens just reinsert the SD card.~~ (should be fixed now)
 
 👉 [Download Latest Release](../../releases) (includes upload tools for Windows, Mac, and Linux)
 
@@ -66,6 +69,7 @@ Follow the instructions in the release package to upload firmware to your device
 
 ### 4. Configure
 Create a `config.json` file on your SD card with your WiFi and network share settings.
+See examples in [config.json Examples](docs/).
 
 ### 5. Done!
 Insert the SD card and power on. The device will automatically upload new CPAP data daily.
@@ -74,21 +78,45 @@ Insert the SD card and power on. The device will automatically upload new CPAP d
 
 Create `config.json` on your SD card:
 
+Simple:
 ```json
 {
   "WIFI_SSID": "YourNetworkName",
-  "WIFI_PASS": "YourPassword",
+  "WIFI_PASS": "YourNetworkPassword",
+
+  "ENDPOINT_TYPE": "CLOUD",
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+
+  "GMT_OFFSET_HOURS": 0
+}
+```
+
+Advanced:
+```json
+{
+  "WIFI_SSID": "YourNetworkName",
+  "WIFI_PASS": "YourNetworkPassword",
+
+  "ENDPOINT_TYPE": "SMB,CLOUD",
+  
   "ENDPOINT": "//192.168.1.100/cpap_backups",
-  "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
+
+  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+
   "UPLOAD_MODE": "smart",
   "UPLOAD_START_HOUR": 8,
   "UPLOAD_END_HOUR": 22,
   "INACTIVITY_SECONDS": 125,
   "EXCLUSIVE_ACCESS_MINUTES": 5,
   "COOLDOWN_MINUTES": 10,
-  "GMT_OFFSET_HOURS": -8,
+
+  "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
+  "GMT_OFFSET_HOURS": 0,
+
   "CPU_SPEED_MHZ": 240,
   "WIFI_TX_PWR": "high",
   "WIFI_PWR_SAVING": "none"
@@ -96,9 +124,7 @@ Create `config.json` on your SD card:
 ```
 
 ### Power Management Settings
-Some devices might not be able to provide the card with enough power. in those cases it is useful to reduce the power consumption which comes at the cost of performance.
-
-**New in v0.4.3**: Configurable power management to reduce current consumption during active use while maintaining full web server functionality. **UNTESTED**
+Some devices might not be able to provide the card with enough power. In those cases it is useful to reduce the power consumption which comes at the cost of performance.
 
 - **CPU_SPEED_MHZ** (80-240, default: 240): CPU frequency in MHz. Lower values reduce power consumption but will slow performance.
 - **WIFI_TX_PWR** ("high"/"mid"/"low", default: "high"): WiFi transmission power. Lower power reduces range but saves current.
@@ -278,17 +304,15 @@ For devices without OTA support or when OTA fails:
 3. **Waits for upload eligibility based on mode**
    - **Smart mode:** starts shortly after therapy ends (activity detection)
    - **Scheduled mode:** uploads during configured window
-4. **Uploads required CPAP data** to your network share
-   - Takes brief control of SD card (default 5 seconds)
+4. **Uploads required CPAP data** to your network share or the Cloud (SleepHQ)
+   - Takes exclusive control of SD card (default 5 minutes). **Only accesses the card when NOT in use** by the CPAP machine (no therapy running, automatic detection)
    - Uploads `DATALOG/` folders and `SETTINGS/` files
    - Uploads root files **if present**: `STR.edf`, `Identification.crc`, `Identification.tgt` (ResMed 9/10), `Identification.json` (ResMed 11)
    - Tracks what's been uploaded (no duplicates)
    - Releases SD card for CPAP machine use
-5. **Repeats daily** automatically
+5. **Repeats** automatically (periodically, daily if in "scheduled" mode)
 
-`journal.jnl` is intentionally not part of the required upload set.
-
-The device respects your CPAP machine's need for SD card access by keeping upload sessions short and releasing control immediately after each session.
+The device respects your CPAP machine's need for SD card access by only accessing the card when it's not used by CPAP, keeping upload sessions short and releasing control immediately after each session.
 
 ## Capacity & Longevity
 
@@ -303,17 +327,17 @@ The device respects your CPAP machine's need for SD card access by keeping uploa
 **Status:** ✅ Production Ready + Power Management
 - Hardware tested and validated
 - Integration tested with real CPAP data
-- All unit tests passing (145 tests)
-- SMB/CIFS and upload fully implemented
-- Web interface remains responsive during uploads
+- All unit tests passing
+- SMB/CIFS and Cloud upload (SleepHQ) fully implemented
+- Web interface remains responsive during uploads, runs on a separate task/different core
 - Automatic retry mechanism with progress tracking
-- Automatic directory creation verified and working
+- Automatic directory creation verified and working (SMB)
 - FreeRTOS tasks for true concurrent web server operation during uploads
-- **NEW**: Configurable power management for reduced current consumption
+- Configurable power management for reduced current consumption
 
 **Supported Upload Methods:**
 - ✅ SMB/CIFS (Windows shares, NAS, Samba)
-- ✅ SleepHQ direct upload (planned)
+- ✅ SleepHQ direct upload
 - ⏳ WebDAV (planned)
 
 ## Future Improvements
@@ -340,6 +364,33 @@ This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**
 This project uses libsmb2 (LGPL-2.1), which is compatible with GPL-3.0.
 
 See [LICENSE](LICENSE) file for full terms.
+
+## Legal & Trademarks
+
+- **SleepHQ** is a trademark of its respective owner. This project is an unofficial client and is not affiliated with, endorsed by, or associated with SleepHQ.
+  - This project uses the officially published [SleepHQ API](https://sleephq.com/api-docs) and does not rely on any non-official methods.
+  - This project is **not intended to compete** with the official [Magic Uploader](https://shop.sleephq.com/products/magic-uploader-pro). We strongly encourage users to support the platform by purchasing the official solution, which comes with vendor support and requires no technical setup (flashing).
+- **ResMed** is a trademark of ResMed. This software is not affiliated with ResMed.
+- All other trademarks are the property of their respective owners.
+
+### Disclaimer & No Warranty
+
+**USE AT YOUR OWN RISK.**
+
+This project (including source code, pre-compiled binaries, and documentation) is provided "as is" and **without any warranty of any kind**, express or implied.
+
+**By using this software, you acknowledge and agree that:**
+1.  **You are solely responsible** for the safety and operation of your CPAP machine and data.
+2.  The authors and contributors **guarantee nothing** regarding the reliability, safety, or suitability of this software.
+3.  **We are not liable** for any damage to your CPAP machine, SD card, loss of therapy data, or any other direct or indirect damage resulting from the use of this project.
+4.  **Warranty Implication:** Using third-party accessories or software with your medical device may void its warranty. You accept this risk entirely.
+
+This software interacts directly with medical device hardware and file systems. While every effort has been made to ensure safety, bugs or hardware incompatibilities can occur.
+
+**GPL-3.0 License Disclaimer:**
+> THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW. EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM IS WITH YOU. SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
+
+See the [LICENSE](LICENSE) file for the full legal text.
 
 ---
 
