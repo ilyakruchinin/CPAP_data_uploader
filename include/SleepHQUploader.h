@@ -72,7 +72,9 @@ public:
     bool upload(const String& localPath, const String& remotePath, 
                 fs::FS &sd, unsigned long& bytesTransferred, String& fileChecksum);
     void end();
+    void resetConnection();  // Tear down TLS to reclaim heap between imports
     bool isConnected() const;
+    bool isTlsAlive() const;  // Check if raw TLS connection is still active
     
     // Import session management (called by FileUploader)
     bool createImport();

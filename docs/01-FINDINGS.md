@@ -204,8 +204,36 @@ Extensive testing with the SleepHQ API (v1) revealed critical optimization oppor
 ### 7.2 HTTP Status Codes
 *   **201 Created**: File uploaded successfully (new data).
 *   **200 OK**: File skipped/deduplicated by server (hash matches existing file).
-    *   *Optimization*: The firmware treats both as success. The local `UploadStateManager` tracks files by hash to prevent redundant uploads even before hitting the network.
+    *   *Optimization*: The firmware treats both as success. Local state avoids redundant uploads before hitting the network:
+        * Root/SETTINGS files: checksum + size tracking
+        * Recent DATALOG re-scan: size-only tracking (no persisted DATALOG checksum entries)
 
 ### 7.3 Memory Management
 *   **Streaming is Mandatory**: Attempting to buffer multipart payloads in RAM (for small files) causes heap fragmentation over time, leading to SSL allocation failures (`-32512`) during long sessions.
-*   **Solution**: All uploads, regardless of size, must use the streaming path. This keeps heap usage flat and predictable (~110KB free).
+*   **Solution**: All uploads, regardless of size, must use the streaming path. This keeps heap usage flatter and avoids burst allocations.
+
+### 7.4 Heap Fragmentation Root Cause & Fix (streamfix11)
+
+Testing showed that TLS streaming alone was necessary but not sufficient in long sessions. A second pressure source was upload state churn in `UploadStateManager`:
+
+1. **Root cause identified**
+    * Historical per-file DATALOG checksum persistence caused large `file_checksums` maps.
+    * Large maps inflated `/.upload_state.json` and `DynamicJsonDocument` allocation size during `loadState()`/`saveState()`.
+    * Frequent state saves (including per-file root/SETTINGS saves) increased allocation churn, reducing contiguous heap available for TLS handshakes.
+
+2. **Fixes implemented (no reboot workaround)**
+    * Removed soft-reboot recovery path entirely (no `HEAP_EXHAUSTED`, no reboot counter flow).
+    * Recent DATALOG re-scan now uses **size-only** change tracking.
+    * DATALOG checksums are no longer persisted; checksum tracking remains for root/SETTINGS files.
+    * Legacy `/DATALOG/...` checksum entries are pruned on state load.
+    * Per-file immediate state save in `uploadSingleFile()` was removed; persistence happens at folder/session boundaries.
+
+3. **Observed outcome**
+    * Device completed full multi-folder upload cycles without reboot-based recovery.
+    * Logs showed legacy checksum pruning on boot and stable operation under lower contiguous-heap conditions where previous builds restarted.
+
+4. **Reimplementation guardrails**
+    * Do not reintroduce reboot-based heap recovery as a primary strategy.
+    * Keep DATALOG state lightweight (size-first, bounded metadata).
+    * Avoid high-frequency JSON save cycles for upload state.
+    * Treat contiguous heap (`max_alloc`) as a first-class runtime signal for TLS stability.

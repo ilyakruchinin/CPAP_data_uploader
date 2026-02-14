@@ -24,28 +24,27 @@
 | `LOG_TO_SD_CARD` | bool | `false` | Debug logging to SD |
 | All WiFi/endpoint/cloud params | — | — | No changes |
 
-### 1.3 Deprecated Parameters
+### 1.3 Legacy Timing Parameters (Unsupported)
 
-These are no longer needed and should be **ignored with a warning log** if present:
+Legacy timing keys are not supported. Configuration must use FSM keys only.
 
-| Parameter | Reason | Migration |
-|---|---|---|
-| `UPLOAD_HOUR` | Replaced by `UPLOAD_START_HOUR` + `UPLOAD_END_HOUR` | If present and new params absent: `START = UPLOAD_HOUR`, `END = UPLOAD_HOUR + 2` |
-| `SESSION_DURATION_SECONDS` | Replaced by `EXCLUSIVE_ACCESS_MINUTES` | If present and new param absent: `EXCLUSIVE_ACCESS_MINUTES = SESSION_DURATION_SECONDS / 60` (min 1) |
-| `SD_RELEASE_INTERVAL_SECONDS` | No periodic releases in new architecture | Ignored |
-| `SD_RELEASE_WAIT_MS` | No periodic releases in new architecture | Ignored |
-| `UPLOAD_INTERVAL_MINUTES` | Replaced by `UPLOAD_MODE` | If > 0 and UPLOAD_MODE absent: set `UPLOAD_MODE = "smart"` |
+Unsupported legacy keys:
+- `UPLOAD_HOUR`
+- `SESSION_DURATION_SECONDS`
+- `SD_RELEASE_INTERVAL_SECONDS`
+- `SD_RELEASE_WAIT_MS`
+- `UPLOAD_INTERVAL_MINUTES`
 
 ### 1.4 Example config.json
 
 ```json
 {
   "WIFI_SSID": "MyNetwork",
-  "WIFI_PASSWORD": "********",
+  "WIFI_PASS": "********",
   "ENDPOINT": "smb://nas/cpap_data",
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "cpap",
-  "ENDPOINT_PASSWORD": "********",
+  "ENDPOINT_PASS": "********",
 
   "UPLOAD_MODE": "smart",
   "UPLOAD_START_HOUR": 8,
@@ -57,8 +56,7 @@ These are no longer needed and should be **ignored with a warning log** if prese
   "MAX_DAYS": 30,
 
   "GMT_OFFSET_HOURS": 11,
-  "BOOT_DELAY_SECONDS": 30,
-  "MAX_RETRY_ATTEMPTS": 3
+  "BOOT_DELAY_SECONDS": 30
 }
 ```
 
@@ -143,10 +141,11 @@ These are no longer needed and should be **ignored with a warning log** if prese
 | **R-FU-04** | `dataFilter` enum: `FRESH_ONLY`, `ALL_DATA`, `OLD_ONLY` |
 | **R-FU-05** | Timer check after each DATALOG file: if X minutes exceeded, exit DATALOG phase (not error) |
 | **R-FU-06** | Return status: `COMPLETE`, `TIMEOUT`, `ERROR` (not just bool) |
-| **R-FU-07** | Retain all existing: folder scanning, file checksums, retry logic, multi-backend upload |
+| **R-FU-07** | Retain folder scanning, retry logic, and multi-backend upload; reduce DATALOG state pressure via size-only tracking for recent re-scan files |
 | **R-FU-08** | Phase 2 (old data): only execute when `canUploadOldData()` returns true |
-| **R-FU-09** | **Root/SETTINGS files are MANDATORY**: always uploaded after DATALOG phases, X timer does NOT skip them |
-| **R-FU-10** | An upload without root/SETTINGS files is not valid — these files finalize the import |
+| **R-FU-09** | For cloud endpoint imports, root/SETTINGS are mandatory per finalized import cycle (`force=true`), followed by `processImport()` |
+| **R-FU-10** | If timer expires mid-session, finalize any active cloud import before returning `TIMEOUT` |
+| **R-FU-11** | Do not implement reboot-based heap recovery in upload result handling (`HEAP_EXHAUSTED` path removed) |
 
 ### 3.5 SDCardManager Modifications
 
@@ -175,10 +174,12 @@ These are no longer needed and should be **ignored with a warning log** if prese
 | **R-NF-03** | PCNT sampling must not interfere with WiFi or upload operations |
 | **R-NF-04** | Memory usage: TrafficMonitor adds negligible RAM (PCNT is hardware) |
 | **R-NF-05** | Backward compatible: old config.json files work with deprecation warnings |
-| **R-NF-06** | State file (`.upload_state.json`) format unchanged — no migration needed |
+| **R-NF-06** | State file remains backward-compatible, but loader must prune legacy `/DATALOG/...` checksum entries as an in-place memory migration |
 | **R-NF-07** | All build flags (ENABLE_SMB_UPLOAD, ENABLE_SLEEPHQ_UPLOAD, etc.) unchanged |
 | **R-NF-08** | OTA update functionality unchanged |
 | **R-NF-09** | **SleepHQ uploads must use streaming + chunked decoding** to maintain persistent TLS connections and prevent heap exhaustion |
+| **R-NF-10** | UploadStateManager persistence cadence must avoid per-file save churn; prefer folder/session boundary saves |
+| **R-NF-11** | Heap stability strategy must prioritize allocation-churn reduction over reboot workarounds |
 
 ---
 
@@ -198,7 +199,9 @@ These are no longer needed and should be **ignored with a warning log** if prese
 | **T-10** | Web trigger: verify forced upload bypasses inactivity check |
 | **T-11** | Cross-midnight window: verify START > END wraps correctly |
 | **T-12** | Long-running stability: verify no memory leaks or watchdog timeouts over 24h+ |
-| **T-13** | **Memory/TLS Stability**: Verify heap remains stable (>100KB) during long upload sessions with mixed file sizes |
+| **T-13** | **Memory/TLS Stability**: Verify long sessions complete without reboot recovery paths; monitor `max_alloc` trend and confirm TLS operations continue after repeated folder finalizations |
 | **T-14** | SD Activity Monitor: verify live PCNT data displayed in web UI, uploads stopped |
 | **T-15** | SD Activity Monitor: verify entering from UPLOADING state finishes current file + root/SETTINGS first |
-| **T-16** | Root/SETTINGS mandatory: verify root/SETTINGS always uploaded even when X timer expired during DATALOG |
+| **T-16** | Cloud import validity: verify each finalized import includes mandatory root/SETTINGS + `processImport()` |
+| **T-17** | State migration: verify legacy DATALOG checksum entries are pruned on load and state file size/JSON allocation pressure decreases |
+| **T-18** | Recent DATALOG re-scan: verify unchanged files are skipped using size-only tracking without persisting DATALOG checksums |

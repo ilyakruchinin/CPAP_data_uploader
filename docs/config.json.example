@@ -6,10 +6,12 @@
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT_USER": "username",
   "ENDPOINT_PASS": "password",
-  "UPLOAD_HOUR": 12,
-
-  "SESSION_DURATION_SECONDS": 30,
-  "MAX_RETRY_ATTEMPTS": 3,
+  "UPLOAD_MODE": "smart",
+  "UPLOAD_START_HOUR": 8,
+  "UPLOAD_END_HOUR": 22,
+  "INACTIVITY_SECONDS": 125,
+  "EXCLUSIVE_ACCESS_MINUTES": 5,
+  "COOLDOWN_MINUTES": 10,
   "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
   "GMT_OFFSET_HOURS": 0,
 

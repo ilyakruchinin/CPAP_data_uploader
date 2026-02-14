@@ -119,9 +119,12 @@ bool ScheduleManager::isInUploadWindow() {
     struct tm timeinfo;
     if (!getLocalTime(&timeinfo)) return false;
     
+    // If start == end, window is always open (24/7)
+    if (uploadStartHour == uploadEndHour) return true;
+    
     int currentHour = timeinfo.tm_hour;
     
-    if (uploadStartHour <= uploadEndHour) {
+    if (uploadStartHour < uploadEndHour) {
         // Normal window: e.g., 8-22
         return currentHour >= uploadStartHour && currentHour < uploadEndHour;
     } else {

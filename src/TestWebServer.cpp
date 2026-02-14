@@ -143,13 +143,18 @@ void TestWebServer::handleRoot() {
     html += ".btn-secondary{background:#2a475e;color:#c7d5e0}.btn-secondary:hover{background:#3a5a7e}";
     html += ".btn-accent{background:#9b59b6;color:#fff}.btn-accent:hover{background:#b06ed0}";
     html += ".btn-danger{background:#c0392b;color:#fff}.btn-danger:hover{background:#e04030}";
-    html += ".btn-disabled{background:#1b2838;color:#4a5568;cursor:not-allowed}";
+    html += ".btn-loading{background:#3f6d88;color:#dbe7ef;cursor:progress;opacity:0.92}";
     // WiFi signal colors
     html += ".sig-exc{color:#44ff44}.sig-good{color:#88dd44}.sig-fair{color:#ddcc44}.sig-weak{color:#dd8844}.sig-vweak{color:#dd4444}";
     // Alert
     html += ".alert{background:#3a2a1a;border:1px solid #aa6622;border-radius:8px;padding:14px;margin-bottom:16px}";
     html += ".alert h3{color:#ffaa44;font-size:0.9em;margin-bottom:6px}";
     html += ".alert p{font-size:0.85em;color:#c7d5e0;margin:3px 0}";
+    // Toast notification (for inline actions without navigation)
+    html += ".toast{position:fixed;right:16px;bottom:16px;max-width:340px;background:#1b2838;border:1px solid #2a475e;color:#c7d5e0;padding:10px 12px;border-radius:8px;font-size:0.85em;box-shadow:0 6px 24px rgba(0,0,0,0.35);opacity:0;transform:translateY(8px);transition:opacity 0.2s,transform 0.2s;pointer-events:none;z-index:9999}";
+    html += ".toast.show{opacity:1;transform:translateY(0)}";
+    html += ".toast.ok{border-color:#2f8f57}";
+    html += ".toast.err{border-color:#c0392b}";
     html += "</style></head><body><div class='wrap'>";
     
     // Send initial chunk with headers
@@ -229,19 +234,28 @@ void TestWebServer::handleRoot() {
         int completed = stateManager->getCompletedFoldersCount();
         int incomplete = stateManager->getIncompleteFoldersCount();
         int pending = stateManager->getPendingFoldersCount();
-        int total = completed + incomplete + pending;
+        int dataTotal = completed + incomplete;
         
-        if (total == 0) {
+        if (dataTotal == 0 && pending == 0) {
             html += "<div class='row'><span class='k'>Status</span><span class='v'>Waiting for first scan</span></div>";
         } else {
-            int pct = (total > 0) ? (completed * 100 / total) : 0;
-            html += "<div class='row'><span class='k'>Folders</span><span class='v'>" + String(completed) + " / " + String(total) + " completed";
-            if (pending > 0) html += " (" + String(pending) + " empty)";
-            html += "</span></div>";
-            html += "<div class='prog-bar'><div class='prog-fill' style='width:" + String(pct) + "%'></div></div>";
-            
-            if (incomplete > 0) {
-                html += "<div class='row' style='margin-top:6px'><span class='k'>Incomplete</span><span class='v' style='color:#ffaa44'>" + String(incomplete) + " folders remaining</span></div>";
+            if (dataTotal > 0) {
+                int pct = (completed * 100 / dataTotal);
+                html += "<div class='row'><span class='k'>Data folders</span><span class='v'>" + String(completed) + " / " + String(dataTotal) + " uploaded</span></div>";
+                html += "<div class='prog-bar'><div class='prog-fill' style='width:" + String(pct) + "%'></div></div>";
+
+                if (incomplete > 0) {
+                    html += "<div class='row' style='margin-top:6px'><span class='k'>Remaining</span><span class='v' style='color:#ffaa44'>" + String(incomplete) + " data folders</span></div>";
+                } else {
+                    html += "<div class='row' style='margin-top:6px'><span class='k'>Data upload status</span><span class='v' style='color:#66dd88'>Complete</span></div>";
+                }
+            }
+
+            if (pending > 0) {
+                html += "<div class='row' style='margin-top:6px'><span class='k'>Empty folders</span><span class='v'>" + String(pending) + " pending (auto-complete after 7 days)</span></div>";
+                if (incomplete == 0) {
+                    html += "<div class='row'><span class='k'>Status</span><span class='v'>Waiting on empty-folder aging</span></div>";
+                }
             }
         }
     }
@@ -252,20 +266,27 @@ void TestWebServer::handleRoot() {
     html = "<div class='card' style='margin-bottom:20px'>";
     html += "<h2>Actions</h2>";
     html += "<div class='actions'>";
-    html += "<a href='/trigger-upload' class='btn btn-primary'>&#9650; Trigger Upload</a>";
+    html += "<button id='trigger-upload-btn' class='btn btn-primary' onclick='triggerUpload()'>&#9650; Trigger Upload</button>";
+    html += "<span id='trigger-upload-status' style='font-size:0.82em;color:#8f98a0;align-self:center'></span>";
     html += "<a href='/monitor' class='btn btn-accent'>&#128200; SD Activity Monitor</a>";
     html += "</div>";
     
     html += "<div class='actions' style='margin-top:10px'>";
-    html += "<a href='/status' class='btn btn-secondary'>JSON Status</a>";
-    html += "<a href='/config' class='btn btn-secondary'>Config</a>";
-    html += "<a href='/logs' class='btn btn-secondary'>Logs</a>";
+    html += "<a href='/status' class='btn btn-secondary' target='_blank' rel='noopener noreferrer'>JSON Status</a>";
+    html += "<a href='/config' class='btn btn-secondary' target='_blank' rel='noopener noreferrer'>Config</a>";
+    html += "<a href='/logs' class='btn btn-secondary' target='_blank' rel='noopener noreferrer'>Logs</a>";
 #ifdef ENABLE_OTA_UPDATES
     html += "<a href='/ota' class='btn btn-secondary'>&#128190; Firmware Update</a>";
 #endif
     html += "<a href='/reset-state' class='btn btn-danger' onclick='return confirm(\"Reset all upload state? This cannot be undone.\")'>Reset State</a>";
     html += "</div></div>";
 
+    html += "<div id='toast' class='toast'></div>";
+    html += "<script>";
+    html += "function showToast(msg,ok){var t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.className='toast '+(ok?'ok':'err')+' show';setTimeout(function(){t.className='toast';},2800);}";
+    html += "function setTriggerStatus(msg){var s=document.getElementById('trigger-upload-status');if(s){s.textContent=msg||'';}}";
+    html += "function triggerUpload(){var b=document.getElementById('trigger-upload-btn');if(!b)return;if(b.dataset.loading==='1')return;var label=b.innerHTML;b.dataset.loading='1';b.classList.add('btn-loading');b.innerHTML='&#8987; Triggering...';setTriggerStatus('Sending upload request...');showToast('Sending upload request...',true);fetch('/trigger-upload',{method:'GET',cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text();}).then(function(raw){var d={};try{d=JSON.parse(raw);}catch(e){}var m=(d&&d.message)?d.message:'Upload triggered.';showToast(m,true);setTriggerStatus('Request accepted.');}).catch(function(){showToast('Failed to trigger upload.',false);setTriggerStatus('Request failed. Try again.');}).finally(function(){setTimeout(function(){b.dataset.loading='0';b.classList.remove('btn-loading');b.innerHTML=label;},700);});}";
+    html += "</script>";
     html += "</div></body></html>";
     sendChunk(html);
     
@@ -327,15 +348,18 @@ void TestWebServer::handleStatus() {
     if (stateManager) {
         int completedFolders = stateManager->getCompletedFoldersCount();
         int incompleteFolders = stateManager->getIncompleteFoldersCount();
+        int pendingFolders = stateManager->getPendingFoldersCount();
         int totalFolders = completedFolders + incompleteFolders;
         
         json += "\"completed_folders\":" + String(completedFolders) + ",";
         json += "\"incomplete_folders\":" + String(incompleteFolders) + ",";
+        json += "\"pending_folders\":" + String(pendingFolders) + ",";
         json += "\"total_folders\":" + String(totalFolders) + ",";
-        json += "\"upload_state_initialized\":" + String(totalFolders > 0 ? "true" : "false");
+        json += "\"upload_state_initialized\":" + String((totalFolders + pendingFolders) > 0 ? "true" : "false");
     } else {
         json += "\"completed_folders\":0,";
         json += "\"incomplete_folders\":0,";
+        json += "\"pending_folders\":0,";
         json += "\"total_folders\":0,";
         json += "\"upload_state_initialized\":false";
     }
@@ -533,8 +557,7 @@ int TestWebServer::getPendingFoldersCount() {
         return 0;
     }
     
-    // Get count of incomplete folders from state manager
-    return stateManager->getIncompleteFoldersCount();
+    return stateManager->getPendingFoldersCount();
 }
 
 // Helper class to adapt WebServer for chunked streaming via Print interface

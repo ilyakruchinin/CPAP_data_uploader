@@ -83,6 +83,10 @@ void SleepHQUploader::configureTLS() {
     tlsClient->setTimeout(60);  // 60 seconds
 }
 
+void SleepHQUploader::resetConnection() {
+    resetTLS();
+}
+
 bool SleepHQUploader::begin() {
     LOG("[SleepHQ] Initializing cloud uploader...");
     
@@ -234,10 +238,183 @@ bool SleepHQUploader::createImport() {
     LOG("[SleepHQ] Creating new import session...");
     
     String path = "/api/v1/teams/" + teamId + "/imports";
-    
-    // Build request body with device_id
-    String body = "";
     int deviceId = config->getCloudDeviceId();
+    
+    // Try raw TLS if connection is alive (avoids HTTPClient forcing SSL reconnection)
+    if (tlsClient && tlsClient->connected()) {
+        char hdrBuf[256];
+        int n;
+        
+        // Build body on stack
+        char bodyBuf[64];
+        int bodyLen = 0;
+        if (deviceId > 0) {
+            bodyLen = snprintf(bodyBuf, sizeof(bodyBuf), "device_id=%d", deviceId);
+        }
+        
+        // Send request
+        n = snprintf(hdrBuf, sizeof(hdrBuf), "POST %s HTTP/1.1\r\n", path.c_str());
+        tlsClient->write((const uint8_t*)hdrBuf, n);
+        
+        const char* bu = config->getCloudBaseUrl().c_str();
+        const char* hs = strstr(bu, "://");
+        const char* host = hs ? hs + 3 : bu;
+        n = snprintf(hdrBuf, sizeof(hdrBuf), "Host: %s\r\n", host);
+        tlsClient->write((const uint8_t*)hdrBuf, n);
+        
+        tlsClient->write((const uint8_t*)"Authorization: Bearer ", 22);
+        tlsClient->write((const uint8_t*)accessToken.c_str(), accessToken.length());
+        
+        if (bodyLen > 0) {
+            n = snprintf(hdrBuf, sizeof(hdrBuf),
+                "\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n", bodyLen);
+        } else {
+            n = snprintf(hdrBuf, sizeof(hdrBuf),
+                "\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n");
+        }
+        tlsClient->write((const uint8_t*)hdrBuf, n);
+        if (bodyLen > 0) {
+            tlsClient->write((const uint8_t*)bodyBuf, bodyLen);
+        }
+        tlsClient->flush();
+        
+        // Wait for response
+        unsigned long timeout = millis() + 15000;
+        while (!tlsClient->available() && millis() < timeout) {
+            delay(10);
+        }
+        
+        if (tlsClient->available()) {
+            // Read status line
+            char lineBuf[256];
+            int lineLen = 0;
+            unsigned long ld = millis() + 5000;
+            while (millis() < ld) {
+                if (!tlsClient->available()) { delay(2); continue; }
+                int c = tlsClient->read();
+                if (c < 0 || c == '\n') break;
+                if (c != '\r' && lineLen < (int)sizeof(lineBuf) - 1) lineBuf[lineLen++] = (char)c;
+            }
+            lineBuf[lineLen] = '\0';
+            const char* sp = strchr(lineBuf, ' ');
+            int rawHttpCode = sp ? atoi(sp + 1) : -1;
+            
+            // Parse headers
+            long contentLength = -1;
+            bool isChunked = false;
+            unsigned long headerDl = millis() + 5000;
+            while (millis() < headerDl) {
+                if (!tlsClient->available()) { delay(2); continue; }
+                lineLen = 0;
+                while (millis() < headerDl) {
+                    if (!tlsClient->available()) { delay(2); continue; }
+                    int c = tlsClient->read();
+                    if (c < 0 || c == '\n') break;
+                    if (c != '\r' && lineLen < (int)sizeof(lineBuf) - 1) lineBuf[lineLen++] = (char)c;
+                }
+                lineBuf[lineLen] = '\0';
+                if (lineLen == 0) break;
+                if (strncasecmp(lineBuf, "Content-Length:", 15) == 0) {
+                    contentLength = atol(lineBuf + 15);
+                } else if (strncasecmp(lineBuf, "Transfer-Encoding:", 18) == 0) {
+                    for (int ci = 18; lineBuf[ci]; ci++) lineBuf[ci] = tolower((unsigned char)lineBuf[ci]);
+                    if (strstr(lineBuf + 18, "chunked")) isChunked = true;
+                }
+            }
+            
+            // Read body into stack buffer
+            char respBuf[1024];
+            int respLen = 0;
+            if (isChunked) {
+                unsigned long chunkDl = millis() + 5000;
+                while (millis() < chunkDl) {
+                    if (!tlsClient->available()) { delay(2); continue; }
+                    lineLen = 0;
+                    while (millis() < chunkDl) {
+                        if (!tlsClient->available()) { delay(2); continue; }
+                        int c = tlsClient->read();
+                        if (c < 0 || c == '\n') break;
+                        if (c != '\r' && lineLen < (int)sizeof(lineBuf) - 1) lineBuf[lineLen++] = (char)c;
+                    }
+                    lineBuf[lineLen] = '\0';
+                    long chunkSize = strtol(lineBuf, NULL, 16);
+                    if (chunkSize <= 0) {
+                        // Drain end chunk trailers
+                        unsigned long trailerDl = millis() + 2000;
+                        while (tlsClient->available() && millis() < trailerDl) {
+                            int c = tlsClient->read();
+                            if (c == '\n' || c < 0) break;
+                        }
+                        break;
+                    }
+                    long remaining = chunkSize;
+                    while (remaining > 0 && millis() < chunkDl) {
+                        if (!tlsClient->available()) { delay(2); continue; }
+                        int c = tlsClient->read();
+                        if (c < 0) break;
+                        if (respLen < (int)sizeof(respBuf) - 1) respBuf[respLen++] = (char)c;
+                        remaining--;
+                    }
+                    // Trailing CRLF
+                    while (tlsClient->available()) {
+                        int c = tlsClient->read();
+                        if (c == '\n' || c < 0) break;
+                    }
+                }
+            } else if (contentLength > 0) {
+                long remaining = contentLength;
+                unsigned long bodyDl = millis() + 5000;
+                while (remaining > 0 && millis() < bodyDl) {
+                    if (!tlsClient->available()) { delay(2); continue; }
+                    int c = tlsClient->read();
+                    if (c < 0) break;
+                    if (respLen < (int)sizeof(respBuf) - 1) respBuf[respLen++] = (char)c;
+                    remaining--;
+                }
+            } else {
+                unsigned long bodyDl = millis() + 2000;
+                while (millis() < bodyDl) {
+                    if (!tlsClient->available()) { delay(2); if (!tlsClient->connected()) break; continue; }
+                    int c = tlsClient->read();
+                    if (c < 0) break;
+                    if (respLen < (int)sizeof(respBuf) - 1) respBuf[respLen++] = (char)c;
+                    bodyDl = millis() + 500;
+                }
+            }
+            respBuf[respLen] = '\0';
+            
+            if (rawHttpCode == 201 || rawHttpCode == 200) {
+                // Parse import_id from JSON response
+                DynamicJsonDocument doc(2048);
+                DeserializationError err = deserializeJson(doc, respBuf);
+                if (!err) {
+                    long importIdVal = 0;
+                    if (doc.containsKey("data")) {
+                        JsonObject data = doc["data"];
+                        if (data.containsKey("attributes")) {
+                            importIdVal = data["attributes"]["id"] | 0L;
+                        }
+                        if (importIdVal == 0) {
+                            importIdVal = data["id"] | 0L;
+                        }
+                    }
+                    if (importIdVal > 0) {
+                        currentImportId = String(importIdVal);
+                        LOGF("[SleepHQ] Import created: %s (raw TLS)", currentImportId.c_str());
+                        return true;
+                    }
+                }
+                LOG_ERROR("[SleepHQ] Failed to parse import ID from raw TLS response");
+                return false;
+            }
+            LOG_ERRORF("[SleepHQ] Create import failed with HTTP %d (raw TLS)", rawHttpCode);
+            return false;
+        }
+        LOG_WARN("[SleepHQ] Raw TLS createImport timed out, falling back to HTTPClient");
+    }
+    
+    // Fall back to HTTPClient (needs new SSL connection)
+    String body = "";
     if (deviceId > 0) {
         body = "device_id=" + String(deviceId);
     }
@@ -301,6 +478,104 @@ bool SleepHQUploader::processImport() {
     
     String path = "/api/v1/imports/" + currentImportId + "/process_files";
     
+    // Try raw TLS if connection is alive (avoids new SSL handshake at low max_alloc)
+    if (tlsClient && tlsClient->connected()) {
+        char hdrBuf[256];
+        int n;
+        
+        n = snprintf(hdrBuf, sizeof(hdrBuf), "POST %s HTTP/1.1\r\n", path.c_str());
+        tlsClient->write((const uint8_t*)hdrBuf, n);
+        
+        const char* bu = config->getCloudBaseUrl().c_str();
+        const char* hs = strstr(bu, "://");
+        const char* host = hs ? hs + 3 : bu;
+        n = snprintf(hdrBuf, sizeof(hdrBuf), "Host: %s\r\n", host);
+        tlsClient->write((const uint8_t*)hdrBuf, n);
+        
+        // Write auth header in parts to handle long tokens
+        tlsClient->write((const uint8_t*)"Authorization: Bearer ", 22);
+        tlsClient->write((const uint8_t*)accessToken.c_str(), accessToken.length());
+        tlsClient->write((const uint8_t*)"\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n", 47);
+        tlsClient->flush();
+        
+        // Wait for response
+        unsigned long timeout = millis() + 15000;
+        while (!tlsClient->available() && millis() < timeout) {
+            delay(10);
+        }
+        
+        if (tlsClient->available()) {
+            // Read status line — stack buffer
+            char lineBuf[256];
+            int lineLen = 0;
+            unsigned long ld = millis() + 5000;
+            while (millis() < ld) {
+                if (!tlsClient->available()) { delay(2); continue; }
+                int c = tlsClient->read();
+                if (c < 0 || c == '\n') break;
+                if (c != '\r' && lineLen < (int)sizeof(lineBuf) - 1) lineBuf[lineLen++] = (char)c;
+            }
+            lineBuf[lineLen] = '\0';
+            
+            const char* sp = strchr(lineBuf, ' ');
+            int httpCode = sp ? atoi(sp + 1) : -1;
+            
+            // Drain headers and body
+            bool draining = true;
+            bool inBody = false;
+            long contentLength = -1;
+            unsigned long drainDl = millis() + 5000;
+            while (draining && millis() < drainDl) {
+                if (!tlsClient->available()) {
+                    delay(2);
+                    if (!tlsClient->connected()) break;
+                    continue;
+                }
+                if (!inBody) {
+                    lineLen = 0;
+                    while (millis() < drainDl) {
+                        if (!tlsClient->available()) { delay(2); continue; }
+                        int c = tlsClient->read();
+                        if (c < 0 || c == '\n') break;
+                        if (c != '\r' && lineLen < (int)sizeof(lineBuf) - 1) lineBuf[lineLen++] = (char)c;
+                    }
+                    lineBuf[lineLen] = '\0';
+                    if (lineLen == 0) {
+                        inBody = true;
+                        continue;
+                    }
+                    if (strncasecmp(lineBuf, "Content-Length:", 15) == 0) {
+                        contentLength = atol(lineBuf + 15);
+                    }
+                } else {
+                    // Drain body
+                    if (contentLength > 0) {
+                        uint8_t tmp[256];
+                        size_t toRead = (contentLength < (long)sizeof(tmp)) ? contentLength : sizeof(tmp);
+                        size_t r = tlsClient->read(tmp, toRead);
+                        contentLength -= r;
+                        if (contentLength <= 0) draining = false;
+                    } else {
+                        // Drain briefly
+                        while (tlsClient->available()) tlsClient->read();
+                        draining = false;
+                    }
+                }
+            }
+            
+            if (httpCode == 200 || httpCode == 201) {
+                LOGF("[SleepHQ] Import %s submitted for processing", currentImportId.c_str());
+                currentImportId = "";
+                return true;
+            }
+            LOG_ERRORF("[SleepHQ] Process import failed with HTTP %d (raw TLS)", httpCode);
+            currentImportId = "";
+            return false;
+        }
+        LOG_WARN("[SleepHQ] Raw TLS processImport timed out, falling back to HTTPClient");
+    }
+    
+    // Fall back to HTTPClient (needs new SSL connection)
     String responseBody;
     int httpCode;
     
@@ -462,6 +737,10 @@ void SleepHQUploader::end() {
 
 bool SleepHQUploader::isConnected() const {
     return connected && !accessToken.isEmpty();
+}
+
+bool SleepHQUploader::isTlsAlive() const {
+    return tlsClient && tlsClient->connected();
 }
 
 const String& SleepHQUploader::getTeamId() const { return teamId; }
@@ -963,15 +1242,25 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             return false;
         }
         
-        String statusLine = tlsClient->readStringUntil('\n');
-        int spaceIdx = statusLine.indexOf(' ');
-        if (spaceIdx > 0) {
-            httpCode = statusLine.substring(spaceIdx + 1, spaceIdx + 4).toInt();
-        } else {
-            httpCode = -1;
+        // Parse status line — stack buffer, no heap alloc
+        char lineBuf[256];
+        int lineLen = 0;
+        {
+            unsigned long ld = millis() + 5000;
+            while (millis() < ld) {
+                if (!tlsClient->available()) { delay(2); continue; }
+                int c = tlsClient->read();
+                if (c < 0 || c == '\n') break;
+                if (c != '\r' && lineLen < (int)sizeof(lineBuf) - 1) lineBuf[lineLen++] = (char)c;
+            }
+            lineBuf[lineLen] = '\0';
+        }
+        {
+            const char* sp = strchr(lineBuf, ' ');
+            httpCode = sp ? atoi(sp + 1) : -1;
         }
         
-        // Parse response headers — extract Content-Length and Connection
+        // Parse response headers — stack buffer, no heap alloc
         long contentLength = -1;
         bool isChunked = false;
         bool connectionClose = false;
@@ -982,25 +1271,26 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 delay(2);
                 continue;
             }
-            String headerLine = tlsClient->readStringUntil('\n');
-            if (headerLine == "\r" || headerLine.length() <= 1) {
+            lineLen = 0;
+            while (millis() < headerDeadline) {
+                if (!tlsClient->available()) { delay(2); continue; }
+                int c = tlsClient->read();
+                if (c < 0 || c == '\n') break;
+                if (c != '\r' && lineLen < (int)sizeof(lineBuf) - 1) lineBuf[lineLen++] = (char)c;
+            }
+            lineBuf[lineLen] = '\0';
+            if (lineLen == 0) {
                 headersDone = true;
                 break;
             }
-            if (headerLine.startsWith("Content-Length:") || headerLine.startsWith("content-length:")) {
-                contentLength = headerLine.substring(headerLine.indexOf(':') + 1).toInt();
-            }
-            if (headerLine.startsWith("Transfer-Encoding:") || headerLine.startsWith("transfer-encoding:")) {
-                if (headerLine.indexOf("chunked") >= 0) {
-                    isChunked = true;
-                }
-            }
-            if (headerLine.startsWith("Connection:") || headerLine.startsWith("connection:")) {
-                String v = headerLine;
-                v.toLowerCase();
-                if (v.indexOf("close") >= 0) {
-                    connectionClose = true;
-                }
+            if (strncasecmp(lineBuf, "Content-Length:", 15) == 0) {
+                contentLength = atol(lineBuf + 15);
+            } else if (strncasecmp(lineBuf, "Transfer-Encoding:", 18) == 0) {
+                for (int ci = 18; lineBuf[ci]; ci++) lineBuf[ci] = tolower((unsigned char)lineBuf[ci]);
+                if (strstr(lineBuf + 18, "chunked")) isChunked = true;
+            } else if (strncasecmp(lineBuf, "Connection:", 11) == 0) {
+                for (int ci = 11; lineBuf[ci]; ci++) lineBuf[ci] = tolower((unsigned char)lineBuf[ci]);
+                if (strstr(lineBuf + 11, "close")) connectionClose = true;
             }
         }
 
@@ -1023,26 +1313,40 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             return false;
         }
         
-        // Drain response body using Content-Length or Chunked encoding
-        responseBody = "";
+        // Drain response body — stack buffer to avoid heap fragmentation
+        // (responseBody String built char-by-char was the #1 fragmentation source)
+        char respBuf[1024];
+        int respLen = 0;
         if (isChunked) {
-            // Drain chunked response
             unsigned long chunkDeadline = millis() + 5000;
             while (millis() < chunkDeadline) {
                 if (!tlsClient->available()) {
                     delay(2);
                     continue;
                 }
-                // Read chunk size (hex)
-                String sizeLine = tlsClient->readStringUntil('\n');
-                sizeLine.trim(); // Remove \r
-                long chunkSize = strtol(sizeLine.c_str(), NULL, 16);
+                // Read chunk size line — stack buffer
+                lineLen = 0;
+                while (millis() < chunkDeadline) {
+                    if (!tlsClient->available()) { delay(2); continue; }
+                    int c = tlsClient->read();
+                    if (c < 0 || c == '\n') break;
+                    if (c != '\r' && lineLen < (int)sizeof(lineBuf) - 1) lineBuf[lineLen++] = (char)c;
+                }
+                lineBuf[lineLen] = '\0';
+                long chunkSize = strtol(lineBuf, NULL, 16);
                 
                 if (chunkSize <= 0) {
-                    // End of stream (0-size chunk). Drain trailers.
-                    while (tlsClient->available()) {
-                        String trailer = tlsClient->readStringUntil('\n');
-                        if (trailer == "\r" || trailer.length() <= 1) break;
+                    // End chunk — drain trailers using stack buffer
+                    unsigned long trailerDl = millis() + 2000;
+                    while (tlsClient->available() && millis() < trailerDl) {
+                        lineLen = 0;
+                        while (millis() < trailerDl) {
+                            if (!tlsClient->available()) { delay(2); continue; }
+                            int c = tlsClient->read();
+                            if (c < 0 || c == '\n') break;
+                            if (c != '\r' && lineLen < (int)sizeof(lineBuf) - 1) lineBuf[lineLen++] = (char)c;
+                        }
+                        if (lineLen == 0) break;
                     }
                     break;
                 }
@@ -1055,18 +1359,18 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                     size_t toRead = (remaining < (long)sizeof(drainBuf)) ? remaining : sizeof(drainBuf);
                     size_t r = tlsClient->read(drainBuf, toRead);
                     if (r == 0) break;
-                    // Capture first 1KB of response for debugging/logging
-                    if (responseBody.length() < 1024) {
-                        for (size_t i = 0; i < r && responseBody.length() < 1024; i++) {
-                            responseBody += (char)drainBuf[i];
-                        }
+                    for (size_t i = 0; i < r && respLen < (int)sizeof(respBuf) - 1; i++) {
+                        respBuf[respLen++] = (char)drainBuf[i];
                     }
                     remaining -= r;
                     chunkDeadline = millis() + 5000;
                 }
                 
-                // Read trailing CRLF after chunk data
-                tlsClient->readStringUntil('\n');
+                // Read trailing CRLF — byte-by-byte, no heap alloc
+                while (tlsClient->available()) {
+                    int c = tlsClient->read();
+                    if (c == '\n' || c < 0) break;
+                }
             }
         } else if (contentLength > 0) {
             long remaining = contentLength;
@@ -1080,10 +1384,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 size_t toRead = (remaining < (long)sizeof(drainBuf)) ? remaining : sizeof(drainBuf);
                 size_t r = tlsClient->read(drainBuf, toRead);
                 if (r == 0) break;
-                if (responseBody.length() < 1024) {
-                    for (size_t i = 0; i < r && responseBody.length() < 1024; i++) {
-                        responseBody += (char)drainBuf[i];
-                    }
+                for (size_t i = 0; i < r && respLen < (int)sizeof(respBuf) - 1; i++) {
+                    respBuf[respLen++] = (char)drainBuf[i];
                 }
                 remaining -= r;
                 bodyDeadline = millis() + 5000;
@@ -1093,13 +1395,13 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 tlsClient->stop();
             }
         } else {
-            // Unknown body length: drain briefly then reset to avoid stale bytes
+            // Unknown body length: drain briefly
             unsigned long drainDeadline = millis() + 300;
             while (millis() < drainDeadline) {
                 while (tlsClient->available()) {
                     int c = tlsClient->read();
-                    if (c >= 0 && responseBody.length() < 1024) {
-                        responseBody += (char)c;
+                    if (c >= 0 && respLen < (int)sizeof(respBuf) - 1) {
+                        respBuf[respLen++] = (char)c;
                     }
                     drainDeadline = millis() + 300;
                 }
@@ -1107,6 +1409,10 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             }
             tlsClient->stop();
         }
+        
+        // Single heap allocation from stack buffer (only for error logging)
+        respBuf[respLen] = '\0';
+        responseBody = respBuf;
         
         // Keep TLS alive unless server requested close
         if (connectionClose) {

@@ -6,6 +6,9 @@ This plan transforms the upload system from periodic-release scheduling to an ex
 FSM with PCNT-based bus activity detection. The work is divided into 6 phases, designed to be
 implemented and tested incrementally.
 
+Current status (`streamfix11`): core phases are implemented, and heap-stability work was
+extended with root-cause fixes in upload state handling (not reboot orchestration).
+
 ---
 
 ## Phase 1: Hardware Fix + TrafficMonitor
@@ -90,9 +93,7 @@ bool isSmartMode() const;    // convenience: uploadMode == "smart"
 
 In `loadFromSD()`:
 - Parse new fields with defaults
-- Backward compatibility: if old params present and new absent, migrate
 - Validation with clamping and warnings
-- Log deprecation warnings for old params
 
 ```
 // New parameters
@@ -102,40 +103,11 @@ uploadEndHour = doc["UPLOAD_END_HOUR"] | 22;
 inactivitySeconds = doc["INACTIVITY_SECONDS"] | 125;
 exclusiveAccessMinutes = doc["EXCLUSIVE_ACCESS_MINUTES"] | 5;
 cooldownMinutes = doc["COOLDOWN_MINUTES"] | 10;
-
-// Backward compat: UPLOAD_HOUR → UPLOAD_START_HOUR
-if (!doc.containsKey("UPLOAD_START_HOUR") && doc.containsKey("UPLOAD_HOUR")) {
-    uploadStartHour = doc["UPLOAD_HOUR"] | 8;
-    uploadEndHour = uploadStartHour + 2;  // 2-hour window
-    LOG_WARN("UPLOAD_HOUR is deprecated. Using UPLOAD_START_HOUR/END_HOUR instead.");
-}
-
-// Backward compat: UPLOAD_INTERVAL_MINUTES > 0 → smart mode
-if (!doc.containsKey("UPLOAD_MODE") && (doc["UPLOAD_INTERVAL_MINUTES"] | 0) > 0) {
-    uploadMode = "smart";
-    LOG_WARN("UPLOAD_INTERVAL_MINUTES is deprecated. Setting UPLOAD_MODE=smart.");
-}
-
-// Backward compat: SESSION_DURATION_SECONDS → EXCLUSIVE_ACCESS_MINUTES
-if (!doc.containsKey("EXCLUSIVE_ACCESS_MINUTES") && doc.containsKey("SESSION_DURATION_SECONDS")) {
-    int secs = doc["SESSION_DURATION_SECONDS"] | 300;
-    exclusiveAccessMinutes = max(1, secs / 60);
-    LOG_WARN("SESSION_DURATION_SECONDS is deprecated. Using EXCLUSIVE_ACCESS_MINUTES instead.");
-}
-
-// Deprecation warnings
-if (doc.containsKey("SD_RELEASE_INTERVAL_SECONDS")) {
-    LOG_WARN("SD_RELEASE_INTERVAL_SECONDS is deprecated and ignored (exclusive access mode).");
-}
-if (doc.containsKey("SD_RELEASE_WAIT_MS")) {
-    LOG_WARN("SD_RELEASE_WAIT_MS is deprecated and ignored (exclusive access mode).");
-}
 ```
 
 ### 2.3 Test
 
 - Load config with new params → verify correct values
-- Load config with only old params → verify migration + warnings
 - Load config with invalid values → verify clamping
 
 ---
@@ -190,7 +162,8 @@ bool isDayCompleted();
 
 ## Phase 4: FileUploader Modifications
 
-**Goal**: Remove periodic SD release, add timer-based exclusive access, support data filtering.
+**Goal**: Remove periodic SD release, add timer-based exclusive access, support data filtering,
+and reduce heap fragmentation pressure during long cloud upload sessions.
 
 ### 4.1 Add Upload Result Enum
 
@@ -206,7 +179,7 @@ enum class UploadResult {
 
 ```cpp
 enum class DataFilter {
-    FRESH_ONLY,  // Only fresh DATALOG + root/SETTINGS
+    FRESH_ONLY,  // Only fresh DATALOG folders
     OLD_ONLY,    // Only old DATALOG folders
     ALL_DATA     // Everything
 };
@@ -230,16 +203,15 @@ Implementation:
 - Phase 2: Old DATALOG folders (if filter includes old)
   - Before each file: check if elapsed > maxMinutes → exit this phase
   - Upload file to all backends
-- Phase 3: Root/SETTINGS files *** MANDATORY — NEVER SKIPPED ***
-  - Timer does NOT gate this phase
-  - Upload all changed files (checksum comparison)
-  - These files are small and required for a valid import
-- Return COMPLETE if all done, TIMEOUT if DATALOG timer expired (but root/SETTINGS done), ERROR on failure
+- For cloud uploads, finalize each folder import cycle:
+  - Upload mandatory root files + SETTINGS files (`force=true`)
+  - Call `processImport()`
+  - Reset import flags for next folder
+- If timer expires, finalize any active import before returning
+- Return COMPLETE if all done, TIMEOUT if timer expired with pending folders, ERROR on failure
 
-**Important**: An upload without root/SETTINGS files is not valid. These files
-(e.g., Identification.json, STR.edf, machine settings) are required by SleepHQ
-and other backends to process the import. They are always uploaded last to
-finalize the import, regardless of the X-minute timer.
+**Important**: Root/SETTINGS mandatory finalization is a cloud-import requirement and now
+occurs per-folder import cycle (not as a single end-of-session phase).
 
 ### 4.4 Remove Periodic Release
 
@@ -255,11 +227,11 @@ has been deleted.
 
 ### 4.6 Test
 
-- Upload with FRESH_ONLY filter → verify only recent folders + root/SETTINGS files
-- Upload with ALL_DATA → verify all folders + root/SETTINGS files
-- Upload with 1-minute timer → verify DATALOG times out but root/SETTINGS still uploaded
+- Upload with FRESH_ONLY filter → verify only recent DATALOG folders are traversed
+- Upload with ALL_DATA → verify fresh + old folders are traversed by schedule rules
+- Upload with 1-minute timer → verify DATALOG traversal stops and active import finalizes cleanly
 - Upload with large timer → verify COMPLETE when all files done
-- Verify root/SETTINGS are NEVER skipped regardless of timer state
+- Verify each cloud folder import includes mandatory root/SETTINGS + `processImport()`
 
 ### 4.7 Single-Pass Streaming Optimization (Implemented)
 
@@ -268,6 +240,25 @@ The upload logic was further optimized to minimize SD card I/O and memory usage:
 - **Footer Hash**: SleepHQ API accepts `content_hash` in the multipart footer, allowing streamed calculation.
 - **Chunked Decoding**: Custom chunked response decoder implemented to support persistent TLS connections (keep-alive) with Cloudflare.
 - **Streaming Only**: In-memory buffering for small files removed to prevent heap fragmentation.
+
+Additional memory-stability updates implemented after initial rollout:
+- **Conditional TLS reset**: if raw TLS dies after import finalization, reset connection to free TLS heap before next folder.
+- **Consecutive-failure stop**: stop current session after repeated folder failures instead of forcing reboot-based recovery.
+
+### 4.8 UploadStateManager Heap-Churn Fixes (Implemented)
+
+Root-cause analysis identified upload state churn as a major fragmentation contributor.
+
+Implemented changes:
+- **Recent DATALOG re-scan uses size-only tracking** (no persisted per-file DATALOG checksum).
+- **Legacy `/DATALOG/...` checksum entries are pruned on state load** to shrink in-memory maps and JSON document pressure.
+- **Per-file immediate save removed from `uploadSingleFile()`**; state persistence is deferred to folder/session boundaries.
+- **No soft-reboot workaround**: `HEAP_EXHAUSTED` recovery flow was removed; stability relies on reducing allocation churn.
+
+Validation focus:
+- Verify pruning log appears on first boot after migration.
+- Verify `/.upload_state.json` remains bounded as uploads continue.
+- Verify long sessions complete without reboot orchestration.
 
 ---
 
@@ -641,7 +632,8 @@ using JavaScript fetch() for polling.
 | `include/ScheduleManager.h` | Modify: rewrite interface | 3 |
 | `src/ScheduleManager.cpp` | Modify: rewrite implementation | 3 |
 | `include/FileUploader.h` | Modify: new enums, new method, remove periodic release | 4 |
-| `src/FileUploader.cpp` | Modify: major refactor, mandatory root/SETTINGS | 4 |
+| `src/FileUploader.cpp` | Modify: major refactor, per-folder cloud finalization, memory-stability updates | 4 |
+| `src/UploadStateManager.cpp` | Modify: size-only DATALOG tracking, legacy checksum pruning, lower save churn | 4 |
 | `include/SDCardManager.h` | No changes | 5 |
 | `src/SDCardManager.cpp` | Modify: remove digitalRead check | 5 |
 | `src/main.cpp` | Modify: major rewrite of loop(), MONITORING state | 6 |
@@ -659,7 +651,7 @@ using JavaScript fetch() for polling.
 | CPAP confused by long SD card absence | X-minute limit (default 5 min). CPAP tolerates brief removals. |
 | Upload too slow with exclusive access | Should be FASTER — no 1.5s release overhead per file. |
 | Breaking config.json backward compat | Explicit migration logic + deprecation warnings. |
-| Memory usage increase | TrafficMonitor uses hardware PCNT — negligible RAM. FSM state is a single enum. |
+| Heap fragmentation from state churn | Keep DATALOG state lightweight (size-only for recent files), prune legacy DATALOG checksums, avoid per-file state-save churn. |
 | Watchdog timeout during long uploads | Existing `yield()` calls in upload loops. Web server handling in between files. |
 
 ---
@@ -671,7 +663,7 @@ Phases are designed to be tested independently:
 1. **Phase 1** (TrafficMonitor) — can be tested in isolation with logging
 2. **Phase 2** (Config) — backward compat testable with existing firmware
 3. **Phase 3** (ScheduleManager) — unit testable
-4. **Phase 4** (FileUploader) — testable with web trigger, mandatory root/SETTINGS
+4. **Phase 4** (FileUploader + UploadStateManager memory fixes) — testable with web trigger and long-session heap monitoring
 5. **Phase 5** (SDCardManager) — minimal change, low risk
 6. **Phase 6** (Main loop FSM) — integration, ties everything together
 7. **Phase 7** (SD Activity Monitor) — web UI for threshold tuning, can be developed in parallel with Phase 6
