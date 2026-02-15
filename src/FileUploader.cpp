@@ -281,7 +281,9 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         }
     }
     
-    // Phase 3 removed — mandatory files + processImport now handled per-folder by finalizeCloudImport()
+    // Phase 3 (Standalone Settings Check) removed to enforce strict dependency on DATALOG activity.
+    // Settings/Root files are now only uploaded via finalizeCloudImport() if a DATALOG folder 
+    // was successfully processed and triggered an import.
     
     // Save upload state
     if (!stateManager->save(sd)) {

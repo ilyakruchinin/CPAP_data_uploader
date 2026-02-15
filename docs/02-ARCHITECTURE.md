@@ -215,6 +215,8 @@ Current behavior finalizes each DATALOG folder as a separate cloud import cycle:
 2. Upload mandatory root files + SETTINGS files (`force=true`)
 3. `processImport()`
 
+**Strict Dependency:** Cloud imports are **only** created if at least one file in a DATALOG folder is successfully uploaded. If a scan finds no new/changed DATALOG files, **no import is created**, and therefore no Settings or Root files are uploaded. This ensures that valid imports always contain therapy data.
+
 This avoids partial imports and constrains per-import memory lifetime. The X-minute
 timer still gates DATALOG folder traversal, but any active import is finalized before
 ending the session.
