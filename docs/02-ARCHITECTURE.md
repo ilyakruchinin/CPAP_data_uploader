@@ -166,19 +166,33 @@ scan confirms no new data exists, the day is marked completed → IDLE.
 
 ## 3. Data Categorization
 
-### 3.1 Existing Implementation (Retained)
+### 3.1 Data Tracking & Freshness Logic
 
-The current firmware already categorizes data well:
+The firmware uses different tracking strategies to balance reliability and performance:
 
-- **DATALOG folders** (`/DATALOG/YYYYMMDD/`): Therapy data, one folder per day.
-  Sorted newest-first. Tracked by `UploadStateManager` (completed, pending, incomplete).
-- **Root/SETTINGS files** (`/` and `/SETTINGS/`): Device configuration, identification.
-  Required root set (if present): `STR.edf`, `Identification.crc`, `Identification.tgt` (ResMed 9/10),
-  `Identification.json` (ResMed 11). `journal.jnl` is intentionally excluded.
-  Tracked by per-file checksums.
-- **Recent folders** (`isRecentFolder()`): DATALOG folders within `RECENT_FOLDER_DAYS` (B).
-  These are re-scanned even when marked complete, to detect changed files.
-- **MAX_DAYS cutoff**: Folders older than MAX_DAYS are completely ignored.
+- **Recent DATALOG folders** (within `RECENT_FOLDER_DAYS`):
+  - **Tracking:** Individual files are tracked by **Size Only**.
+  - **Storage:** RAM-only (transient). State is cleared on reboot to force a re-scan.
+  - **Logic:** If file size increases (new data), it is re-uploaded.
+  - **Limit:** Consumes slots in `MAX_FILE_ENTRIES` (250).
+
+- **Old DATALOG folders** (older than `RECENT_FOLDER_DAYS`):
+  - **Tracking:** Tracked by **Folder Name** only.
+  - **Storage:** Persistent (saved to SD card).
+  - **Logic:** Once a folder is marked complete, it is never scanned again.
+  - **Limit:** Consumes slots in `MAX_COMPLETED_FOLDERS` (368 days of history).
+
+- **Root Files** (`STR.edf`, `Identification.*`):
+  - **Tracking:** None (Always Upload).
+  - **Logic:** These files are **mandatory** for every cloud import cycle to ensure correct device association. They are small and uploaded every time data is sent.
+
+- **Settings Files** (`/SETTINGS/*`):
+  - **Tracking:** Tracked by **Size OR Checksum**.
+  - **Storage:** Persistent.
+  - **Logic:** Uploaded only if changed.
+  - **Limit:** Consumes slots in `MAX_FILE_ENTRIES`.
+
+- **MAX_DAYS cutoff**: Folders older than `MAX_DAYS` are completely ignored.
 
 ### 3.2 New: Fresh vs Old Data Split
 

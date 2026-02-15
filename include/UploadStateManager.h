@@ -47,9 +47,9 @@ private:
 
     static const uint16_t MAX_COMPLETED_FOLDERS = 368;
     static const uint16_t MAX_PENDING_FOLDERS = 16;
-    static const uint16_t MAX_FILE_ENTRIES = 32;
-    static const uint16_t MAX_JOURNAL_EVENTS = 96;
-    static const uint16_t COMPACTION_LINE_THRESHOLD = 128;
+    static const uint16_t MAX_FILE_ENTRIES = 250;
+    static const uint16_t MAX_JOURNAL_EVENTS = 200;
+    static const uint16_t COMPACTION_LINE_THRESHOLD = 250;
     static const uint32_t COMPACTION_SIZE_THRESHOLD_BYTES = 8192;
 
     static const uint8_t FILE_FLAG_ACTIVE = 0x01;
