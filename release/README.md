@@ -112,6 +112,7 @@ Create a file named `config.json` in the root of your SD card.
 {
   "WIFI_SSID": "YourNetworkName",
   "WIFI_PASS": "YourNetworkPassword",
+  "HOSTNAME": "cpap",
   
   "ENDPOINT_TYPE": "SMB",
   "ENDPOINT": "//192.168.1.100/cpap_backups",
