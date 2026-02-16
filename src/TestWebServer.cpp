@@ -290,14 +290,17 @@ void TestWebServer::handleRoot() {
 #ifdef ENABLE_OTA_UPDATES
     html += "<a href='/ota' class='btn btn-secondary'>&#128190; Firmware Update</a>";
 #endif
-    html += "<a href='/reset-state' class='btn btn-danger' onclick='return confirm(\"Reset all upload state? This cannot be undone.\")'>Reset State</a>";
+    html += "<button id='reset-state-btn' class='btn btn-danger' onclick='resetState()'>Reset State</button>";
+    html += "<span id='reset-state-status' style='font-size:0.82em;color:#8f98a0;align-self:center;margin-left:10px'></span>";
     html += "</div></div>";
 
     html += "<div id='toast' class='toast'></div>";
     html += "<script>";
     html += "function showToast(msg,ok){var t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.className='toast '+(ok?'ok':'err')+' show';setTimeout(function(){t.className='toast';},2800);}";
     html += "function setTriggerStatus(msg){var s=document.getElementById('trigger-upload-status');if(s){s.textContent=msg||'';}}";
+    html += "function setResetStatus(msg){var s=document.getElementById('reset-state-status');if(s){s.textContent=msg||'';}}";
     html += "function triggerUpload(){var b=document.getElementById('trigger-upload-btn');if(!b)return;if(b.dataset.loading==='1')return;var label=b.innerHTML;b.dataset.loading='1';b.classList.add('btn-loading');b.innerHTML='&#8987; Triggering...';setTriggerStatus('Sending upload request...');showToast('Sending upload request...',true);fetch('/trigger-upload',{method:'GET',cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text();}).then(function(raw){var d={};try{d=JSON.parse(raw);}catch(e){}var m=(d&&d.message)?d.message:'Upload triggered.';showToast(m,true);setTriggerStatus('Request accepted.');}).catch(function(){showToast('Failed to trigger upload.',false);setTriggerStatus('Request failed. Try again.');}).finally(function(){setTimeout(function(){b.dataset.loading='0';b.classList.remove('btn-loading');b.innerHTML=label;},700);});}";
+    html += "function resetState(){if(!confirm('Reset all upload state? This cannot be undone.'))return;var b=document.getElementById('reset-state-btn');if(!b)return;if(b.dataset.loading==='1')return;var label=b.innerHTML;b.dataset.loading='1';b.classList.add('btn-loading');b.innerHTML='&#8987; Resetting...';setResetStatus('Sending reset request...');showToast('Resetting upload state...',true);fetch('/reset-state',{method:'GET',cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text();}).then(function(raw){var d={};try{d=JSON.parse(raw);}catch(e){}var m=(d&&d.message)?d.message:'State reset. Device rebooting...';showToast(m,true);setResetStatus('Device rebooting...');}).catch(function(){showToast('Failed to reset state.',false);setResetStatus('Reset failed. Try again.');b.dataset.loading='0';b.classList.remove('btn-loading');b.innerHTML=label;});}";
     html += "</script>";
     html += "</div></body></html>";
     sendChunk(html);
@@ -342,6 +345,9 @@ void TestWebServer::handleApiConfig() {
     // Add CORS headers
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    // Send headers with empty content to start chunked response
+    server->send(200, "application/json", "");
+    
     auto sendChunk = [this](const String& s) { server->sendContent(s); };
     
     String json = "{";
@@ -354,7 +360,7 @@ void TestWebServer::handleApiConfig() {
         json += "\"wifi_password\":\"***HIDDEN***\",";
         json += "\"hostname\":\"" + escapeJson(config->getHostname()) + "\",";
         
-        server->send(200, "application/json", json);
+        sendChunk(json);
         
         json = "";
         json += "\"endpoint\":\"" + escapeJson(config->getEndpoint()) + "\",";

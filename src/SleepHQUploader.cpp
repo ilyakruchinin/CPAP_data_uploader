@@ -7,6 +7,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <esp32/rom/md5_hash.h>
+#include <esp_task_wdt.h>
 
 // GTS Root R4 - Google Trust Services root CA certificate (expires June 22, 2036)
 // Used for TLS validation of sleephq.com (which uses Google Trust Services)
@@ -810,6 +811,9 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
             http.addHeader("Content-Type", contentType);
         }
         
+        // Feed watchdog before potentially long HTTP operation (TLS handshake + request)
+        esp_task_wdt_reset();
+        
         // Send request
         if (method == "GET") {
             httpCode = http.GET();
@@ -820,6 +824,10 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
             http.end();
             return false;
         }
+        
+        // Feed software watchdog heartbeat after HTTP operation completes
+        extern volatile unsigned long g_uploadHeartbeat;
+        g_uploadHeartbeat = millis();
         
         if (httpCode > 0) {
             responseBody = http.getString();
@@ -839,6 +847,7 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
                 LOG_WARN("[SleepHQ] WiFi disconnected, waiting for reconnection...");
                 unsigned long startWait = millis();
                 while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    esp_task_wdt_reset();  // Feed watchdog during wait
                     delay(100);
                 }
                 if (WiFi.status() == WL_CONNECTED) {
@@ -851,9 +860,11 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
                 LOG_WARN("[SleepHQ] Cycling WiFi to clear socket state...");
                 WiFi.disconnect(false);
                 delay(1000);
+                esp_task_wdt_reset();  // Feed watchdog during disconnect
                 WiFi.reconnect();
                 unsigned long wifiWait = millis();
                 while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
+                    esp_task_wdt_reset();  // Feed watchdog during reconnection
                     delay(100);
                 }
                 if (WiFi.status() == WL_CONNECTED) {
@@ -985,6 +996,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                         LOG_WARN("[SleepHQ] WiFi disconnected during connect, waiting for reconnection...");
                         unsigned long startWait = millis();
                         while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                            extern volatile unsigned long g_uploadHeartbeat;
+                            g_uploadHeartbeat = millis();  // Feed software watchdog
                             delay(100);
                         }
                         if (WiFi.status() == WL_CONNECTED) {
@@ -1001,6 +1014,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                         WiFi.reconnect();
                         unsigned long wifiWait = millis();
                         while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
+                            extern volatile unsigned long g_uploadHeartbeat;
+                            g_uploadHeartbeat = millis();  // Feed software watchdog
                             delay(100);
                         }
                         if (WiFi.status() == WL_CONNECTED) {

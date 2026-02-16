@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <esp_system.h>
+#include <esp_task_wdt.h>
+#include <Preferences.h>
 #include "Config.h"
 #include "SDCardManager.h"
 #include "WiFiManager.h"
@@ -59,6 +61,10 @@ volatile bool uploadTaskRunning = false;
 volatile bool uploadTaskComplete = false;
 volatile UploadResult uploadTaskResult = UploadResult::ERROR;
 TaskHandle_t uploadTaskHandle = nullptr;
+
+// Software watchdog: upload task updates this heartbeat; main loop kills task if stale
+volatile unsigned long g_uploadHeartbeat = 0;
+const unsigned long UPLOAD_WATCHDOG_TIMEOUT_MS = 120000;  // 2 minutes
 
 struct UploadTaskParams {
     FileUploader* uploader;
@@ -218,6 +224,34 @@ void setup() {
     LOG("Waiting to access SD card...");
     while (!sdManager.takeControl()) {
         delay(1000);
+    }
+
+    // Check if a state reset was requested before last reboot (NVS flag)
+    {
+        Preferences resetPrefs;
+        resetPrefs.begin("cpap_flags", false);
+        bool resetPending = resetPrefs.getBool("reset_state", false);
+        if (resetPending) {
+            LOG("=== Completing deferred state reset (flag set before reboot) ===");
+            resetPrefs.putBool("reset_state", false);
+            resetPrefs.end();
+            
+            bool removedAny = false;
+            if (sdManager.getFS().remove("/.upload_state.v2")) {
+                LOG("Upload state snapshot deleted successfully");
+                removedAny = true;
+            }
+            if (sdManager.getFS().remove("/.upload_state.v2.log")) {
+                LOG("Upload state journal deleted successfully");
+                removedAny = true;
+            }
+            if (!removedAny) {
+                LOG_WARN("State files not found (may already be clean)");
+            }
+            LOG("State reset complete — continuing with fresh start");
+        } else {
+            resetPrefs.end();
+        }
     }
 
     // Read config file from SD card
@@ -433,6 +467,8 @@ void handleAcquiring() {
 void uploadTaskFunction(void* pvParameters) {
     UploadTaskParams* params = (UploadTaskParams*)pvParameters;
     
+    g_uploadHeartbeat = millis();
+    
     UploadResult result = params->uploader->uploadWithExclusiveAccess(
         params->sdManager, params->maxMinutes, params->filter);
     
@@ -481,6 +517,11 @@ void handleUploading() {
         uploadTaskComplete = false;
         uploadTaskRunning = true;
         
+        // Unsubscribe IDLE0 from task watchdog — upload task will monopolize Core 0
+        // during TLS handshake (5-15s of CPU-intensive crypto), starving IDLE0.
+        // Without this, IDLE0 can't feed the WDT and the system reboots.
+        esp_task_wdt_delete(xTaskGetIdleTaskHandleForCPU(0));
+        
         // Pin to Core 0 (protocol core) — keeps Core 1 free for main loop + web server
         // Stack: 16KB — TLS buffers are on heap, task only needs stack for locals
         BaseType_t rc = xTaskCreatePinnedToCore(
@@ -497,6 +538,8 @@ void handleUploading() {
             LOG_ERROR("[FSM] Failed to create upload task — falling back to blocking upload");
             uploadTaskRunning = false;
             delete params;
+            // Re-subscribe IDLE0 since task didn't start
+            esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
 #ifdef ENABLE_TEST_WEBSERVER
             uploader->setWebServer(testWebServer);
 #endif
@@ -515,6 +558,9 @@ void handleUploading() {
         // ── Task finished: read result and transition ──
         uploadTaskRunning = false;
         uploadTaskHandle = nullptr;
+        
+        // Re-subscribe IDLE0 to task watchdog now that Core 0 is free
+        esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
         
         // Restore web server handling in uploader
 #ifdef ENABLE_TEST_WEBSERVER
@@ -639,8 +685,12 @@ void loop() {
         }
     }
     
-    // Update traffic monitor (non-blocking ~100ms sample)
-    trafficMonitor.update();
+    // Update traffic monitor only in states that need activity detection
+    // LISTENING: needs idle detection to trigger uploads
+    // MONITORING: needs live data for web UI
+    if (currentState == UploadState::LISTENING || currentState == UploadState::MONITORING) {
+        trafficMonitor.update();
+    }
 
 #ifdef ENABLE_TEST_WEBSERVER
     // Update CPAP monitor
@@ -655,59 +705,61 @@ void loop() {
         testWebServer->handleClient();
     }
     
+    // ── Software watchdog for upload task ──
+    // If the upload task hasn't sent a heartbeat in UPLOAD_WATCHDOG_TIMEOUT_MS, it's hung.
+    // Force-kill it and recover — prevents indefinite hang when IDLE0 WDT is disabled.
+    if (uploadTaskRunning && g_uploadHeartbeat > 0 &&
+        (millis() - g_uploadHeartbeat > UPLOAD_WATCHDOG_TIMEOUT_MS)) {
+        LOG_ERROR("[FSM] Upload task appears hung (no heartbeat for 2 minutes) — force killing");
+        if (uploadTaskHandle) {
+            vTaskDelete(uploadTaskHandle);
+        }
+        uploadTaskRunning = false;
+        uploadTaskComplete = false;
+        uploadTaskHandle = nullptr;
+        g_uploadHeartbeat = 0;
+        
+        // Re-subscribe IDLE0 to hardware watchdog
+        esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
+        
+        // Restore web server in uploader
+#ifdef ENABLE_TEST_WEBSERVER
+        if (uploader) uploader->setWebServer(testWebServer);
+#endif
+        
+        // Transition to error recovery
+        transitionTo(UploadState::RELEASING);
+    }
+    
     // ── Web trigger handlers (operate independently of FSM) ──
     
-    // Check for state reset trigger (blocked while upload task is running)
-    if (g_resetStateFlag && !uploadTaskRunning) {
+    // Check for state reset trigger — takes effect IMMEDIATELY, even during upload.
+    // Strategy: set NVS flag → kill upload task → reboot.
+    // State files are deleted on next boot with a clean SD card mount.
+    // This avoids SD card access after killing a task mid-I/O (which can hang).
+    if (g_resetStateFlag) {
         LOG("=== State Reset Triggered via Web Interface ===");
         g_resetStateFlag = false;
         
-        if (sdManager.takeControl()) {
-            LOG("Resetting upload state...");
-
-            bool removedAnyState = false;
-            if (sdManager.getFS().remove("/.upload_state.v2")) {
-                LOG("Upload state snapshot deleted successfully");
-                removedAnyState = true;
-            }
-
-            if (sdManager.getFS().remove("/.upload_state.v2.log")) {
-                LOG("Upload state journal deleted successfully");
-                removedAnyState = true;
-            }
-
-            if (!removedAnyState) {
-                LOG_WARN("Failed to delete upload state files (may not exist)");
-            }
-            
-            if (uploader) {
-                delete uploader;
-                uploader = new FileUploader(&config, &wifiManager);
-                if (uploader->begin(sdManager.getFS())) {
-                    LOG("Uploader reinitialized with fresh state");
-                    
-                    if (testWebServer) {
-                        testWebServer->updateManagers(uploader->getStateManager(),
-                                                     uploader->getScheduleManager());
-                        uploader->setWebServer(testWebServer);
-                    }
-                } else {
-                    LOG_ERROR("Failed to reinitialize uploader");
-                }
-            }
-            
-            sdManager.releaseControl();
-            ScheduleManager* sm = uploader ? uploader->getScheduleManager() : nullptr;
-            if (sm && sm->isSmartMode()) {
-                trafficMonitor.resetIdleTracking();
-                transitionTo(UploadState::LISTENING);
-            } else {
-                transitionTo(UploadState::IDLE);
-            }
-            LOG("State reset complete");
-        } else {
-            LOG_ERROR("Cannot reset state - SD card in use");
+        // Set NVS flag so state files are deleted on next clean boot
+        Preferences resetPrefs;
+        resetPrefs.begin("cpap_flags", false);
+        resetPrefs.putBool("reset_state", true);
+        resetPrefs.end();
+        LOG("Reset flag saved to NVS");
+        
+        // Kill upload task if running (don't touch SD card after this!)
+        if (uploadTaskRunning && uploadTaskHandle) {
+            LOG_WARN("[FSM] Killing active upload task for state reset");
+            vTaskDelete(uploadTaskHandle);
+            uploadTaskRunning = false;
+            uploadTaskHandle = nullptr;
         }
+        
+        // Immediate reboot — state files deleted on next clean boot
+        LOG("Rebooting for clean state reset...");
+        delay(300);  // Brief pause for web response to send
+        esp_restart();
     }
     
     // Check for upload trigger (force immediate upload — skip inactivity check)
