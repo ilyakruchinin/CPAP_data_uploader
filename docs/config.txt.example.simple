@@ -1,0 +1,32 @@
+# CPAP Data Uploader - MINIMAL Configuration
+# This is the absolute minimum you need to get started!
+
+# ===== WiFi (Required) =====
+WIFI_SSID = YourWiFiName
+WIFI_PASSWORD = YourWiFiPassword
+
+# ===== Upload Destination (Required) =====
+# Choose ONE or BOTH: SMB (network share), CLOUD (SleepHQ), or SMB,CLOUD (both)
+
+# Option A: Network Share (SMB) only
+ENDPOINT_TYPE = SMB
+ENDPOINT = //192.168.1.100/cpap_backups
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
+
+# Option B: SleepHQ Cloud only (replace ENDPOINT_TYPE above with CLOUD, remove SMB lines):
+# ENDPOINT_TYPE = CLOUD
+# CLOUD_CLIENT_ID = your-sleephq-client-id
+# CLOUD_CLIENT_SECRET = your-sleephq-client-secret
+
+# Option C: BOTH SMB + Cloud (use SMB,CLOUD and provide all credentials):
+# ENDPOINT_TYPE = SMB,CLOUD
+# ENDPOINT = //192.168.1.100/cpap_backups
+# ENDPOINT_USER = username
+# ENDPOINT_PASSWORD = password
+# CLOUD_CLIENT_ID = your-sleephq-client-id
+# CLOUD_CLIENT_SECRET = your-sleephq-client-secret
+
+# That's it! Everything else uses smart defaults.
+# Your data will upload automatically after therapy ends (Smart Mode).
+# Web interface: http://cpap.local
