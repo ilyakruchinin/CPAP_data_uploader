@@ -126,8 +126,8 @@ cp "$RELEASE_DIR/README.md" "$TEMP_DIR/"
 cp "$RELEASE_DIR/requirements.txt" "$TEMP_DIR/"
 
 # Copy config examples
-echo "Copying config.json example variants..."
-cp docs/config.json.example* "$TEMP_DIR/"
+echo "Copying config.txt example variants..."
+cp docs/config.txt.example* "$TEMP_DIR/"
 
 # Make scripts executable
 chmod +x "$TEMP_DIR/upload.sh"
@@ -155,7 +155,7 @@ echo "  - upload-ota.bat (Windows OTA firmware upload script)"
 echo "  - upload-standard.bat (Windows standard firmware upload script)"
 echo "  - README.md (usage instructions)"
 echo "  - requirements.txt (Python dependencies)"
-echo "  - config.json.example* (configuration templates: SMB, SleepHQ, combined, and simple variants)"
+echo "  - config.txt.example* (configuration templates: SMB, SleepHQ, combined)"
 echo ""
 echo -e "${GREEN}Firmware sizes:${NC}"
 echo "  OTA merged:       $(du -h "$RELEASE_DIR/firmware-ota-${VERSION}.bin" | cut -f1) (complete, for initial flash)"

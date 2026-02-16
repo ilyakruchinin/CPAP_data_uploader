@@ -88,7 +88,7 @@ bool SMBUploader::connect() {
     
     if (smbServer.isEmpty() || smbShare.isEmpty()) {
         LOG("[SMB] ERROR: Cannot connect, endpoint not parsed correctly");
-        LOG("[SMB] Check ENDPOINT configuration in config.json");
+        LOG("[SMB] Check ENDPOINT configuration in config.txt");
         return false;
     }
     

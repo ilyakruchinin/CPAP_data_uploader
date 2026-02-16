@@ -35,7 +35,7 @@ Unsupported legacy keys:
 - `SD_RELEASE_WAIT_MS`
 - `UPLOAD_INTERVAL_MINUTES`
 
-### 1.4 Example config.json
+### 1.4 Example config.txt
 
 ```json
 {
@@ -176,7 +176,7 @@ Unsupported legacy keys:
 | **R-NF-02** | Web server must remain responsive in all states (including COOLDOWN) |
 | **R-NF-03** | PCNT sampling must not interfere with WiFi or upload operations |
 | **R-NF-04** | Memory usage: TrafficMonitor adds negligible RAM (PCNT is hardware) |
-| **R-NF-05** | Backward compatible: old config.json files work with deprecation warnings |
+| **R-NF-05** | Config file format changed to config.txt (Key-Value format, no backward compatibility) |
 | **R-NF-06** | State file remains backward-compatible, but loader must prune legacy `/DATALOG/...` checksum entries as an in-place memory migration |
 | **R-NF-07** | All build flags (ENABLE_SMB_UPLOAD, ENABLE_SLEEPHQ_UPLOAD, etc.) unchanged |
 | **R-NF-08** | OTA update functionality unchanged |
@@ -198,7 +198,7 @@ Unsupported legacy keys:
 | **T-06** | Exclusive access timer: verify X-minute limit respected, current file finishes |
 | **T-07** | Cooldown: verify Y-minute wait before re-listening |
 | **T-08** | Smart re-scan: verify new fresh files detected after COMPLETE |
-| **T-09** | Backward compat: verify old config.json loads with warnings |
+| **T-09** | Config format: verify config.txt Key-Value parsing works correctly |
 | **T-10** | Web trigger: verify forced upload bypasses inactivity check |
 | **T-11** | Cross-midnight window: verify START > END wraps correctly |
 | **T-12** | Long-running stability: verify no memory leaks or watchdog timeouts over 24h+ |

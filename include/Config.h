@@ -26,8 +26,8 @@ enum class WifiPowerSaving {
 
 class Config {
 public:
-    // JSON buffer size constant (public for testing)
-    static const size_t JSON_FILE_MAX_SIZE = 4096;
+    // Max line length for config file
+    static const size_t MAX_LINE_LENGTH = 256;
 
 private:
     String wifiSSID;
@@ -94,15 +94,16 @@ private:
     String loadCredential(const char* key, const String& defaultValue);
     bool isCensored(const String& value);
     
-    // Config file censoring method (forward declaration for JsonDocument)
-    template<typename T>
-    bool censorConfigFileWithDoc(fs::FS &sd, T& doc);
+    // Config file censoring method
     bool censorConfigFile(fs::FS &sd);
     
-    // Credential migration method (takes existing JSON doc to avoid double allocation)
-    template<typename T>
-    bool migrateToSecureStorageWithDoc(fs::FS &sd, T& doc);
+    // Credential migration method
     bool migrateToSecureStorage(fs::FS &sd);
+
+    // Parsing helpers
+    void parseLine(String& line);
+    void setConfigValue(String key, String value);
+    String trimComment(String line);
 
 public:
     Config();

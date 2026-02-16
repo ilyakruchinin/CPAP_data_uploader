@@ -11,6 +11,7 @@ Automatically upload CPAP therapy data from your SD card to network storage or t
   - **You get your last night of sleep data within a few minutes after taking your mask off**
 - Scheduled upload mode: predictable upload window with timezone support
 - **Over-The-Air (OTA) firmware updates** via web interface
+- **Local Network Discovery (mDNS)**: Access the device via `http://cpap.local` (configurable hostname)
 - Secure credential storage in ESP32 flash memory (optional)
 - Respects CPAP machine access to SD card (only "holds" the SD card for the bare minimum required time)
   - Quick file uploads with TLS connection reuse and exclusive file access (no time budget sharing with CPAP machine)
@@ -68,61 +69,62 @@ Download the latest release package from the [Releases page](../../releases).
 Follow the instructions in the release package to upload firmware to your device.
 
 ### 4. Configure
-Create a `config.json` file on your SD card with your WiFi and network share settings.
-See examples in [config.json Examples](docs/).
+Create a `config.txt` file on your SD card with your WiFi and network share settings.
+See examples in [config.txt Examples](docs/).
 
 ### 5. Done!
 Insert the SD card and power on. The device will automatically upload new CPAP data daily.
 
 ## Configuration Example
 
-Create `config.json` on your SD card:
+Create `config.txt` on your SD card:
 
 Simple:
-```json
-{
-  "WIFI_SSID": "YourNetworkName",
-  "WIFI_PASS": "YourNetworkPassword",
-  "HOSTNAME": "cpap",
+```ini
+WIFI_SSID = YourNetworkName
+WIFI_PASSWORD = YourNetworkPassword
+HOSTNAME = cpap
 
-  "ENDPOINT_TYPE": "CLOUD",
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+ENDPOINT_TYPE = CLOUD
+CLOUD_CLIENT_ID = your-sleephq-client-id
+CLOUD_CLIENT_SECRET = your-sleephq-client-secret
 
-  "GMT_OFFSET_HOURS": 0
-}
+GMT_OFFSET_HOURS = 0
 ```
 
 Advanced:
-```json
-{
-  "WIFI_SSID": "YourNetworkName",
-  "WIFI_PASS": "YourNetworkPassword",
-  "HOSTNAME": "cpap",
+```ini
+WIFI_SSID = YourNetworkName
+WIFI_PASSWORD = YourNetworkPassword
+HOSTNAME = cpap
 
-  "ENDPOINT_TYPE": "SMB,CLOUD",
-  
-  "ENDPOINT": "//192.168.1.100/cpap_backups",
-  "ENDPOINT_USER": "username",
-  "ENDPOINT_PASS": "password",
+# Use both SMB and Cloud
+ENDPOINT_TYPE = SMB,CLOUD
 
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+# SMB Settings
+ENDPOINT = //192.168.1.100/cpap_backups
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
 
-  "UPLOAD_MODE": "smart",
-  "UPLOAD_START_HOUR": 8,
-  "UPLOAD_END_HOUR": 22,
-  "INACTIVITY_SECONDS": 125,
-  "EXCLUSIVE_ACCESS_MINUTES": 5,
-  "COOLDOWN_MINUTES": 10,
+# Cloud Settings
+CLOUD_CLIENT_ID = your-sleephq-client-id
+CLOUD_CLIENT_SECRET = your-sleephq-client-secret
 
-  "_comment_timezone_1": "GMT_OFFSET_HOURS: Offset from GMT in hours. Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9",
-  "GMT_OFFSET_HOURS": 0,
+# Upload Behavior
+UPLOAD_MODE = smart
+UPLOAD_START_HOUR = 8
+UPLOAD_END_HOUR = 22
+INACTIVITY_SECONDS = 125
+EXCLUSIVE_ACCESS_MINUTES = 5
+COOLDOWN_MINUTES = 10
 
-  "CPU_SPEED_MHZ": 240,
-  "WIFI_TX_PWR": "high",
-  "WIFI_PWR_SAVING": "none"
-}
+# Timezone
+GMT_OFFSET_HOURS = 0
+
+# Power Management
+CPU_SPEED_MHZ = 240
+WIFI_TX_PWR = high
+WIFI_PWR_SAVING = none
 ```
 
 ### Power Management Settings
@@ -139,41 +141,38 @@ Some devices might not be able to provide the card with enough power. In those c
 - WiFi power save "max": ~50-80mA reduction
 
 **Recommended for low power:**
-```json
-{
-  "CPU_SPEED_MHZ": 160,
-  "WIFI_TX_PWR": "mid",
-  "WIFI_PWR_SAVING": "mid"
-}
+```ini
+CPU_SPEED_MHZ = 160
+WIFI_TX_PWR = mid
+WIFI_PWR_SAVING = mid
 ```
 
-**⚠️ Important JSON Syntax:** 
-- **No trailing commas** - Remove any comma after the last property
-- **Valid JSON only** - Use an online JSON validator if unsure
-
-Invalid JSON will cause "SSID is empty" errors even when SSID is configured correctly.
+**Syntax Notes:** 
+- Lines starting with `#` or `//` are comments.
+- Spaces around `=` are optional.
+- Keys are case-insensitive.
 
 See the [User Guide](release/README.md) for complete configuration reference.
 
 ### Credential Security
 
-By default, the system stores WiFi and endpoint passwords securely in ESP32 flash memory (NVS) and censors them in `config.json`. This protects your credentials if someone accesses your SD card or web interface.
+By default, the system stores WiFi and endpoint passwords securely in ESP32 flash memory (NVS) and censors them in `config.txt`. This protects your credentials if someone accesses your SD card or web interface.
 
 **Secure Mode (Default - Recommended):**
-- Set `"STORE_CREDENTIALS_PLAIN_TEXT": false` or omit the field
+- Set `STORE_CREDENTIALS_PLAIN_TEXT = false` or omit the line
 - Credentials automatically migrated to flash memory on first boot
-- `config.json` updated with `***STORED_IN_FLASH***` placeholders
+- `config.txt` updated with `***STORED_IN_FLASH***` placeholders
 - Web interface shows censored values
 
 **Plain Text Mode (Development/Debugging):**
-- Set `"STORE_CREDENTIALS_PLAIN_TEXT": true`
-- Credentials remain visible in `config.json`
+- Set `STORE_CREDENTIALS_PLAIN_TEXT = true`
+- Credentials remain visible in `config.txt`
 - Web interface shows actual values
 
 **Migration Process:**
-1. First boot with secure mode: System reads plain text credentials from `config.json`
+1. First boot with secure mode: System reads plain text credentials from `config.txt`
 2. Stores them securely in ESP32 flash memory (NVS)
-3. Updates `config.json` with censored placeholders
+3. Updates `config.txt` with censored placeholders
 4. Subsequent boots: Loads credentials from flash memory
 
 **Security Considerations:**
@@ -189,43 +188,39 @@ For production use, always use secure mode (default). Use plain text mode only f
 If you need to change WiFi credentials, endpoint settings, or other configuration after initial setup:
 
 **Method: Update Config File and Restart**
-1. Update `config.json` on SD card with new settings
+1. Update `config.txt` on SD card with new settings
 2. **Important**: Enter credentials in plain text (not censored)
 3. Power cycle the device (unplug and plug back in)
 4. Device will automatically:
-   - **Prioritize new credentials** from `config.json` over stored ones
+   - **Prioritize new credentials** from `config.txt` over stored ones
    - Connect to new WiFi network if credentials changed
    - Apply new endpoint settings immediately
    - Migrate new credentials to secure storage (if enabled)
-   - Update `config.json` with censored placeholders
+   - Update `config.txt` with censored placeholders
 
 **How It Works:**
 - **Individual credential priority**: Each credential (WiFi, endpoint) is handled independently
-- **Config file priority**: Plain text credentials in `config.json` always take precedence over stored ones
+- **Config file priority**: Plain text credentials in `config.txt` always take precedence over stored ones
 - **Automatic detection**: Device detects new credentials and uses them immediately
 - **Partial updates supported**: Update just WiFi password, just endpoint password, or both
 - **Secure migration**: New credentials are automatically migrated to flash memory
 
 **Example Update Process:**
-```json
-// Before: config.json has mixed state (user wants to update WiFi only)
-{
-  "WIFI_SSID": "NewNetwork",
-  "WIFI_PASS": "***STORED_IN_FLASH***",
-  "ENDPOINT": "//server/share", 
-  "ENDPOINT_PASS": "***STORED_IN_FLASH***"
-}
+```ini
+# Before: config.txt has mixed state (user wants to update WiFi only)
+WIFI_SSID = NewNetwork
+WIFI_PASSWORD = ***STORED_IN_FLASH***
+ENDPOINT = //server/share
+ENDPOINT_PASSWORD = ***STORED_IN_FLASH***
 
-// Update: Replace only WiFi password with new plain text credential
-{
-  "WIFI_SSID": "NewNetwork",
-  "WIFI_PASS": "newwifipassword123",
-  "ENDPOINT": "//server/share",
-  "ENDPOINT_PASS": "***STORED_IN_FLASH***"
-}
+# Update: Replace only WiFi password with new plain text credential
+WIFI_SSID = NewNetwork
+WIFI_PASSWORD = newwifipassword123
+ENDPOINT = //server/share
+ENDPOINT_PASSWORD = ***STORED_IN_FLASH***
 
-// After restart: Device uses new WiFi password, keeps stored endpoint password
-// WiFi password gets migrated and re-censored in config file
+# After restart: Device uses new WiFi password, keeps stored endpoint password
+# WiFi password gets migrated and re-censored in config file
 ```
 
 **Important Notes:**
@@ -301,7 +296,7 @@ For devices without OTA support or when OTA fails:
 
 ## How It Works
 
-1. **Device reads configuration** from `config.json` on SD card
+1. **Device reads configuration** from `config.txt` on SD card
 2. **Connects to WiFi** and synchronizes time with internet
 3. **Waits for upload eligibility based on mode**
    - **Smart mode:** starts shortly after therapy ends (activity detection)

@@ -1,0 +1,32 @@
+# CPAP Data Uploader Configuration
+
+# WiFi Settings
+WIFI_SSID = YourNetworkName
+WIFI_PASSWORD = YourNetworkPassword
+HOSTNAME = cpap
+
+# SMB Upload Settings
+ENDPOINT_TYPE = SMB
+ENDPOINT = //192.168.1.100/cpap_backups
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
+
+# Upload Behavior
+# UPLOAD_MODE: "smart" (uploads when CPAP is idle) or "scheduled" (uploads only during window)
+UPLOAD_MODE = smart
+UPLOAD_START_HOUR = 8
+UPLOAD_END_HOUR = 22
+
+# Smart Mode Tuning
+INACTIVITY_SECONDS = 125      # Wait for this much silence before uploading
+EXCLUSIVE_ACCESS_MINUTES = 5  # Max time to hold SD card per session
+COOLDOWN_MINUTES = 10         # Wait this long between sessions
+
+# Timezone (Offset from GMT in hours)
+# Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9
+GMT_OFFSET_HOURS = 0
+
+# Advanced Power Settings
+CPU_SPEED_MHZ = 240
+WIFI_TX_PWR = high
+WIFI_PWR_SAVING = none

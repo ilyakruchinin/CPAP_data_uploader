@@ -1,0 +1,36 @@
+# CPAP Data Uploader Configuration
+
+# WiFi Settings
+WIFI_SSID = YourNetworkName
+WIFI_PASSWORD = YourNetworkPassword
+HOSTNAME = cpap
+
+# Dual Upload Settings (SMB + SleepHQ)
+ENDPOINT_TYPE = SMB,CLOUD
+
+# SMB Settings
+ENDPOINT = //192.168.1.100/cpap_backups
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
+
+# SleepHQ Settings
+CLOUD_CLIENT_ID = your-sleephq-client-id
+CLOUD_CLIENT_SECRET = your-sleephq-client-secret
+
+# Upload Behavior
+UPLOAD_MODE = smart
+UPLOAD_START_HOUR = 8
+UPLOAD_END_HOUR = 22
+
+# Smart Mode Tuning
+INACTIVITY_SECONDS = 125
+EXCLUSIVE_ACCESS_MINUTES = 5
+COOLDOWN_MINUTES = 10
+
+# Timezone
+GMT_OFFSET_HOURS = 0
+
+# Advanced Power Settings
+CPU_SPEED_MHZ = 240
+WIFI_TX_PWR = high
+WIFI_PWR_SAVING = none

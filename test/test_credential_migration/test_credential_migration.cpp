@@ -1,7 +1,6 @@
 #include <unity.h>
 #include "Arduino.h"
 #include "FS.h"
-#include "ArduinoJson.h"
 
 // Include mock implementations
 #include "../mocks/Arduino.cpp"
@@ -31,14 +30,13 @@ void tearDown(void) {
 
 // Test: Plain text credentials trigger migration to secure storage
 void test_migration_plain_to_secure() {
-    std::string configContent = R"({
-        "WIFI_SSID": "TestNetwork",
-        "WIFI_PASS": "MyWifiPass123",
-        "ENDPOINT": "//server/share",
-        "ENDPOINT_PASS": "MyEndpointPass456"
-    })";
+    std::string configContent = 
+        "WIFI_SSID = TestNetwork\n"
+        "WIFI_PASSWORD = MyWifiPass123\n"
+        "ENDPOINT = //server/share\n"
+        "ENDPOINT_PASSWORD = MyEndpointPass456\n";
     
-    mockSD.addFile("/config.json", configContent);
+    mockSD.addFile("/config.txt", configContent);
     
     Config config;
     bool loaded = config.loadFromSD(mockSD);
@@ -48,8 +46,8 @@ void test_migration_plain_to_secure() {
     TEST_ASSERT_EQUAL_STRING("MyWifiPass123", config.getWifiPassword().c_str());
     TEST_ASSERT_EQUAL_STRING("MyEndpointPass456", config.getEndpointPassword().c_str());
     
-    // Verify config.json was censored
-    std::vector<uint8_t> updatedBytes = mockSD.getFileContent("/config.json");
+    // Verify config.txt was censored
+    std::vector<uint8_t> updatedBytes = mockSD.getFileContent("/config.txt");
     std::string updatedConfig(updatedBytes.begin(), updatedBytes.end());
     TEST_ASSERT_TRUE(updatedConfig.find("***STORED_IN_FLASH***") != std::string::npos);
     TEST_ASSERT_TRUE(updatedConfig.find("MyWifiPass123") == std::string::npos);
@@ -65,14 +63,13 @@ void test_migration_already_migrated() {
     prefs.putString("endpoint_pass", "StoredEndpointPass");
     prefs.end();
     
-    std::string configContent = R"({
-        "WIFI_SSID": "TestNetwork",
-        "WIFI_PASS": "***STORED_IN_FLASH***",
-        "ENDPOINT": "//server/share",
-        "ENDPOINT_PASS": "***STORED_IN_FLASH***"
-    })";
+    std::string configContent = 
+        "WIFI_SSID = TestNetwork\n"
+        "WIFI_PASSWORD = ***STORED_IN_FLASH***\n"
+        "ENDPOINT = //server/share\n"
+        "ENDPOINT_PASSWORD = ***STORED_IN_FLASH***\n";
     
-    mockSD.addFile("/config.json", configContent);
+    mockSD.addFile("/config.txt", configContent);
     
     Config config;
     bool loaded = config.loadFromSD(mockSD);
@@ -85,15 +82,14 @@ void test_migration_already_migrated() {
 
 // Test: Plain text mode bypasses migration
 void test_migration_plain_text_mode() {
-    std::string configContent = R"({
-        "WIFI_SSID": "TestNetwork",
-        "WIFI_PASS": "PlainWifiPass",
-        "ENDPOINT": "//server/share",
-        "ENDPOINT_PASS": "PlainEndpointPass",
-        "STORE_CREDENTIALS_PLAIN_TEXT": true
-    })";
+    std::string configContent = 
+        "WIFI_SSID = TestNetwork\n"
+        "WIFI_PASSWORD = PlainWifiPass\n"
+        "ENDPOINT = //server/share\n"
+        "ENDPOINT_PASSWORD = PlainEndpointPass\n"
+        "STORE_CREDENTIALS_PLAIN_TEXT = true\n";
     
-    mockSD.addFile("/config.json", configContent);
+    mockSD.addFile("/config.txt", configContent);
     
     Config config;
     bool loaded = config.loadFromSD(mockSD);
@@ -104,8 +100,8 @@ void test_migration_plain_text_mode() {
     TEST_ASSERT_EQUAL_STRING("PlainWifiPass", config.getWifiPassword().c_str());
     TEST_ASSERT_EQUAL_STRING("PlainEndpointPass", config.getEndpointPassword().c_str());
     
-    // Verify config.json was NOT censored
-    std::vector<uint8_t> updatedBytes = mockSD.getFileContent("/config.json");
+    // Verify config.txt was NOT censored
+    std::vector<uint8_t> updatedBytes = mockSD.getFileContent("/config.txt");
     std::string updatedConfig(updatedBytes.begin(), updatedBytes.end());
     TEST_ASSERT_TRUE(updatedConfig.find("PlainWifiPass") != std::string::npos);
     TEST_ASSERT_TRUE(updatedConfig.find("PlainEndpointPass") != std::string::npos);
@@ -113,14 +109,13 @@ void test_migration_plain_text_mode() {
 
 // Test: Empty credentials skip migration
 void test_migration_empty_credentials() {
-    std::string configContent = R"({
-        "WIFI_SSID": "TestNetwork",
-        "WIFI_PASS": "",
-        "ENDPOINT": "//server/share",
-        "ENDPOINT_PASS": ""
-    })";
+    std::string configContent = 
+        "WIFI_SSID = TestNetwork\n"
+        "WIFI_PASSWORD = \n"
+        "ENDPOINT = //server/share\n"
+        "ENDPOINT_PASSWORD = \n";
     
-    mockSD.addFile("/config.json", configContent);
+    mockSD.addFile("/config.txt", configContent);
     
     Config config;
     bool loaded = config.loadFromSD(mockSD);
@@ -133,14 +128,13 @@ void test_migration_empty_credentials() {
 
 // Test: Credential persistence across Config instances
 void test_migration_persistence() {
-    std::string configContent = R"({
-        "WIFI_SSID": "TestNetwork",
-        "WIFI_PASS": "PersistentPass123",
-        "ENDPOINT": "//server/share",
-        "ENDPOINT_PASS": "PersistentEndpoint456"
-    })";
+    std::string configContent = 
+        "WIFI_SSID = TestNetwork\n"
+        "WIFI_PASSWORD = PersistentPass123\n"
+        "ENDPOINT = //server/share\n"
+        "ENDPOINT_PASSWORD = PersistentEndpoint456\n";
     
-    mockSD.addFile("/config.json", configContent);
+    mockSD.addFile("/config.txt", configContent);
     
     // First instance triggers migration
     {
@@ -169,14 +163,13 @@ void test_migration_mixed_state() {
     prefs.putString("wifi_pass", "StoredWifiPass");
     prefs.end();
     
-    std::string configContent = R"({
-        "WIFI_SSID": "TestNetwork",
-        "WIFI_PASS": "***STORED_IN_FLASH***",
-        "ENDPOINT": "//server/share",
-        "ENDPOINT_PASS": "PlainEndpointPass"
-    })";
+    std::string configContent = 
+        "WIFI_SSID = TestNetwork\n"
+        "WIFI_PASSWORD = ***STORED_IN_FLASH***\n"
+        "ENDPOINT = //server/share\n"
+        "ENDPOINT_PASSWORD = PlainEndpointPass\n";
     
-    mockSD.addFile("/config.json", configContent);
+    mockSD.addFile("/config.txt", configContent);
     
     Config config;
     bool loaded = config.loadFromSD(mockSD);

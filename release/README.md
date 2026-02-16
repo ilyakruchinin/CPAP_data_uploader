@@ -7,6 +7,7 @@ This package contains precompiled firmware for automatically uploading CPAP data
 - Automatically uploads CPAP data files from SD card to your network storage or the Cloud (SleepHQ)
 - Uploads automatically when therapy ends (Smart Mode) or at a scheduled time
 - Respects CPAP machine access to the SD card (short upload sessions)
+- **Local Network Discovery (mDNS):** Access the device via `http://cpap.local` instead of IP address
 - Tracks which files have been uploaded (no duplicates)
 - Automatically creates directories on remote shares as needed
 - **Supported CPAP Machines:** ResMed Series 9, 10, and 11 (other brands not supported)
@@ -90,54 +91,42 @@ Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
 
 ### 2. Create Configuration File
 
-Create a file named `config.json` in the root of your SD card.
+Create a file named `config.txt` in the root of your SD card.
 
 **Option A: Cloud Upload (SleepHQ)**
-```json
-{
-  "WIFI_SSID": "YourNetworkName",
-  "WIFI_PASS": "YourNetworkPassword",
-  "HOSTNAME": "cpap",
+```ini
+WIFI_SSID = YourNetworkName
+WIFI_PASSWORD = YourNetworkPassword
+HOSTNAME = cpap
 
-  "ENDPOINT_TYPE": "CLOUD",
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+ENDPOINT_TYPE = CLOUD
+CLOUD_CLIENT_ID = your-sleephq-client-id
+CLOUD_CLIENT_SECRET = your-sleephq-client-secret
 
-  "GMT_OFFSET_HOURS": 0
-}
+GMT_OFFSET_HOURS = 0
 ```
 
 **Option B: Network Share (SMB)**
-```json
-{
-  "WIFI_SSID": "YourNetworkName",
-  "WIFI_PASS": "YourNetworkPassword",
-  "HOSTNAME": "cpap",
-  
-  "ENDPOINT_TYPE": "SMB",
-  "ENDPOINT": "//192.168.1.100/cpap_backups",
-  "ENDPOINT_USER": "username",
-  "ENDPOINT_PASS": "password",
-  
-  "GMT_OFFSET_HOURS": 0
-}
+```ini
+WIFI_SSID = YourNetworkName
+WIFI_PASSWORD = YourNetworkPassword
+HOSTNAME = cpap
+
+ENDPOINT_TYPE = SMB
+ENDPOINT = //192.168.1.100/cpap_backups
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
+
+GMT_OFFSET_HOURS = 0
 ```
 
-**⚠️ Critical JSON Syntax Rules:**
-- **No trailing commas** - Do not add a comma after the last property
-- **Proper quotes** - Use double quotes `"` around all strings
-- **Valid JSON format** - Test with an online JSON validator if unsure
+**Syntax Notes:** 
+- Lines starting with `#` or `//` are comments.
+- Spaces around `=` are optional.
+- Keys are case-insensitive.
 
 **Common mistake that causes "SSID is empty" errors:**
-```json
-{
-  "WIFI_SSID": "MyNetwork",
-  "WIFI_PASS": "password",
-  "COOLDOWN_MINUTES": 10,  ← Remove this comma if it's the last line
-}
-```
-
-Invalid JSON syntax will prevent configuration loading, causing WiFi connection failures even when credentials are correct.
+Missing `config.txt` file, or using invalid Key-Value syntax.
 
 ### 3. Insert SD Card and Power On
 
@@ -155,16 +144,17 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 
 **WIFI_SSID** (required)
 - Your WiFi network name
-- Example: `"HomeNetwork"`
+- Example: `WIFI_SSID = HomeNetwork`
 - Note: ESP32 only supports 2.4GHz WiFi (not 5GHz)
 
-**WIFI_PASS** (required)
+**WIFI_PASSWORD** (required)
 - Your WiFi password
-- Example: `"MySecurePassword123"`
-**HOSTNAME** (optional, default: `"cpap"`)
+- Example: `WIFI_PASSWORD = MySecurePassword123`
+
+**HOSTNAME** (optional, default: "cpap")
 - Device hostname for local network discovery
 - Access via: `http://hostname.local` (e.g., `http://cpap.local`)
-- Example: `"airsense11"`
+- Example: `HOSTNAME = airsense11`
 
 
 ### Upload Destination
@@ -173,40 +163,40 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - Network location where files will be uploaded
 - Format: `//server/share` or `//server/share/folder`
 - Examples:
-  - Windows PC: `"//192.168.1.100/cpap_backups"`
-  - NAS device: `"//nas.local/backups"`
-  - With subfolder: `"//192.168.1.5/backups/cpap_data"`
+  - Windows PC: `ENDPOINT = //192.168.1.100/cpap_backups`
+  - NAS device: `ENDPOINT = //nas.local/backups`
+  - With subfolder: `ENDPOINT = //192.168.1.5/backups/cpap_data`
 
 **ENDPOINT_TYPE** (required)
 - Type of upload destination
 - Values: 
-  - `"SMB"` - Upload to network share
-  - `"CLOUD"` - Upload to SleepHQ
-  - `"SMB,CLOUD"` - Upload to both (simultaneously)
+  - `SMB` - Upload to network share
+  - `CLOUD` - Upload to SleepHQ
+  - `SMB,CLOUD` - Upload to both (simultaneously)
 
 **CLOUD_CLIENT_ID** (required for CLOUD)
 - Your SleepHQ Client ID
-- Example: `"your-client-id"`
+- Example: `CLOUD_CLIENT_ID = your-client-id`
 
 **CLOUD_CLIENT_SECRET** (required for CLOUD)
 - Your SleepHQ Client Secret
-- Example: `"your-client-secret"`
+- Example: `CLOUD_CLIENT_SECRET = your-client-secret`
 
 **ENDPOINT_USER** (required for SMB)
 - Username for the network share
-- Example: `"john"` or `"DOMAIN\\john"`
-- Use empty string `""` for guest access (if share allows)
+- Example: `ENDPOINT_USER = john` or `ENDPOINT_USER = DOMAIN\john`
+- Leave empty/omit for guest access (if share allows)
 
-**ENDPOINT_PASS** (required for SMB)
+**ENDPOINT_PASSWORD** (required for SMB)
 - Password for the network share
-- Example: `"password123"`
-- Use empty string `""` for guest access
+- Example: `ENDPOINT_PASSWORD = password123`
+- Leave empty/omit for guest access
 
 ### Schedule Settings
 
-**UPLOAD_MODE** (optional, default: `"smart"`)
-- `"scheduled"`: uploads in the configured time window
-- `"smart"` (recommended): starts shortly after therapy ends (activity + inactivity detection)
+**UPLOAD_MODE** (optional, default: "smart")
+- `scheduled`: uploads in the configured time window
+- `smart` (recommended): starts shortly after therapy ends (activity + inactivity detection)
 
 **UPLOAD_START_HOUR** (optional, default: 9)
 - Start of upload window (0-23, local time)
@@ -273,17 +263,17 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 The system automatically secures your WiFi and endpoint passwords by moving them to the ESP32's internal flash memory.
 
 **How it works:**
-1. You put plain text passwords in `config.json`
+1. You put plain text passwords in `config.txt`
 2. On first boot, the device reads them and saves them to secure storage
-3. The device updates `config.json` replacing passwords with `***STORED_IN_FLASH***`
+3. The device updates `config.txt` replacing passwords with `***STORED_IN_FLASH***`
 4. On subsequent boots, it uses the secure values
 
 **To update a password:**
-- Just replace `***STORED_IN_FLASH***` with your new plain text password in `config.json`
+- Just replace `***STORED_IN_FLASH***` with your new plain text password in `config.txt`
 - The device will detect the change, update the secure storage, and re-censor the file
 
 **To disable security (for debugging):**
-- Add `"STORE_CREDENTIALS_PLAIN_TEXT": true` to your `config.json`
+- Add `STORE_CREDENTIALS_PLAIN_TEXT = true` to your `config.txt`
 - Passwords will remain visible in the file
 
 ---
@@ -291,92 +281,82 @@ The system automatically secures your WiFi and endpoint passwords by moving them
 ## Common Configuration Examples
 
 ### SleepHQ (Cloud Only)
-```json
-{
-  "WIFI_SSID": "HomeNetwork",
-  "WIFI_PASS": "password",
-  "ENDPOINT_TYPE": "CLOUD",
-  "CLOUD_CLIENT_ID": "your-client-id",
-  "CLOUD_CLIENT_SECRET": "your-client-secret",
-  "UPLOAD_MODE": "smart",
-  "GMT_OFFSET_HOURS": 0
-}
+```ini
+WIFI_SSID = HomeNetwork
+WIFI_PASSWORD = password
+ENDPOINT_TYPE = CLOUD
+CLOUD_CLIENT_ID = your-client-id
+CLOUD_CLIENT_SECRET = your-client-secret
+UPLOAD_MODE = smart
+GMT_OFFSET_HOURS = 0
 ```
 
 ### Dual Upload (SMB + SleepHQ)
-```json
-{
-  "WIFI_SSID": "HomeNetwork",
-  "WIFI_PASS": "password",
-  
-  "ENDPOINT_TYPE": "SMB,CLOUD",
-  "ENDPOINT": "//nas.local/backups",
-  "ENDPOINT_USER": "user",
-  "ENDPOINT_PASS": "pass",
-  
-  "CLOUD_CLIENT_ID": "your-client-id",
-  "CLOUD_CLIENT_SECRET": "your-client-secret",
-  
-  "UPLOAD_MODE": "smart",
-  "GMT_OFFSET_HOURS": 0
-}
+```ini
+WIFI_SSID = HomeNetwork
+WIFI_PASSWORD = password
+
+ENDPOINT_TYPE = SMB,CLOUD
+ENDPOINT = //nas.local/backups
+ENDPOINT_USER = user
+ENDPOINT_PASSWORD = pass
+
+CLOUD_CLIENT_ID = your-client-id
+CLOUD_CLIENT_SECRET = your-client-secret
+
+UPLOAD_MODE = smart
+GMT_OFFSET_HOURS = 0
 ```
 
 ### US Pacific Time (PST/PDT)
-```json
-{
-  "WIFI_SSID": "HomeNetwork",
-  "WIFI_PASS": "password",
-  "ENDPOINT": "//192.168.1.100/cpap",
-  "ENDPOINT_TYPE": "SMB",
-  "ENDPOINT_USER": "john",
-  "ENDPOINT_PASS": "password",
-  "UPLOAD_MODE": "scheduled",
-  "UPLOAD_START_HOUR": 8,
-  "UPLOAD_END_HOUR": 22,
-  "INACTIVITY_SECONDS": 125,
-  "EXCLUSIVE_ACCESS_MINUTES": 5,
-  "COOLDOWN_MINUTES": 10,
-  "GMT_OFFSET_HOURS": -8
-}
+```ini
+WIFI_SSID = HomeNetwork
+WIFI_PASSWORD = password
+ENDPOINT = //192.168.1.100/cpap
+ENDPOINT_TYPE = SMB
+ENDPOINT_USER = john
+ENDPOINT_PASSWORD = password
+UPLOAD_MODE = scheduled
+UPLOAD_START_HOUR = 8
+UPLOAD_END_HOUR = 22
+INACTIVITY_SECONDS = 125
+EXCLUSIVE_ACCESS_MINUTES = 5
+COOLDOWN_MINUTES = 10
+GMT_OFFSET_HOURS = -8
 ```
 
 ### Europe (CET)
-```json
-{
-  "WIFI_SSID": "HomeNetwork",
-  "WIFI_PASS": "password",
-  "ENDPOINT": "//nas.local/backups",
-  "ENDPOINT_TYPE": "SMB",
-  "ENDPOINT_USER": "user",
-  "ENDPOINT_PASS": "password",
-  "UPLOAD_MODE": "scheduled",
-  "UPLOAD_START_HOUR": 7,
-  "UPLOAD_END_HOUR": 21,
-  "INACTIVITY_SECONDS": 125,
-  "EXCLUSIVE_ACCESS_MINUTES": 5,
-  "COOLDOWN_MINUTES": 10,
-  "GMT_OFFSET_HOURS": 1
-}
+```ini
+WIFI_SSID = HomeNetwork
+WIFI_PASSWORD = password
+ENDPOINT = //nas.local/backups
+ENDPOINT_TYPE = SMB
+ENDPOINT_USER = user
+ENDPOINT_PASSWORD = password
+UPLOAD_MODE = scheduled
+UPLOAD_START_HOUR = 7
+UPLOAD_END_HOUR = 21
+INACTIVITY_SECONDS = 125
+EXCLUSIVE_ACCESS_MINUTES = 5
+COOLDOWN_MINUTES = 10
+GMT_OFFSET_HOURS = 1
 ```
 
 ### NAS with Guest Access
-```json
-{
-  "WIFI_SSID": "HomeNetwork",
-  "WIFI_PASS": "password",
-  "ENDPOINT": "//192.168.1.50/public",
-  "ENDPOINT_TYPE": "SMB",
-  "ENDPOINT_USER": "",
-  "ENDPOINT_PASS": "",
-  "UPLOAD_MODE": "smart",
-  "UPLOAD_START_HOUR": 8,
-  "UPLOAD_END_HOUR": 22,
-  "INACTIVITY_SECONDS": 125,
-  "EXCLUSIVE_ACCESS_MINUTES": 5,
-  "COOLDOWN_MINUTES": 10,
-  "GMT_OFFSET_HOURS": 0
-}
+```ini
+WIFI_SSID = HomeNetwork
+WIFI_PASSWORD = password
+ENDPOINT = //192.168.1.50/public
+ENDPOINT_TYPE = SMB
+ENDPOINT_USER = 
+ENDPOINT_PASSWORD = 
+UPLOAD_MODE = smart
+UPLOAD_START_HOUR = 8
+UPLOAD_END_HOUR = 22
+INACTIVITY_SECONDS = 125
+EXCLUSIVE_ACCESS_MINUTES = 5
+COOLDOWN_MINUTES = 10
+GMT_OFFSET_HOURS = 0
 ```
 
 ---
@@ -384,7 +364,7 @@ The system automatically secures your WiFi and endpoint passwords by moving them
 ## How It Works
 
 ### First Boot
-1. Device reads `config.json` from SD card
+1. Device reads `config.txt` from SD card
 2. Connects to WiFi network
 3. Synchronizes time with internet (NTP)
 4. Loads upload history from `.upload_state.v2` + `.upload_state.v2.log` (if present)
@@ -482,7 +462,7 @@ The firmware includes an optional test web server for development and troublesho
 - Useful for testing from clean state
 
 **View Configuration** (`http://<device-ip>/config`)
-- Shows current config.json values
+- Shows current config.txt values
 - Useful for verifying configuration
 
 **View Logs** (`http://<device-ip>/logs`)
@@ -547,15 +527,15 @@ The firmware includes an optional test web server for development and troublesho
 - Verify the device is properly inserted into the CPAP machine
 - Check that the device is receiving power
 
-**config.json not found**
-- Ensure file is named exactly `config.json` (lowercase)
+**config.txt not found**
+- Ensure file is named exactly `config.txt` (lowercase)
 - Place file in root of SD card (not in a folder)
-- Verify file is valid JSON (use online JSON validator)
+- Verify file uses correct Key-Value format (see examples)
 
 ### Cloud / SleepHQ Issues
 
 **Authentication Failed**
-- Verify `CLOUD_CLIENT_ID` and `CLOUD_CLIENT_SECRET` in `config.json`
+- Verify `CLOUD_CLIENT_ID` and `CLOUD_CLIENT_SECRET` in `config.txt`
 - Ensure no extra spaces or hidden characters in the credentials
 - Check logs for "401 Unauthorized" or "403 Forbidden" errors
 
@@ -639,7 +619,7 @@ http://<device-ip>/logs
 ### On SD Card
 ```
 /
-├── config.json              # Your configuration (you create this)
+├── config.txt               # Your configuration (you create this)
 ├── .upload_state.v2         # Upload tracking snapshot (auto-created)
 ├── .upload_state.v2.log     # Upload tracking journal (auto-created)
 ├── Identification.json      # ResMed 11 identification (if present)
@@ -717,13 +697,9 @@ python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0
 - `upload-standard.bat` - Windows standard firmware upload script
 - `upload.sh` - macOS/Linux upload script (supports both firmware types)
 - `requirements.txt` - Python dependencies (esptool)
-- `config.json.example` - Generic configuration template
-- `config.json.example.smb` - SMB-focused template
-- `config.json.example.smb-simple` - SMB minimal template (mandatory fields only)
-- `config.json.example.sleephq` - SleepHQ-focused template
-- `config.json.example.sleephq-simple` - SleepHQ minimal template (mandatory fields only)
-- `config.json.example.both` - SMB + SleepHQ template
-- `config.json.example.both-simple` - SMB + SleepHQ minimal template (mandatory fields only)
+- `config.txt.example` - Generic configuration template
+- `config.txt.example.sleephq` - SleepHQ-focused template
+- `config.txt.example.both` - SMB + SleepHQ template
 - `README.md` - This file
 
 ---
