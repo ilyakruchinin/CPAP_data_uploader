@@ -2,9 +2,115 @@
 
 Automatically upload CPAP therapy data from your SD card to network storage or the Cloud (SleepHQ).
 
-**Machine support is currently limited to ResMed SD card formats only** (Series 9, Series 10, Series 11).
+**Supports:** ResMed Series 9, 10, and 11 CPAP machines
+
+## Table of Contents
+- [⚠️ Breaking Change in v0.8.0](#️-breaking-change-in-v080)
+- [🚀 Quick Start](#-quick-start)
+- [Features](#features)
+- [Hardware Requirements](#hardware-requirements)
+- [Getting Started (End Users)](#getting-started-end-users)
+- [For Developers](#for-developers)
+- [How It Works](#how-it-works)
+- [Project Status](#project-status)
+- [License](#license)
+
+## ⚠️ Breaking Change in v0.8.0
+
+**Configuration format has changed from JSON to Key-Value format.**
+
+- Old: `config.json` (JSON format)
+- New: `config.txt` (simple Key-Value format, one setting per line)
+
+**If upgrading from v0.7.x or earlier:**
+1. Your existing `config.json` will **NOT** work with v0.8.0
+2. Create a new `config.txt` file using the Key-Value format (see examples in `docs/config.txt.example*`)
+3. Read the [Configuration Guide](release/README.md#2-create-configtxt) for syntax and examples
+4. **No backward compatibility** - you must convert your configuration manually
+
+**Why this change?** The new format is more user-friendly, removes the ArduinoJson dependency, and reduces memory usage.
+
+---
+
+## 🚀 Quick Start
+
+**Want to use this?** Get started in 3 simple steps:
+
+### 1. Get the Hardware
+You need: [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) adapter
+- ESP32-PICO-D4 microcontroller, 4MB Flash, WiFi 2.4GHz
+
+### 2. Download & Flash Firmware
+👉 **[Download Latest Release](../../releases)** (includes firmware + upload tools for Windows/Mac/Linux)
+
+Follow the included instructions to flash firmware to your SD WIFI PRO.
+
+### 3. Create Simple Config
+Create `config.txt` on your SD card with just **6-10 lines**:
+
+<details open>
+<summary><b>📤 Network Share (SMB)</b></summary>
+
+```ini
+WIFI_SSID = YourWiFiName
+WIFI_PASSWORD = YourWiFiPassword
+ENDPOINT_TYPE = SMB
+ENDPOINT = //192.168.1.100/cpap_backups
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
+```
+</details>
+
+<details>
+<summary><b>☁️ SleepHQ Cloud</b></summary>
+
+```ini
+WIFI_SSID = YourWiFiName
+WIFI_PASSWORD = YourWiFiPassword
+ENDPOINT_TYPE = CLOUD
+CLOUD_CLIENT_ID = your-client-id
+CLOUD_CLIENT_SECRET = your-client-secret
+```
+</details>
+
+<details>
+<summary><b>🔄 Both SMB + SleepHQ (Dual Upload)</b></summary>
+
+```ini
+WIFI_SSID = YourWiFiName
+WIFI_PASSWORD = YourWiFiPassword
+ENDPOINT_TYPE = SMB,CLOUD
+ENDPOINT = //192.168.1.100/cpap_backups
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
+CLOUD_CLIENT_ID = your-client-id
+CLOUD_CLIENT_SECRET = your-client-secret
+```
+</details>
+
+**That's it!** Insert the SD card in your CPAP machine and you're done. Everything else has smart defaults.
+
+**💻 Web Interface:** Once running, access the dashboard at **`http://cpap.local`** to monitor uploads, view logs, and manage settings.
+
+📖 **Need more details?** See the comprehensive [User Guide](release/README.md)
+
+### Web Interface
+
+Access the dashboard at `http://cpap.local` to monitor your upload progress:
+
+![CPAP Data Uploader Web Interface](docs/screenshots/web-interface.png)
 
 **Features:**
+- Real-time upload status and progress
+- System information (WiFi, time sync, memory)
+- Manual upload trigger
+- SD Activity Monitor
+- View logs and configuration
+- OTA firmware updates
+
+---
+
+## Features
 - Automatic uploads to Windows shares, NAS, Samba servers or the Cloud (**SleepHQ**)
 - **"Smart" upload mode** (uploads for recent data start automatically within minutes of therapy end)
   - <u>Automatic detection of CPAP therapy session ending</u> (based on SD card activity)
@@ -21,278 +127,63 @@ Automatically upload CPAP therapy data from your SD card to network storage or t
 - Automatic retry mechanism with progress tracking
 - Automatic directory creation on remote shares for SMB protocol
 
-## For End Users
+---
 
-**Want to use this?** Download the latest release package with precompiled firmware and easy upload tools.
+## Hardware Requirements
 
-### Known issues
-~~- Sometimes the CPAP machine will complain about SD card not working. This is likely caused by CPAP machine attempting to access the SD card at the same time as our firmware. When this happens just reinsert the SD card.~~ (should be fixed now)
+**Required Hardware:**
+- [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) adapter (ESP32-PICO-D4, 4MB Flash, WiFi 2.4GHz)
+- SD WIFI PRO development board (for initial firmware flashing via USB)
 
-👉 [Download Latest Release](../../releases) (includes upload tools for Windows, Mac, and Linux)
+**Supported CPAP Machines:**
+- ✅ ResMed **Series 9** (S9 AutoSet, Lumis)
+- ✅ ResMed **Series 10** (AirSense, AirCurve)  
+- ✅ ResMed **Series 11** (Elite, AutoSet)
+- ❌ Other brands/models not currently supported
 
-See the [User Guide](release/README.md) for complete setup and usage instructions.
+**Network Requirements:**
+- 2.4GHz WiFi network (ESP32 doesn't support 5GHz)
+- SMB/CIFS share OR SleepHQ account
 
+---
 
-## Hardware
+## Getting Started (End Users)
 
-**Required:** [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) adapter
-- ESP32-PICO-D4 microcontroller
-- 4MB Flash memory
-- SD card interface (compatible with CPAP SD cards)
-- WiFi 2.4GHz
+**👉 [Download Latest Release](../../releases)** - Includes precompiled firmware and upload tools
 
-## Supported CPAP Machines (ResMed only)
+**📖 [Complete User Guide](release/README.md)** - Detailed setup, configuration, and troubleshooting
 
-- **Series 9** (e.g. S9 AutoSet, Lumis)
-- **Series 10** (e.g. AirSense, AirCurve)
-- **Series 11** (e.g. Elite, AutoSet)
-
-Other brands/models are not currently supported.
+**📁 [Config Examples](docs/)** - See `config.txt.example*` files for different setups
 
 ## For Developers
 
-**Want to build or contribute?** See the [Development Guide](docs/DEVELOPMENT.md) for:
-- Architecture overview
-- Build instructions (libsmb2 automatically set up)
-- Testing procedures
+**Want to build, modify, or contribute?**
+
+📘 **[Development Guide](docs/DEVELOPMENT.md)** - Complete developer documentation:
+- Architecture & design decisions
+- Build instructions (PlatformIO)
+- libsmb2 integration
+- Testing procedures  
 - Contributing guidelines
 
-## Quick Start
-
-### 1. Get the Hardware
-Purchase the [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts).
-
-### 2. Download Firmware
-Download the latest release package from the [Releases page](../../releases).
-
-### 3. Upload Firmware
-Follow the instructions in the release package to upload firmware to your device.
-
-### 4. Configure
-Create a `config.txt` file on your SD card with your WiFi and network share settings.
-See examples in [config.txt Examples](docs/).
-
-### 5. Done!
-Insert the SD card and power on. The device will automatically upload new CPAP data daily.
-
-## Configuration Example
-
-Create `config.txt` on your SD card:
-
-Simple:
-```ini
-WIFI_SSID = YourNetworkName
-WIFI_PASSWORD = YourNetworkPassword
-HOSTNAME = cpap
-
-ENDPOINT_TYPE = CLOUD
-CLOUD_CLIENT_ID = your-sleephq-client-id
-CLOUD_CLIENT_SECRET = your-sleephq-client-secret
-
-GMT_OFFSET_HOURS = 0
-```
-
-Advanced:
-```ini
-WIFI_SSID = YourNetworkName
-WIFI_PASSWORD = YourNetworkPassword
-HOSTNAME = cpap
-
-# Use both SMB and Cloud
-ENDPOINT_TYPE = SMB,CLOUD
-
-# SMB Settings
-ENDPOINT = //192.168.1.100/cpap_backups
-ENDPOINT_USER = username
-ENDPOINT_PASSWORD = password
-
-# Cloud Settings
-CLOUD_CLIENT_ID = your-sleephq-client-id
-CLOUD_CLIENT_SECRET = your-sleephq-client-secret
-
-# Upload Behavior
-UPLOAD_MODE = smart
-UPLOAD_START_HOUR = 8
-UPLOAD_END_HOUR = 22
-INACTIVITY_SECONDS = 125
-EXCLUSIVE_ACCESS_MINUTES = 5
-COOLDOWN_MINUTES = 10
-
-# Timezone
-GMT_OFFSET_HOURS = 0
-
-# Power Management
-CPU_SPEED_MHZ = 240
-WIFI_TX_PWR = high
-WIFI_PWR_SAVING = none
-```
-
-### Power Management Settings
-Some devices might not be able to provide the card with enough power. In those cases it is useful to reduce the power consumption which comes at the cost of performance.
-
-- **CPU_SPEED_MHZ** (80-240, default: 240): CPU frequency in MHz. Lower values reduce power consumption but will slow performance.
-- **WIFI_TX_PWR** ("high"/"mid"/"low", default: "high"): WiFi transmission power. Lower power reduces range but saves current.
-- **WIFI_PWR_SAVING** ("none"/"mid"/"max", default: "none"): WiFi power saving mode. Higher levels save more power but may increase response latency.
-
-**Power Savings Examples:**
-- CPU 240→160MHz: ~20-30mA reduction
-- WiFi TX high→mid: ~10-15mA reduction  
-- WiFi power save "mid": ~30-50mA reduction
-- WiFi power save "max": ~50-80mA reduction
-
-**Recommended for low power:**
-```ini
-CPU_SPEED_MHZ = 160
-WIFI_TX_PWR = mid
-WIFI_PWR_SAVING = mid
-```
-
-**Syntax Notes:** 
-- Lines starting with `#` or `//` are comments.
-- Spaces around `=` are optional.
-- Keys are case-insensitive.
-
-See the [User Guide](release/README.md) for complete configuration reference.
-
-### Credential Security
-
-By default, the system stores WiFi and endpoint passwords securely in ESP32 flash memory (NVS) and censors them in `config.txt`. This protects your credentials if someone accesses your SD card or web interface.
-
-**Secure Mode (Default - Recommended):**
-- Set `STORE_CREDENTIALS_PLAIN_TEXT = false` or omit the line
-- Credentials automatically migrated to flash memory on first boot
-- `config.txt` updated with `***STORED_IN_FLASH***` placeholders
-- Web interface shows censored values
-
-**Plain Text Mode (Development/Debugging):**
-- Set `STORE_CREDENTIALS_PLAIN_TEXT = true`
-- Credentials remain visible in `config.txt`
-- Web interface shows actual values
-
-**Migration Process:**
-1. First boot with secure mode: System reads plain text credentials from `config.txt`
-2. Stores them securely in ESP32 flash memory (NVS)
-3. Updates `config.txt` with censored placeholders
-4. Subsequent boots: Loads credentials from flash memory
-
-**Security Considerations:**
-- ✅ Protected against SD card physical access
-- ✅ Protected against web interface credential exposure
-- ⚠️ Not protected against flash memory dumps (requires physical device access)
-- ⚠️ Migration is one-way (cannot retrieve credentials back to plain text)
-
-For production use, always use secure mode (default). Use plain text mode only for development or debugging.
-
-### Updating Configuration
-
-If you need to change WiFi credentials, endpoint settings, or other configuration after initial setup:
-
-**Method: Update Config File and Restart**
-1. Update `config.txt` on SD card with new settings
-2. **Important**: Enter credentials in plain text (not censored)
-3. Power cycle the device (unplug and plug back in)
-4. Device will automatically:
-   - **Prioritize new credentials** from `config.txt` over stored ones
-   - Connect to new WiFi network if credentials changed
-   - Apply new endpoint settings immediately
-   - Migrate new credentials to secure storage (if enabled)
-   - Update `config.txt` with censored placeholders
-
-**How It Works:**
-- **Individual credential priority**: Each credential (WiFi, endpoint) is handled independently
-- **Config file priority**: Plain text credentials in `config.txt` always take precedence over stored ones
-- **Automatic detection**: Device detects new credentials and uses them immediately
-- **Partial updates supported**: Update just WiFi password, just endpoint password, or both
-- **Secure migration**: New credentials are automatically migrated to flash memory
-
-**Example Update Process:**
-```ini
-# Before: config.txt has mixed state (user wants to update WiFi only)
-WIFI_SSID = NewNetwork
-WIFI_PASSWORD = ***STORED_IN_FLASH***
-ENDPOINT = //server/share
-ENDPOINT_PASSWORD = ***STORED_IN_FLASH***
-
-# Update: Replace only WiFi password with new plain text credential
-WIFI_SSID = NewNetwork
-WIFI_PASSWORD = newwifipassword123
-ENDPOINT = //server/share
-ENDPOINT_PASSWORD = ***STORED_IN_FLASH***
-
-# After restart: Device uses new WiFi password, keeps stored endpoint password
-# WiFi password gets migrated and re-censored in config file
-```
-
-**Important Notes:**
-- Always use plain text credentials when updating (not `***STORED_IN_FLASH***`)
-- Device automatically detects and prioritizes config file credentials
-- Upload state and progress are preserved across configuration changes
-- Check serial output for configuration loading status and connection results
-
-**Troubleshooting:**
-- If WiFi connection fails, verify credentials and network availability
-- If device doesn't detect changes, ensure credentials are in plain text format
-- Use `"STORE_CREDENTIALS_PLAIN_TEXT": true` to keep credentials visible for debugging
-- Serial output shows detailed credential loading and migration process
-
-## Upload Modes
-
-- **smart** (**recommended**): detects therapy end via SD activity + inactivity threshold, then uploads recent data as soon as possible.
-- **scheduled**: runs uploads inside the configured upload window.
-
-In both modes, older backlog folders are uploaded during the configured upload window.
-
-
-
-## Build Targets
-
-The project supports two build configurations:
-
-### **Standard Build** (`pico32`)
+**Quick Build:**
 ```bash
-pio run -e pico32
+# Clone with submodules
+git clone --recurse-submodules https://github.com/yourusername/CPAP_data_uploader
+
+# Or if already cloned
+git submodule update --init --recursive
+
+# Build (libsmb2 automatically configured)
+pio run -e pico32         # Standard build (3MB app space, no OTA)
+pio run -e pico32-ota     # OTA build (1.5MB app space, web updates)
 ```
-- **3MB app space** (maximum firmware size)
-- **No OTA support** - updates require physical access
-- **Best for**: Development, maximum feature space, or when OTA is not needed
 
-### **OTA-Enabled Build** (`pico32-ota`)  
-```bash
-pio run -e pico32-ota
-```
-- **1.5MB app space** per partition (2 partitions for OTA)
-- **Web-based firmware updates** via `/ota` interface
-- **Best for**: Production deployments requiring remote updates
-
-### **Size Comparison:**
-| Build Type | Firmware Size | Available Space | OTA Support |
-|------------|---------------|-----------------|-------------|
-| `pico32`   | ~1.08MB      | 3MB            | ❌          |
-| `pico32-ota` | ~1.24MB    | 1.5MB          | ✅          |
-
-Both builds include the same core functionality - the only difference is OTA capability and partition layout.
-
-## Firmware Updates
-
-### **OTA Updates** (pico32-ota build only)
-
-The OTA-enabled build supports **Over-The-Air (OTA) updates** through the web interface:
-
-1. **Access the web interface** at `http://[device-ip]/ota`
-2. **Choose update method:**
-   - **File Upload**: Select and upload a `.bin` firmware file
-   - **URL Download**: Enter a URL to download firmware from
-3. **Monitor progress** - Update takes 1-2 minutes
-4. **Device restarts automatically** when complete
-
-**⚠️ Important**: Ensure stable WiFi connection and do not power off during updates.
-
-### **Manual Updates** (both builds)
-
-For devices without OTA support or when OTA fails:
-1. Download firmware from [Releases page](../../releases)
-2. Use esptool.py or PlatformIO to upload via USB/Serial
-3. Follow instructions in the release package
+**Additional Documentation:**
+- [Architecture](docs/02-ARCHITECTURE.md)
+- [Requirements](docs/03-REQUIREMENTS.md)
+- [Build Troubleshooting](docs/BUILD_TROUBLESHOOTING.md)
+- [Feature Flags](docs/FEATURE_FLAGS.md)
 
 ## How It Works
 
@@ -311,11 +202,6 @@ For devices without OTA support or when OTA fails:
 
 The device respects your CPAP machine's need for SD card access by only accessing the card when it's not used by CPAP, keeping upload sessions short and releasing control immediately after each session.
 
-## Capacity & Longevity
-
-**Memory:** Currently the firmware with SMB upload and web server enabled can track upload state for **10+ years** of daily CPAP usage (3,000+ folders) before exhausting available RAM.
-
-**Storage:** Based on typical CPAP data size (~2.7 MB per day), the 8GB SD WIFI PRO card can store approximately **8+ years** (3,000+ days) of CPAP data before filling up.
 
 ## Project Status
 
