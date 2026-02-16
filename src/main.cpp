@@ -241,6 +241,9 @@ void setup() {
         return;
     }
     
+    // Start mDNS responder (allows access via http://cpap.local or configured hostname)
+    wifiManager.startMDNS(config.getHostname());
+    
     // Apply WiFi power settings after connection is established
     wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
     LOG("WiFi power management settings applied");
@@ -721,6 +724,10 @@ void loop() {
                 return;
             }
             LOG_DEBUG("WiFi reconnected successfully");
+            
+            // Restart mDNS responder after reconnection
+            wifiManager.startMDNS(config.getHostname());
+            
             lastNtpSyncAttempt = 0;
             lastWifiReconnectAttempt = 0;
         }

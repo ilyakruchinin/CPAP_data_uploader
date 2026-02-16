@@ -97,6 +97,7 @@ Create a file named `config.json` in the root of your SD card.
 {
   "WIFI_SSID": "YourNetworkName",
   "WIFI_PASS": "YourNetworkPassword",
+  "HOSTNAME": "cpap",
 
   "ENDPOINT_TYPE": "CLOUD",
   "CLOUD_CLIENT_ID": "your-sleephq-client-id",
@@ -159,6 +160,11 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 **WIFI_PASS** (required)
 - Your WiFi password
 - Example: `"MySecurePassword123"`
+**HOSTNAME** (optional, default: `"cpap"`)
+- Device hostname for local network discovery
+- Access via: `http://hostname.local` (e.g., `http://cpap.local`)
+- Example: `"airsense11"`
+
 
 ### Upload Destination
 

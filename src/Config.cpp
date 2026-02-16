@@ -774,6 +774,7 @@ bool Config::loadFromSD(fs::FS &sd) {
 
 const String& Config::getWifiSSID() const { return wifiSSID; }
 const String& Config::getWifiPassword() const { return wifiPassword; }
+const String& Config::getHostname() const { return hostname; }
 const String& Config::getSchedule() const { return schedule; }
 const String& Config::getEndpoint() const { return endpoint; }
 const String& Config::getEndpointType() const { return endpointType; }
