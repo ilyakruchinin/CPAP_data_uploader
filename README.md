@@ -48,6 +48,8 @@ Follow the included instructions to flash firmware to your SD WIFI PRO.
 ### 3. Create Simple Config
 Create `config.txt` on your SD card with just **6-10 lines**:
 
+**👇 Click the option you want to use** (or click ▸ to expand additional options):
+
 <details open>
 <summary><b>📤 Network Share (SMB)</b></summary>
 
