@@ -3,6 +3,7 @@
 #include "Config.h"  // For power management enums
 #include "SDCardManager.h"
 #include <WiFi.h>
+#include <ESPmDNS.h>
 
 WiFiManager::WiFiManager() : connected(false) {}
 
@@ -262,6 +263,31 @@ String WiFiManager::getSignalQuality() const {
         return "Very Weak";
     }
 }
+
+bool WiFiManager::startMDNS(const String& hostname) {
+    if (!connected || WiFi.status() != WL_CONNECTED) {
+        LOG_WARN("Cannot start mDNS: WiFi not connected");
+        return false;
+    }
+
+    String name = hostname;
+    if (name.isEmpty()) {
+        name = "cpap"; // Default hostname
+    }
+
+    LOGF("Starting mDNS responder with hostname: %s.local", name.c_str());
+    
+    if (MDNS.begin(name.c_str())) {
+        LOG("mDNS responder started successfully");
+        // Advertise web server service
+        MDNS.addService("http", "tcp", 80);
+        return true;
+    } else {
+        LOG_ERROR("Failed to start mDNS responder");
+        return false;
+    }
+}
+
 // Power management methods
 void WiFiManager::setHighPerformanceMode() {
     if (connected && WiFi.status() == WL_CONNECTED) {

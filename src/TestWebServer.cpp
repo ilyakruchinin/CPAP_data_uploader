@@ -446,6 +446,8 @@ void TestWebServer::handleConfig() {
         // Always censor WiFi password (never expose via HTTP)
         json += "\"wifi_password\":\"***HIDDEN***\",";
         
+        json += "\"hostname\":\"" + config->getHostname() + "\",";
+        
         json += "\"endpoint\":\"" + config->getEndpoint() + "\",";
         json += "\"endpoint_type\":\"" + config->getEndpointType() + "\",";
         json += "\"endpoint_user\":\"" + config->getEndpointUser() + "\",";
