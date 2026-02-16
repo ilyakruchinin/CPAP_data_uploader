@@ -83,6 +83,7 @@ Simple:
 {
   "WIFI_SSID": "YourNetworkName",
   "WIFI_PASS": "YourNetworkPassword",
+  "HOSTNAME": "cpap",
 
   "ENDPOINT_TYPE": "CLOUD",
   "CLOUD_CLIENT_ID": "your-sleephq-client-id",
@@ -97,6 +98,7 @@ Advanced:
 {
   "WIFI_SSID": "YourNetworkName",
   "WIFI_PASS": "YourNetworkPassword",
+  "HOSTNAME": "cpap",
 
   "ENDPOINT_TYPE": "SMB,CLOUD",
   
