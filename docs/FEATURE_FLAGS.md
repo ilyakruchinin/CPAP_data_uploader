@@ -25,14 +25,12 @@ Enables SMB/CIFS upload support for Windows shares, NAS devices, and Samba serve
 - libsmb2 library must be cloned into `components/libsmb2`
 - See [LIBSMB2_SETUP.md](LIBSMB2_SETUP.md) for setup instructions
 
-**Usage in config.json**:
-```json
-{
-  "ENDPOINT_TYPE": "SMB",
-  "ENDPOINT": "//192.168.1.100/cpap_backups",
-  "ENDPOINT_USER": "username",
-  "ENDPOINT_PASS": "password"
-}
+**Usage in config.txt**:
+```ini
+ENDPOINT_TYPE = SMB
+ENDPOINT = //192.168.1.100/cpap_backups
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
 ```
 
 ### ENABLE_WEBDAV_UPLOAD
@@ -43,14 +41,12 @@ Enables WebDAV upload support for Nextcloud, ownCloud, and standard WebDAV serve
 
 **Binary Size Impact**: +50-80KB (estimated, uses HTTPClient)
 
-**Usage in config.json**:
-```json
-{
-  "ENDPOINT_TYPE": "WEBDAV",
-  "ENDPOINT": "https://cloud.example.com/remote.php/dav/files/user/cpap",
-  "ENDPOINT_USER": "username",
-  "ENDPOINT_PASS": "password"
-}
+**Usage in config.txt**:
+```ini
+ENDPOINT_TYPE = WEBDAV
+ENDPOINT = https://cloud.example.com/remote.php/dav/files/user/cpap
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
 ```
 
 ### ENABLE_SLEEPHQ_UPLOAD
@@ -61,16 +57,14 @@ Enables direct upload to SleepHQ cloud service via REST API with OAuth authentic
 
 **Binary Size Impact**: +110KB (includes ISRG Root X1 CA cert for TLS)
 
-**Usage in config.json**:
-```json
-{
-  "ENDPOINT_TYPE": "CLOUD",
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret"
-}
+**Usage in config.txt**:
+```ini
+ENDPOINT_TYPE = CLOUD
+CLOUD_CLIENT_ID = your-sleephq-client-id
+CLOUD_CLIENT_SECRET = your-sleephq-client-secret
 ```
 
-Can also be combined with SMB: `"ENDPOINT_TYPE": "SMB,CLOUD"`
+Can also be combined with SMB: `ENDPOINT_TYPE = SMB,CLOUD`
 
 ## How to Enable/Disable Backends
 
@@ -101,12 +95,12 @@ pio run -e pico32 --build-flag="-DENABLE_SMB_UPLOAD" --build-flag="-DENABLE_WEBD
 
 ## Runtime Backend Selection
 
-When multiple backends are enabled at compile time, the active backend is selected at runtime based on the `ENDPOINT_TYPE` setting in `config.json`.
+When multiple backends are enabled at compile time, the active backend is selected at runtime based on the `ENDPOINT_TYPE` setting in `config.txt`.
 
 **Example**: If both SMB and WebDAV are enabled:
-- Set `ENDPOINT_TYPE: "SMB"` to use SMB upload
-- Set `ENDPOINT_TYPE: "WEBDAV"` to use WebDAV upload
-- Change `config.json` and reboot to switch backends
+- Set `ENDPOINT_TYPE = SMB` to use SMB upload
+- Set `ENDPOINT_TYPE = WEBDAV` to use WebDAV upload
+- Change `config.txt` and reboot to switch backends
 
 ## Implementation Details
 
@@ -132,7 +126,7 @@ The feature flags use C preprocessor directives to conditionally include code:
 
 The `FileUploader` class automatically selects the appropriate uploader based on:
 1. Which backends are enabled at compile time (feature flags)
-2. The `ENDPOINT_TYPE` setting in `config.json`
+2. The `ENDPOINT_TYPE` setting in `config.txt`
 
 If the requested backend is not enabled at compile time, an error message is displayed with instructions on which flag to enable.
 

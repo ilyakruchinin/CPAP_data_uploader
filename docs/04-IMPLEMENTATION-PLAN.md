@@ -650,7 +650,7 @@ using JavaScript fetch() for polling.
 | PCNT misses activity (false idle) | Glitch filter tuning. Z default (125s) is 2× therapy write interval (~58s). See 01-FINDINGS.md §6. |
 | CPAP confused by long SD card absence | X-minute limit (default 5 min). CPAP tolerates brief removals. |
 | Upload too slow with exclusive access | Should be FASTER — no 1.5s release overhead per file. |
-| Breaking config.json backward compat | Explicit migration logic + deprecation warnings. |
+| Breaking config.txt backward compat | Explicit migration logic + deprecation warnings. |
 | Heap fragmentation from state churn | Keep DATALOG state lightweight (size-only for recent files), prune legacy DATALOG checksums, avoid per-file state-save churn. |
 | Watchdog timeout during long uploads | Existing `yield()` calls in upload loops. Web server handling in between files. |
 

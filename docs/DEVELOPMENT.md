@@ -17,7 +17,7 @@ This document is for developers who want to build, modify, or contribute to the 
 
 ### Core Components
 
-- **Config** - Manages configuration from SD card (`config.json`) and secure credential storage
+- **Config** - Manages configuration from SD card (`config.txt`) and secure credential storage
 - **SDCardManager** - Handles SD card sharing with CPAP machine
 - **WiFiManager** - Manages WiFi station mode connection
 - **FileUploader** - Orchestrates file upload to remote endpoints
@@ -173,14 +173,12 @@ The project works with:
 
 ### Power Management Settings
 
-The system supports configurable power management through `config.json`:
+The system supports configurable power management through `config.txt`:
 
-```json
-{
-  "CPU_SPEED_MHZ": 160,        // CPU frequency: 80-240MHz (default: 240)
-  "WIFI_TX_PWR": "mid",        // WiFi TX power: "high"/"mid"/"low" (default: "high")  
-  "WIFI_PWR_SAVING": "mid"     // WiFi power save: "none"/"mid"/"max" (default: "none")
-}
+```ini
+CPU_SPEED_MHZ = 160        # CPU frequency: 80-240MHz (default: 240)
+WIFI_TX_PWR = mid          # WiFi TX power: "high"/"mid"/"low" (default: "high")  
+WIFI_PWR_SAVING = mid      # WiFi power save: "none"/"mid"/"max" (default: "none")
 ```
 
 **Implementation Details:**
@@ -206,7 +204,7 @@ The system supports direct upload to SleepHQ cloud service via REST API. This ca
 #### Enabling Cloud Upload
 
 1. **Build flag:** Uncomment `-DENABLE_SLEEPHQ_UPLOAD` in `platformio.ini`
-2. **Configuration:** Add cloud fields to `config.json` on the SD card
+2. **Configuration:** Add cloud fields to `config.txt` on the SD card
 
 #### Cloud-Only Configuration
 
@@ -300,8 +298,8 @@ This skips DATALOG folders older than 30 days. The filter compares the folder na
 #### Credential Security
 
 `CLOUD_CLIENT_SECRET` follows the same secure storage pattern as other credentials:
-- Automatically migrated from `config.json` to ESP32 flash (NVS) on first boot
-- Replaced with `***STORED_IN_FLASH***` in `config.json`
+- Automatically migrated from `config.txt` to ESP32 flash (NVS) on first boot
+- Replaced with `***STORED_IN_FLASH***` in `config.txt`
 - Loaded from NVS on subsequent boots
 - Protected from SD card physical access
 
@@ -402,7 +400,7 @@ build_flags =
     -DENABLE_TEST_WEBSERVER      ; Enable test web server
 ```
 
-Multiple upload backends can be enabled simultaneously. Use `ENDPOINT_TYPE` in `config.json` to select active backends at runtime (e.g., `"SMB"`, `"CLOUD"`, or `"SMB,CLOUD"`).
+Multiple upload backends can be enabled simultaneously. Use `ENDPOINT_TYPE` in `config.txt` to select active backends at runtime (e.g., `"SMB"`, `"CLOUD"`, or `"SMB,CLOUD"`).
 
 **Logging:**
 ```ini
@@ -414,7 +412,7 @@ build_flags =
 
 **Debug Logging:** By default, `LOG_DEBUG()` and `LOG_DEBUGF()` macros are compiled out (zero overhead). Enable with `-DENABLE_VERBOSE_LOGGING` to see detailed diagnostics including progress updates, state details, and troubleshooting information. Saves ~10-15KB flash and ~35-75ms per upload session when disabled.
 
-**SD Card Logging:** For advanced debugging, logs can be written to SD card by setting `LOG_TO_SD_CARD: true` in `config.json`. 
+**SD Card Logging:** For advanced debugging, logs can be written to SD card by setting `LOG_TO_SD_CARD: true` in `config.txt`. 
 
 ⚠️ **WARNING: SD card logging is for debugging only and can prevent the CPAP machine from reliably accessing the SD card. Only enable it temporarily for troubleshooting, and only when `UPLOAD_MODE` is `"scheduled"` with an upload window outside normal therapy times. Disable it immediately afterward.**
 
@@ -507,7 +505,7 @@ git push origin v0.3.0
 ### Prerequisites
 
 - [ ] SD WIFI PRO dev board connected with SD WIFI PRO inserted
-- [ ] `config.json` created on SD card
+- [ ] `config.txt` created on SD card
 - [ ] WiFi network available
 - [ ] SMB share accessible and writable (if using SMB)
 - [ ] SleepHQ API credentials (if using Cloud upload)
@@ -551,7 +549,7 @@ git push origin v0.3.0
    - [ ] Verify files uploaded with content hash
    - [ ] Verify import processed (`[SleepHQ] Import <id> submitted for processing`)
    - [ ] Check SleepHQ web interface for imported data
-   - [ ] Verify `CLOUD_CLIENT_SECRET` censored in `config.json` after first boot
+   - [ ] Verify `CLOUD_CLIENT_SECRET` censored in `config.txt` after first boot
 
 ### Common Issues
 
@@ -636,7 +634,7 @@ pio device monitor             # Serial monitor
 The system supports two credential storage modes:
 
 1. **Secure Mode (Default)** - Credentials stored in ESP32 NVS (Non-Volatile Storage)
-2. **Plain Text Mode** - Credentials stored in `config.json` on SD card
+2. **Plain Text Mode** - Credentials stored in `config.txt` on SD card
 
 ### Preferences Library Usage
 
@@ -682,23 +680,23 @@ void Config::closePreferences() {
 
 When secure mode is enabled (default), the system automatically migrates credentials on first boot:
 
-1. **Detection:** System checks if credentials in `config.json` are censored
+1. **Detection:** System checks if credentials in `config.txt` are censored
 2. **Migration:** If plain text detected, credentials are:
    - Stored in NVS using Preferences library
    - Verified by reading back from NVS
-   - Censored in `config.json` (replaced with `***STORED_IN_FLASH***`)
+   - Censored in `config.txt` (replaced with `***STORED_IN_FLASH***`)
 3. **Subsequent Boots:** Credentials loaded directly from NVS
 
 **Migration Flow:**
 
 ```
-Boot → Load config.json
+Boot → Load config.txt
   ├─ STORE_CREDENTIALS_PLAIN_TEXT = true?
   │    └─ YES → Use plain text (no migration)
   │
   └─ NO/ABSENT → Check if censored
        ├─ YES → Load from NVS
-       └─ NO → Migrate to NVS + Censor config.json
+       └─ NO → Migrate to NVS + Censor config.txt
 ```
 
 ### Error Handling
@@ -706,16 +704,16 @@ Boot → Load config.json
 **Preferences Initialization Failure:**
 - System logs error
 - Falls back to plain text mode
-- Continues operation with credentials from `config.json`
+- Continues operation with credentials from `config.txt`
 
 **NVS Write Failure:**
 - System logs detailed error
 - Keeps credentials in plain text
-- Does not censor `config.json`
+- Does not censor `config.txt`
 
 **NVS Read Failure:**
 - System logs warning
-- Attempts to use `config.json` values
+- Attempts to use `config.txt` values
 - May trigger re-migration if plain text available
 
 ### Web Interface Protection
@@ -723,26 +721,25 @@ Boot → Load config.json
 The TestWebServer component respects credential storage mode:
 
 ```cpp
-void TestWebServer::handleConfig() {
-    // Check if credentials are secured
-    if (config->areCredentialsInFlash()) {
-        // Return censored values
-        doc["wifi_password"] = Config::CENSORED_VALUE;
-        doc["endpoint_password"] = Config::CENSORED_VALUE;
-        doc["credentials_secured"] = true;
-    } else {
-        // Return actual values (plain text mode)
-        doc["wifi_password"] = config->wifiPassword;
-        doc["endpoint_password"] = config->endpointPassword;
-        doc["credentials_secured"] = false;
+void TestWebServer::handleApiConfig() {
+    // ...
+    if (config) {
+        // Check if credentials are stored in secure mode
+        bool credentialsSecured = config->areCredentialsInFlash();
+        
+        json += "\"wifi_ssid\":\"" + escapeJson(config->getWifiSSID()) + "\",";
+        json += "\"wifi_password\":\"***HIDDEN***\",";
+        // ...
+        json += "\"credentials_secured\":" + String(credentialsSecured ? "true" : "false");
     }
+    // ...
 }
 ```
 
 ### Security Considerations
 
 **Protected Against:**
-- Physical SD card access (credentials not in `config.json`)
+- Physical SD card access (credentials not in `config.txt`)
 - Web interface credential exposure (censored in responses)
 - Serial log exposure (credentials never logged)
 
@@ -786,20 +783,20 @@ pio test -e native -f test_config
 
 1. **Test Secure Mode (Default):**
    ```bash
-   # 1. Create config.json with plain text credentials
-   # 2. Set STORE_CREDENTIALS_PLAIN_TEXT to false or omit
+   # 1. Create config.txt with plain text credentials
+   # 2. Set STORE_CREDENTIALS_PLAIN_TEXT = false or omit
    # 3. Flash and boot device
    # 4. Check serial output for migration messages
-   # 5. Verify config.json shows ***STORED_IN_FLASH***
+   # 5. Verify config.txt shows ***STORED_IN_FLASH***
    # 6. Verify WiFi connects and uploads work
    # 7. Check web interface shows censored values
    ```
 
 2. **Test Plain Text Mode:**
    ```bash
-   # 1. Set STORE_CREDENTIALS_PLAIN_TEXT to true
+   # 1. Set STORE_CREDENTIALS_PLAIN_TEXT = true
    # 2. Flash and boot device
-   # 3. Verify credentials remain in config.json
+   # 3. Verify credentials remain in config.txt
    # 4. Verify web interface shows actual values
    ```
 

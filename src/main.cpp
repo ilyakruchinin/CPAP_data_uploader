@@ -181,13 +181,37 @@ void setup() {
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
 
-    // Boot delay - wait for CPAP machine to finish booting and release SD card
-    // This delay is applied before first SD card access attempt
-    // Note: Config not loaded yet, so we'll apply a default delay here
-    // and use configured delay for subsequent operations
-    const int DEFAULT_BOOT_DELAY_SECONDS = 30;
-    LOGF("Waiting %d seconds for CPAP machine to complete boot sequence...", DEFAULT_BOOT_DELAY_SECONDS);
-    delay(DEFAULT_BOOT_DELAY_SECONDS * 1000);
+    // Smart Boot Delay
+    // 1. Wait 2 seconds unconditionally for voltage stabilization and CPAP boot start
+    LOG("Waiting 2s for electrical stabilization...");
+    delay(2000);
+
+    // 2. Wait for bus silence (CPAP finished initial card checks)
+    // We look for 3 seconds of continuous silence, with a max timeout of 20 seconds
+    LOG("Checking for CPAP SD card activity (Smart Wait)...");
+    
+    unsigned long waitStart = millis();
+    const unsigned long MAX_WAIT_MS = 20000;     // Max time to wait in this phase
+    const unsigned long REQUIRED_IDLE_MS = 3000; // Required silence duration
+    bool busIsQuiet = false;
+
+    while (millis() - waitStart < MAX_WAIT_MS) {
+        trafficMonitor.update(); // Update activity stats
+        
+        // Feed watchdog to prevent resets during long waits
+        delay(10); 
+        
+        if (trafficMonitor.isIdleFor(REQUIRED_IDLE_MS)) {
+            LOGF("Bus silence detected (%dms) - CPAP is idle", REQUIRED_IDLE_MS);
+            busIsQuiet = true;
+            break;
+        }
+    }
+
+    if (!busIsQuiet) {
+        LOG_WARN("Smart wait timed out - bus still active, but proceeding anyway");
+    }
+    
     LOG("Boot delay complete, attempting SD card access...");
 
     // Take control of SD card
@@ -200,7 +224,7 @@ void setup() {
     LOG("Loading configuration...");
     if (!config.loadFromSD(sdManager.getFS())) {
         LOG_ERROR("Failed to load configuration - cannot continue");
-        LOG_ERROR("Please check config.json file on SD card");
+        LOG_ERROR("Please check config.txt file on SD card");
         
         // Dump logs to SD card for configuration failures
         Logger::getInstance().dumpLogsToSDCard("config_load_failed");
