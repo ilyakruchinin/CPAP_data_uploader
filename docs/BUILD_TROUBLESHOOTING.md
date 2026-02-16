@@ -203,7 +203,7 @@ sudo pio run -e pico32 -t upload
 
 **Check:**
 1. Serial monitor output: `pio device monitor`
-2. Config file exists on SD card: `config.json`
+2. Config file exists on SD card: `config.txt`
 3. WiFi credentials are correct
 4. WiFi network is 2.4GHz (ESP32 doesn't support 5GHz)
 

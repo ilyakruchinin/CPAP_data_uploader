@@ -474,7 +474,9 @@ void UploadStateManager::markFileUploaded(const String& filePath, const String& 
 
     if (isDatalogPath(filePath)) {
         if (fileSize > 0) {
-            upsertFileEntry(pathHash, (uint32_t)fileSize, nullptr, false, false, false);
+            // Enable persistence for DATALOG files (persistent=true, queue=true)
+            // This allows skipping already uploaded files even after a reboot
+            upsertFileEntry(pathHash, (uint32_t)fileSize, nullptr, false, true, true);
         }
         return;
     }

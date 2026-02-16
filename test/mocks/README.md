@@ -167,10 +167,10 @@ void test_json_parsing() {
         "UPLOAD_END_HOUR": 16,
         "GMT_OFFSET_HOURS": -8
     })";
-    mockSD.addFile("/config.json", jsonContent);
+    mockSD.addFile("/config.txt", jsonContent);
     
     // Parse the JSON
-    fs::File file = mockSD.open("/config.json", "r");
+    fs::File file = mockSD.open("/config.txt", "r");
     StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, file);
     file.close();

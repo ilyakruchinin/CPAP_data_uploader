@@ -51,14 +51,21 @@ bool TestWebServer::begin() {
     // Register request handlers
     server->on("/", [this]() { this->handleRoot(); });
     server->on("/trigger-upload", [this]() { this->handleTriggerUpload(); });
-    server->on("/status", [this]() { this->handleStatus(); });
-    server->on("/reset-state", [this]() { this->handleResetState(); });
-    server->on("/config", [this]() { this->handleConfig(); });
+    
+    // HTML Views
+    server->on("/status", [this]() { this->handleStatusPage(); });
+    server->on("/config", [this]() { this->handleConfigPage(); });
     server->on("/logs", [this]() { this->handleLogs(); });
     server->on("/monitor", [this]() { this->handleMonitorPage(); });
+    
+    // APIs
+    server->on("/api/status", [this]() { this->handleApiStatus(); });
+    server->on("/api/config", [this]() { this->handleApiConfig(); });
+    server->on("/api/logs", [this]() { this->handleApiLogs(); });
     server->on("/api/monitor-start", [this]() { this->handleMonitorStart(); });
     server->on("/api/monitor-stop", [this]() { this->handleMonitorStop(); });
     server->on("/api/sd-activity", [this]() { this->handleSdActivity(); });
+    server->on("/reset-state", [this]() { this->handleResetState(); });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -277,9 +284,9 @@ void TestWebServer::handleRoot() {
     html += "</div>";
     
     html += "<div class='actions' style='margin-top:10px'>";
-    html += "<a href='/status' class='btn btn-secondary' target='_blank' rel='noopener noreferrer'>JSON Status</a>";
-    html += "<a href='/config' class='btn btn-secondary' target='_blank' rel='noopener noreferrer'>Config</a>";
-    html += "<a href='/logs' class='btn btn-secondary' target='_blank' rel='noopener noreferrer'>Logs</a>";
+    html += "<a href='/status' class='btn btn-secondary'>Status</a>";
+    html += "<a href='/config' class='btn btn-secondary'>Config</a>";
+    html += "<a href='/logs' class='btn btn-secondary'>Logs</a>";
 #ifdef ENABLE_OTA_UPDATES
     html += "<a href='/ota' class='btn btn-secondary'>&#128190; Firmware Update</a>";
 #endif
@@ -313,108 +320,8 @@ void TestWebServer::handleTriggerUpload() {
     server->send(200, "application/json", response);
 }
 
-// GET /status - JSON status information
-void TestWebServer::handleStatus() {
-    // Add CORS headers
-    addCorsHeaders(server);
-    
-    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    
-    auto sendChunk = [this](const String& s) {
-        server->sendContent(s);
-    };
-    
-    String json = "{";
-    json += "\"uptime_seconds\":" + String(millis() / 1000) + ",";
-    json += "\"current_time\":\"" + getCurrentTimeString() + "\",";
-    json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
-    
-    // Send initial chunk with headers
-    server->send(200, "application/json", json);
-    
-    json = "";
-    // WiFi information
-    if (wifiManager && wifiManager->isConnected()) {
-        json += "\"wifi_connected\":true,";
-        json += "\"wifi_rssi\":" + String(wifiManager->getSignalStrength()) + ",";
-        json += "\"wifi_quality\":\"" + wifiManager->getSignalQuality() + "\",";
-    } else {
-        json += "\"wifi_connected\":false,";
-    }
-    
-    if (scheduleManager) {
-        json += "\"next_upload_seconds\":" + String(scheduleManager->getSecondsUntilNextUpload()) + ",";
-        json += "\"time_synced\":" + String(scheduleManager->isTimeSynced() ? "true" : "false") + ",";
-    }
-    sendChunk(json);
-    
-    json = "";
-    // Upload progress
-    if (stateManager) {
-        int completedFolders = stateManager->getCompletedFoldersCount();
-        int incompleteFolders = stateManager->getIncompleteFoldersCount();
-        int pendingFolders = stateManager->getPendingFoldersCount();
-        int totalFolders = completedFolders + incompleteFolders;
-        
-        json += "\"completed_folders\":" + String(completedFolders) + ",";
-        json += "\"incomplete_folders\":" + String(incompleteFolders) + ",";
-        json += "\"pending_data_folders\":" + String(incompleteFolders) + ",";
-        json += "\"pending_folders\":" + String(pendingFolders) + ",";
-        json += "\"total_folders\":" + String(totalFolders) + ",";
-        json += "\"upload_state_initialized\":" + String((totalFolders + pendingFolders) > 0 ? "true" : "false");
-    } else {
-        json += "\"completed_folders\":0,";
-        json += "\"incomplete_folders\":0,";
-        json += "\"pending_data_folders\":0,";
-        json += "\"pending_folders\":0,";
-        json += "\"total_folders\":0,";
-        json += "\"upload_state_initialized\":false";
-    }
-    sendChunk(json);
-    
-    json = "";
-    if (config) {
-        json += ",\"endpoint_type\":\"" + config->getEndpointType() + "\"";
-        json += ",\"boot_delay_seconds\":" + String(config->getBootDelaySeconds());
-        json += ",\"upload_mode\":\"" + config->getUploadMode() + "\"";
-        json += ",\"upload_start_hour\":" + String(config->getUploadStartHour());
-        json += ",\"upload_end_hour\":" + String(config->getUploadEndHour());
-        json += ",\"inactivity_seconds\":" + String(config->getInactivitySeconds());
-        json += ",\"exclusive_access_minutes\":" + String(config->getExclusiveAccessMinutes());
-        json += ",\"cooldown_minutes\":" + String(config->getCooldownMinutes());
-        
-        // Cloud upload status
-        if (config->hasCloudEndpoint()) {
-            json += ",\"cloud_configured\":true";
-            if (config->getMaxDays() > 0) {
-                json += ",\"max_days\":" + String(config->getMaxDays());
-            }
-            json += ",\"cloud_insecure_tls\":" + String(config->getCloudInsecureTls() ? "true" : "false");
-        } else {
-            json += ",\"cloud_configured\":false";
-        }
-    }
-    sendChunk(json);
-    
-    json = "";
-    // Add CPAP monitor data (without usage percentage)
-    if (cpapMonitor) {
-        json += ",\"cpap_monitor\":{";
-        json += "\"interval_minutes\":10";
-        json += ",\"data_points\":144";
-        // Usage data might be large, so we handle it carefully if it was a large string
-        // But getUsageDataJSON likely returns a string. 
-        // Ideally we would stream that too, but for now just append.
-        json += ",\"usage_data\":" + cpapMonitor->getUsageDataJSON();
-        json += "}";
-    }
+// GET /status - JSON status information (Legacy - Removed, use handleApiStatus)
 
-    json += "}";
-    sendChunk(json);
-    
-    // Terminate chunked transmission
-    server->sendContent("");
-}
 
 // GET /reset-state - Clear upload state
 void TestWebServer::handleResetState() {
@@ -430,10 +337,12 @@ void TestWebServer::handleResetState() {
     server->send(200, "application/json", response);
 }
 
-// GET /config - Display current configuration
-void TestWebServer::handleConfig() {
+// GET /api/config - Display current configuration
+void TestWebServer::handleApiConfig() {
     // Add CORS headers
     addCorsHeaders(server);
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    auto sendChunk = [this](const String& s) { server->sendContent(s); };
     
     String json = "{";
     
@@ -441,37 +350,38 @@ void TestWebServer::handleConfig() {
         // Check if credentials are stored in secure mode
         bool credentialsSecured = config->areCredentialsInFlash();
         
-        json += "\"wifi_ssid\":\"" + config->getWifiSSID() + "\",";
-        
-        // Always censor WiFi password (never expose via HTTP)
+        json += "\"wifi_ssid\":\"" + escapeJson(config->getWifiSSID()) + "\",";
         json += "\"wifi_password\":\"***HIDDEN***\",";
+        json += "\"hostname\":\"" + escapeJson(config->getHostname()) + "\",";
         
-        json += "\"hostname\":\"" + config->getHostname() + "\",";
+        server->send(200, "application/json", json);
         
-        json += "\"endpoint\":\"" + config->getEndpoint() + "\",";
-        json += "\"endpoint_type\":\"" + config->getEndpointType() + "\",";
-        json += "\"endpoint_user\":\"" + config->getEndpointUser() + "\",";
-        
-        // Always censor endpoint password (never expose via HTTP)
+        json = "";
+        json += "\"endpoint\":\"" + escapeJson(config->getEndpoint()) + "\",";
+        json += "\"endpoint_type\":\"" + escapeJson(config->getEndpointType()) + "\",";
+        json += "\"endpoint_user\":\"" + escapeJson(config->getEndpointUser()) + "\",";
         json += "\"endpoint_password\":\"***HIDDEN***\",";
+        sendChunk(json);
         
+        json = "";
         json += "\"gmt_offset_hours\":" + String(config->getGmtOffsetHours()) + ",";
-        json += "\"upload_mode\":\"" + config->getUploadMode() + "\",";
+        json += "\"upload_mode\":\"" + escapeJson(config->getUploadMode()) + "\",";
         json += "\"upload_start_hour\":" + String(config->getUploadStartHour()) + ",";
         json += "\"upload_end_hour\":" + String(config->getUploadEndHour()) + ",";
         json += "\"inactivity_seconds\":" + String(config->getInactivitySeconds()) + ",";
         json += "\"exclusive_access_minutes\":" + String(config->getExclusiveAccessMinutes()) + ",";
         json += "\"cooldown_minutes\":" + String(config->getCooldownMinutes()) + ",";
+        sendChunk(json);
         
         // Cloud upload config
+        json = "";
         if (config->hasCloudEndpoint()) {
-            json += "\"cloud_client_id\":\"" + config->getCloudClientId() + "\",";
-            // Always censor cloud client secret (never expose via HTTP)
+            json += "\"cloud_client_id\":\"" + escapeJson(config->getCloudClientId()) + "\",";
             json += "\"cloud_client_secret\":\"***HIDDEN***\",";
             json += "\"cloud_device_id\":" + String(config->getCloudDeviceId()) + ",";
-            json += "\"cloud_base_url\":\"" + config->getCloudBaseUrl() + "\",";
+            json += "\"cloud_base_url\":\"" + escapeJson(config->getCloudBaseUrl()) + "\",";
             if (!config->getCloudTeamId().isEmpty()) {
-                json += "\"cloud_team_id\":\"" + config->getCloudTeamId() + "\",";
+                json += "\"cloud_team_id\":\"" + escapeJson(config->getCloudTeamId()) + "\",";
             }
             json += "\"cloud_insecure_tls\":" + String(config->getCloudInsecureTls() ? "true" : "false") + ",";
         }
@@ -480,11 +390,14 @@ void TestWebServer::handleConfig() {
         }
         // Add credentials_secured field to indicate storage mode
         json += "\"credentials_secured\":" + String(credentialsSecured ? "true" : "false");
+    } else {
+        // If config is null, send minimal JSON
+        server->send(200, "application/json", json);
     }
     
-    json += "}";
-    
-    server->send(200, "application/json", json);
+    json = "}";
+    sendChunk(json);
+    server->sendContent("");
 }
 
 // Handle 404 errors
@@ -602,16 +515,214 @@ void TestWebServer::handleLogs() {
     // Add CORS headers for cross-origin access
     addCorsHeaders(server);
     
-    // Set headers for streaming
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    // Send initial chunk with headers to avoid "content length is zero" warning
-    server->send(200, "text/plain", "--- System Logs ---\n");
     
-    // Stream logs directly using ChunkedPrint adapter
+    auto sendChunk = [this](const String& s) {
+        server->sendContent(s);
+    };
+
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta charset='utf-8'>";
+    html += "<title>System Logs - CPAP Data Uploader</title>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<style>";
+    html += "*{box-sizing:border-box;margin:0;padding:0}";
+    html += "body{font-family:Consolas,Monaco,'Andale Mono','Ubuntu Mono',monospace;background:#0f1923;color:#c7d5e0;padding:20px;font-size:13px;line-height:1.4;height:100vh;display:flex;flex-direction:column}";
+    html += ".header{display:flex;align-items:center;gap:20px;margin-bottom:15px;flex-shrink:0}";
+    html += "h1{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#fff;font-size:1.4em;margin:0}";
+    html += ".log-container{background:#1b2838;border:1px solid #2a475e;border-radius:6px;padding:15px;white-space:pre-wrap;word-wrap:break-word;overflow-x:hidden;overflow-y:auto;flex-grow:1;font-size:13px}";
+    html += ".btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:6px;background:#2a475e;color:#c7d5e0;text-decoration:none;font-family:-apple-system,sans-serif;font-size:0.9em;border:none;cursor:pointer;transition:background 0.2s}";
+    html += ".btn:hover{background:#3a5a7e}";
+    html += ".status{margin-left:auto;font-family:-apple-system,sans-serif;color:#8f98a0;font-size:0.9em}";
+    html += "</style></head><body>";
+    
+    html += "<div class='header'>";
+    html += "<a href='/' class='btn'>&larr; Dashboard</a>";
+    html += "<h1>System Logs</h1>";
+    html += "<span id='status' class='status'>Connecting...</span>";
+    html += "</div>";
+    
+    html += "<div id='logs' class='log-container'>Loading...</div>";
+    
+    html += "<script>";
+    html += "const logDiv = document.getElementById('logs');";
+    html += "const statusSpan = document.getElementById('status');";
+    html += "let isScrolledToBottom = true;";
+    html += "logDiv.addEventListener('scroll', () => {";
+    html += "  isScrolledToBottom = (logDiv.scrollHeight - logDiv.scrollTop - logDiv.clientHeight) < 50;";
+    html += "});";
+    html += "function fetchLogs() {";
+    html += "  fetch('/api/logs').then(r => r.text()).then(text => {";
+    html += "    if (logDiv.innerText !== text) {";
+    html += "      logDiv.innerText = text;";
+    html += "      if (isScrolledToBottom) logDiv.scrollTop = logDiv.scrollHeight;";
+    html += "      statusSpan.textContent = 'Live';";
+    html += "      statusSpan.style.color = '#44ff44';";
+    html += "    }";
+    html += "  }).catch(e => {";
+    html += "    statusSpan.textContent = 'Disconnected';";
+    html += "    statusSpan.style.color = '#ff4444';";
+    html += "  });";
+    html += "}";
+    html += "fetchLogs();";
+    html += "setInterval(fetchLogs, 2000);"; // Refresh every 2s
+    html += "</script>";
+    
+    html += "</body></html>";
+    
+    server->send(200, "text/html; charset=utf-8", html);
+    server->sendContent("");
+}
+
+// GET /api/logs - Raw logs for AJAX
+void TestWebServer::handleApiLogs() {
+    // Add CORS headers
+    addCorsHeaders(server);
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    // Send headers with correct content type
+    server->send(200, "text/plain; charset=utf-8", "");
+    // Stream logs directly
     ChunkedPrint chunkedOutput(server);
     Logger::getInstance().printLogs(chunkedOutput);
+    server->sendContent("");
+}
+
+// GET /config - Display current configuration (HTML View)
+void TestWebServer::handleConfigPage() {
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    auto sendChunk = [this](const String& s) { server->sendContent(s); };
+
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<title>Configuration - CPAP Data Uploader</title>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<style>";
+    html += "*{box-sizing:border-box;margin:0;padding:0}";
+    html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
+    html += "background:#0f1923;color:#c7d5e0;min-height:100vh;padding:20px}";
+    html += ".wrap{max-width:800px;margin:0 auto}";
+    html += "h1{font-size:1.6em;color:#fff;margin-bottom:20px}";
+    html += ".json-box{background:#1b2838;border:1px solid #2a475e;border-radius:10px;padding:20px;font-family:monospace;white-space:pre-wrap;color:#aaddff;overflow-x:auto}";
+    html += ".btn{display:inline-flex;align-items:center;padding:10px 18px;border-radius:6px;background:#2a475e;color:#c7d5e0;text-decoration:none;font-weight:600;border:none;cursor:pointer;transition:background 0.2s}";
+    html += ".btn:hover{background:#3a5a7e}";
+    html += "</style></head><body><div class='wrap'>";
     
-    // Terminate chunked transmission
+    server->send(200, "text/html; charset=utf-8", html);
+    
+    html = "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:20px'>";
+    html += "<h1>Configuration (JSON)</h1>";
+    html += "<a href='/' class='btn'>&larr; Dashboard</a>";
+    html += "</div>";
+    
+    html += "<div id='json' class='json-box'>Loading...</div>";
+    
+    html += "<script>";
+    html += "fetch('/api/config').then(r=>r.json()).then(d=>{";
+    html += "document.getElementById('json').textContent = JSON.stringify(d, null, 2);";
+    html += "});";
+    html += "</script>";
+
+    html += "</div></body></html>";
+    sendChunk(html);
+    server->sendContent("");
+}
+
+// GET /status - Display system status (HTML View)
+void TestWebServer::handleStatusPage() {
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    auto sendChunk = [this](const String& s) { server->sendContent(s); };
+
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<title>System Status - CPAP Data Uploader</title>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<style>";
+    html += "*{box-sizing:border-box;margin:0;padding:0}";
+    html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
+    html += "background:#0f1923;color:#c7d5e0;min-height:100vh;padding:20px}";
+    html += ".wrap{max-width:800px;margin:0 auto}";
+    html += "h1{font-size:1.6em;color:#fff;margin-bottom:20px}";
+    html += ".json-box{background:#1b2838;border:1px solid #2a475e;border-radius:10px;padding:20px;font-family:monospace;white-space:pre-wrap;color:#aaddff;overflow-x:auto}";
+    html += ".btn{display:inline-flex;align-items:center;padding:10px 18px;border-radius:6px;background:#2a475e;color:#c7d5e0;text-decoration:none;font-weight:600;border:none;cursor:pointer;transition:background 0.2s}";
+    html += ".btn:hover{background:#3a5a7e}";
+    html += "</style></head><body><div class='wrap'>";
+
+    server->send(200, "text/html; charset=utf-8", html);
+
+    html = "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:20px'>";
+    html += "<h1>System Status (JSON)</h1>";
+    html += "<a href='/' class='btn'>&larr; Dashboard</a>";
+    html += "</div>";
+
+    html += "<div id='json' class='json-box'>Loading...</div>";
+
+    html += "<script>";
+    html += "fetch('/api/status').then(r=>r.json()).then(d=>{";
+    html += "document.getElementById('json').textContent = JSON.stringify(d, null, 2);";
+    html += "});";
+    html += "</script>";
+
+    html += "</div></body></html>";
+    sendChunk(html);
+    server->sendContent("");
+}
+
+// GET /api/status - JSON status information
+void TestWebServer::handleApiStatus() {
+    // Add CORS headers
+    addCorsHeaders(server);
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    // Send headers with correct content type
+    server->send(200, "application/json", "");
+    
+    auto sendChunk = [this](const String& s) { server->sendContent(s); };
+    
+    String json = "{";
+    json += "\"uptime_seconds\":" + String(millis() / 1000) + ",";
+    json += "\"current_time\":\"" + getCurrentTimeString() + "\",";
+    json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
+    sendChunk(json);
+    
+    json = "";
+    if (wifiManager && wifiManager->isConnected()) {
+        json += "\"wifi_connected\":true,";
+        json += "\"wifi_rssi\":" + String(wifiManager->getSignalStrength()) + ",";
+        json += "\"wifi_quality\":\"" + wifiManager->getSignalQuality() + "\",";
+    } else {
+        json += "\"wifi_connected\":false,";
+    }
+    
+    if (scheduleManager) {
+        json += "\"next_upload_seconds\":" + String(scheduleManager->getSecondsUntilNextUpload()) + ",";
+        json += "\"time_synced\":" + String(scheduleManager->isTimeSynced() ? "true" : "false") + ",";
+    }
+    sendChunk(json);
+    
+    json = "";
+    if (stateManager) {
+        int completed = stateManager->getCompletedFoldersCount();
+        int incomplete = stateManager->getIncompleteFoldersCount();
+        int pending = stateManager->getPendingFoldersCount();
+        json += "\"completed_folders\":" + String(completed) + ",";
+        json += "\"incomplete_folders\":" + String(incomplete) + ",";
+        json += "\"pending_data_folders\":" + String(incomplete) + ",";
+        json += "\"pending_folders\":" + String(pending) + ",";
+        json += "\"total_folders\":" + String(completed + incomplete) + ",";
+        json += "\"upload_state_initialized\":" + String((completed + incomplete + pending) > 0 ? "true" : "false");
+    } else {
+        json += "\"completed_folders\":0,\"incomplete_folders\":0,\"total_folders\":0,\"upload_state_initialized\":false";
+    }
+    sendChunk(json);
+
+    json = "";
+    if (config) {
+        json += ",\"endpoint_type\":\"" + config->getEndpointType() + "\"";
+        json += ",\"boot_delay_seconds\":" + String(config->getBootDelaySeconds());
+        json += ",\"upload_mode\":\"" + config->getUploadMode() + "\"";
+        json += ",\"cloud_configured\":" + String(config->hasCloudEndpoint() ? "true" : "false");
+    }
+    sendChunk(json);
+
+    json = "}";
+    sendChunk(json);
     server->sendContent("");
 }
 
@@ -684,89 +795,119 @@ void TestWebServer::setOTAManager(OTAManager* ota) {
 
 // GET /ota - OTA update page
 void TestWebServer::handleOTAPage() {
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+
+    auto sendChunk = [this](const String& s) {
+        server->sendContent(s);
+    };
+
     String html = "<!DOCTYPE html><html><head>";
     html += "<title>Firmware Update - CPAP Auto-Uploader</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<style>";
-    html += "body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }";
-    html += "h1 { color: #333; }";
-    html += "h2 { color: #666; margin-top: 30px; }";
-    html += ".container { background: white; padding: 20px; border-radius: 8px; max-width: 800px; }";
-    html += ".info { margin: 10px 0; }";
-    html += ".label { font-weight: bold; display: inline-block; width: 200px; }";
-    html += ".value { color: #0066cc; }";
-    html += ".button { display: inline-block; padding: 10px 20px; margin: 10px 5px; ";
-    html += "background: #0066cc; color: white; text-decoration: none; border-radius: 4px; border: none; cursor: pointer; }";
-    html += ".button:hover { background: #0052a3; }";
-    html += ".button.danger { background: #cc0000; }";
-    html += ".button.danger:hover { background: #a30000; }";
-    html += ".form-group { margin: 15px 0; }";
-    html += ".form-group label { display: block; margin-bottom: 5px; font-weight: bold; }";
-    html += ".form-group input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }";
-    html += ".warning { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 15px 0; }";
-    html += ".error { background: #f8d7da; border: 1px solid #f5c6cb; padding: 15px; border-radius: 4px; margin: 15px 0; }";
-    html += ".success { background: #d4edda; border: 1px solid #c3e6cb; padding: 15px; border-radius: 4px; margin: 15px 0; }";
+    html += "*{box-sizing:border-box;margin:0;padding:0}";
+    html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
+    html += "background:#0f1923;color:#c7d5e0;min-height:100vh;padding:20px}";
+    html += ".wrap{max-width:900px;margin:0 auto}";
+    html += "h1{font-size:1.6em;color:#fff;margin-bottom:4px}";
+    html += ".subtitle{color:#66c0f4;font-size:0.9em;margin-bottom:20px}";
+    html += ".cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:20px}";
+    html += ".card{background:#1b2838;border:1px solid #2a475e;border-radius:10px;padding:18px}";
+    html += ".card h2{font-size:0.85em;text-transform:uppercase;letter-spacing:1px;color:#66c0f4;margin-bottom:12px;border-bottom:1px solid #2a475e;padding-bottom:8px}";
+    html += ".row{display:flex;justify-content:space-between;padding:5px 0;font-size:0.88em}";
+    html += ".row .k{color:#8f98a0}.row .v{color:#c7d5e0;font-weight:500;text-align:right}";
+    html += ".btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 18px;border-radius:6px;font-size:0.85em;font-weight:600;text-decoration:none;border:none;cursor:pointer;transition:all 0.2s;width:100%}";
+    html += ".btn-primary{background:#66c0f4;color:#0f1923}.btn-primary:hover{background:#88d0ff}";
+    html += ".btn-secondary{background:#2a475e;color:#c7d5e0;width:auto}.btn-secondary:hover{background:#3a5a7e}";
+    html += ".btn-danger{background:#c0392b;color:#fff}.btn-danger:hover{background:#e04030}";
+    html += ".alert{background:#3a2a1a;border:1px solid #aa6622;border-radius:8px;padding:14px;margin-bottom:16px}";
+    html += ".alert h3{color:#ffaa44;font-size:0.9em;margin-bottom:6px}";
+    html += ".alert ul{padding-left:20px;color:#c7d5e0;font-size:0.85em}";
+    html += ".alert li{margin-bottom:4px}";
+    html += ".form-group{margin-bottom:15px}";
+    html += ".form-group label{display:block;margin-bottom:6px;color:#8f98a0;font-size:0.9em}";
+    html += ".form-group input{width:100%;padding:10px;background:#0f1923;border:1px solid #2a475e;color:#fff;border-radius:6px;font-size:0.9em}";
+    html += ".form-group input:focus{outline:none;border-color:#66c0f4}";
+    html += ".status-msg{margin-top:10px;font-size:0.9em;min-height:1.2em}";
+    html += ".status-msg.success{color:#44ff44}";
+    html += ".status-msg.error{color:#ff4444}";
+    html += ".status-msg.info{color:#66c0f4}";
+    html += ".actions{margin-top:20px}";
     html += "</style>";
     html += "</head><body>";
-    html += "<div class='container'>";
-    html += "<h1>Firmware Update</h1>";
+    html += "<div class='wrap'>";
+    
+    server->send(200, "text/html; charset=utf-8", html);
+
+    html = "<h1>Firmware Update</h1>";
+    html += "<p class='subtitle'>System Maintenance</p>";
+    sendChunk(html);
+    
+    html = "<div class='cards'>";
     
     // Current version info
-    html += "<h2>Current Firmware</h2>";
+    html += "<div class='card'>";
+    html += "<h2>Current Status</h2>";
     if (otaManager) {
-        html += "<div class='info'><span class='label'>Version:</span><span class='value'>" + otaManager->getCurrentVersion() + "</span></div>";
+        html += "<div class='row'><span class='k'>Current Version</span><span class='v'>" + otaManager->getCurrentVersion() + "</span></div>";
     } else {
-        html += "<div class='info'><span class='label'>Version:</span><span class='value'>Unknown</span></div>";
+        html += "<div class='row'><span class='k'>Current Version</span><span class='v'>Unknown</span></div>";
     }
+    html += "</div>";
+    
+    // Warning message
+    html += "<div class='card' style='grid-column:1/-1'>";
+    html += "<h2>Important Safety Information</h2>";
+    html += "<div class='alert'>";
+    html += "<h3>WARNING</h3>";
+    html += "<ul>";
+    html += "<li><strong>Do not power off</strong> the device during update</li>";
+    html += "<li><strong>Ensure stable WiFi</strong> connection before starting</li>";
+    html += "<li><strong>Do NOT remove SD card</strong> from CPAP machine during update</li>";
+    html += "<li>Update process takes 1-2 minutes</li>";
+    html += "<li>Device will restart automatically when complete</li>";
+    html += "</ul>";
+    html += "</div>";
+    html += "</div>";
     
     // Check if update is in progress
     if (otaManager && otaManager->isUpdateInProgress()) {
-        html += "<div class='warning'>";
-        html += "<h3>Update in Progress</h3>";
-        html += "<p>A firmware update is currently in progress. Please wait for it to complete.</p>";
+        html += "<div class='card' style='grid-column:1/-1'>";
+        html += "<h2>Update In Progress</h2>";
+        html += "<p style='color:#ffaa44'>A firmware update is currently in progress. Please wait for it to complete.</p>";
         html += "</div>";
     } else {
-        // Warning message
-        html += "<div class='warning'>";
-        html += "<h3>WARNING: Important Safety Information</h3>";
-        html += "<ul>";
-        html += "<li><strong>Do not power off</strong> the device during update</li>";
-        html += "<li><strong>Ensure stable WiFi</strong> connection before starting</li>";
-        html += "<li><strong>Do NOT remove SD card</strong> from CPAP machine during update</li>";
-        html += "<li>Update process takes 1-2 minutes</li>";
-        html += "<li>Device will restart automatically when complete</li>";
-        html += "</ul>";
-        html += "</div>";
-        
         // File upload method
-        html += "<h2>Method 1: Upload Firmware File</h2>";
+        html += "<div class='card'>";
+        html += "<h2>Method 1: File Upload</h2>";
         html += "<form id='uploadForm' enctype='multipart/form-data'>";
         html += "<div class='form-group'>";
         html += "<label for='firmwareFile'>Select firmware file (.bin):</label>";
         html += "<input type='file' id='firmwareFile' name='firmware' accept='.bin' required>";
         html += "</div>";
-        html += "<button type='submit' class='button'>Upload & Install</button>";
-        html += "<span id='uploadStatus' style='margin-left: 10px; color: #0066cc;'></span>";
+        html += "<button type='submit' class='btn btn-primary'>Upload & Install</button>";
+        html += "<div id='uploadStatus' class='status-msg'></div>";
         html += "</form>";
+        html += "</div>";
         
         // URL download method
-        html += "<h2>Method 2: Download from URL</h2>";
+        html += "<div class='card'>";
+        html += "<h2>Method 2: URL Download</h2>";
         html += "<form id='urlForm'>";
         html += "<div class='form-group'>";
         html += "<label for='firmwareURL'>Firmware URL:</label>";
-        html += "<input type='url' id='firmwareURL' name='url' placeholder='https://github.com/amanuense/CPAP_data_uploader/releases/download/latest/firmware-ota-upgrade.bin' required>";
+        html += "<input type='url' id='firmwareURL' name='url' placeholder='https://github.com/.../firmware.bin' required>";
         html += "</div>";
-        html += "<button type='submit' class='button'>Download & Install</button>";
-        html += "<span id='downloadStatus' style='margin-left: 10px; color: #0066cc;'></span>";
+        html += "<button type='submit' class='btn btn-primary'>Download & Install</button>";
+        html += "<div id='downloadStatus' class='status-msg'></div>";
         html += "</form>";
-        
-        // Result display
-        html += "<div id='resultContainer'></div>";
+        html += "</div>";
     }
     
-    html += "<h2>Navigation</h2>";
-    html += "<a href='/' class='button'>Back to Status</a>";
+    html += "</div>"; // end cards
     
+    html += "<div class='actions'>";
+    html += "<a href='/' class='btn btn-secondary'>&larr; Back to Status</a>";
     html += "</div>";
     
     // JavaScript for handling uploads
@@ -774,7 +915,7 @@ void TestWebServer::handleOTAPage() {
     html += "let updateInProgress = false;";
     
     // File upload handler
-    html += "document.getElementById('uploadForm').addEventListener('submit', function(e) {";
+    html += "document.getElementById('uploadForm')?.addEventListener('submit', function(e) {";
     html += "  e.preventDefault();";
     html += "  if (updateInProgress) return;";
     html += "  const fileInput = document.getElementById('firmwareFile');";
@@ -783,7 +924,7 @@ void TestWebServer::handleOTAPage() {
     html += "});";
     
     // URL download handler
-    html += "document.getElementById('urlForm').addEventListener('submit', function(e) {";
+    html += "document.getElementById('urlForm')?.addEventListener('submit', function(e) {";
     html += "  e.preventDefault();";
     html += "  if (updateInProgress) return;";
     html += "  const url = document.getElementById('firmwareURL').value;";
@@ -794,52 +935,65 @@ void TestWebServer::handleOTAPage() {
     // Upload function
     html += "function uploadFirmware(file) {";
     html += "  updateInProgress = true;";
-    html += "  document.getElementById('uploadStatus').textContent = 'Uploading firmware...';";
+    html += "  setStatus('uploadStatus', 'info', 'Uploading firmware... 0%');";
     html += "  const formData = new FormData();";
     html += "  formData.append('firmware', file);";
-    html += "  fetch('/ota-upload', { method: 'POST', body: formData })";
-    html += "    .then(response => response.json())";
-    html += "    .then(data => handleResult(data))";
-    html += "    .catch(error => handleError('Upload failed: ' + error));";
+    html += "  const xhr = new XMLHttpRequest();";
+    html += "  xhr.upload.addEventListener('progress', function(e) {";
+    html += "    if (e.lengthComputable) {";
+    html += "      const percent = Math.round((e.loaded / e.total) * 100);";
+    html += "      setStatus('uploadStatus', 'info', 'Uploading firmware... ' + percent + '%');";
+    html += "    }";
+    html += "  });";
+    html += "  xhr.addEventListener('load', function() {";
+    html += "    try {";
+    html += "      const data = JSON.parse(xhr.responseText);";
+    html += "      handleResult(data, 'uploadStatus');";
+    html += "    } catch(e) { handleResult({success:false, message:'Invalid response'}, 'uploadStatus'); }";
+    html += "  });";
+    html += "  xhr.addEventListener('error', function() { handleResult({success:false, message:'Network error'}, 'uploadStatus'); });";
+    html += "  xhr.open('POST', '/ota-upload');";
+    html += "  xhr.send(formData);";
     html += "}";
     
     // Download function
     html += "function downloadFirmware(url) {";
     html += "  updateInProgress = true;";
-    html += "  document.getElementById('downloadStatus').textContent = 'Downloading firmware...';";
+    html += "  setStatus('downloadStatus', 'info', 'Downloading firmware... (this may take a minute)');";
     html += "  const formData = new FormData();";
     html += "  formData.append('url', url);";
     html += "  fetch('/ota-url', { method: 'POST', body: formData })";
     html += "    .then(response => response.json())";
-    html += "    .then(data => handleResult(data))";
-    html += "    .catch(error => handleError('Download failed: ' + error));";
+    html += "    .then(data => handleResult(data, 'downloadStatus'))";
+    html += "    .catch(error => handleResult({success:false, message:String(error)}, 'downloadStatus'));";
     html += "}";
     
     // Result handlers
-    html += "function handleResult(data) {";
+    html += "function setStatus(id, type, msg) {";
+    html += "  const el = document.getElementById(id);";
+    html += "  if(el) { el.className = 'status-msg ' + type; el.textContent = msg; }";
+    html += "}";
+    
+    html += "function handleResult(data, statusId) {";
     html += "  updateInProgress = false;";
-    html += "  document.getElementById('uploadStatus').textContent = '';";
-    html += "  document.getElementById('downloadStatus').textContent = '';";
-    html += "  const container = document.getElementById('resultContainer');";
     html += "  if (data.success) {";
-    html += "    container.innerHTML = '<div class=\"success\"><h3>Update Successful!</h3><p>' + data.message + '</p><p>Redirecting to status page in 60 seconds...</p></div>';";
-    html += "    setTimeout(() => { window.location.href = '/'; }, 60000);";
+    html += "    setStatus(statusId, 'success', 'Success! ' + data.message);";
+    html += "    let timeLeft = 30;";
+    html += "    setInterval(() => {";
+    html += "      timeLeft--;";
+    html += "      if (timeLeft <= 0) window.location.href = '/';";
+    html += "      else setStatus(statusId, 'success', 'Success! Redirecting to dashboard in ' + timeLeft + 's...');";
+    html += "    }, 1000);";
     html += "  } else {";
-    html += "    container.innerHTML = '<div class=\"error\"><h3>Update Failed</h3><p>' + data.message + '</p></div>';";
+    html += "    setStatus(statusId, 'error', 'Failed: ' + data.message);";
     html += "  }";
     html += "}";
     
-    html += "function handleError(message) {";
-    html += "  updateInProgress = false;";
-    html += "  document.getElementById('uploadStatus').textContent = '';";
-    html += "  document.getElementById('downloadStatus').textContent = '';";
-    html += "  document.getElementById('resultContainer').innerHTML = '<div class=\"error\"><h3>Error</h3><p>' + message + '</p></div>';";
-    html += "}";
-    
     html += "</script>";
-    html += "</body></html>";
+    html += "</div></body></html>";
+    sendChunk(html);
     
-    server->send(200, "text/html; charset=utf-8", html);
+    server->sendContent("");
 }
 
 // POST /ota-upload - Handle firmware file upload
@@ -1064,78 +1218,131 @@ void TestWebServer::handleSdActivity() {
 }
 
 void TestWebServer::handleMonitorPage() {
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    
+    auto sendChunk = [this](const String& s) {
+        server->sendContent(s);
+    };
+
     String html = "<!DOCTYPE html><html><head>";
     html += "<title>SD Activity Monitor - CPAP Auto-Uploader</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<style>";
-    html += "body{font-family:monospace;background:#1a1a2e;color:#e0e0e0;margin:20px}";
-    html += "h1{color:#00d4ff}";
-    html += ".stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:20px 0}";
-    html += ".stat{background:#16213e;padding:15px;border-radius:8px;text-align:center}";
-    html += ".stat .value{font-size:2em;color:#00d4ff;display:block;margin:5px 0}";
-    html += ".stat .label{color:#888;font-size:0.9em}";
-    html += ".bar-chart{background:#16213e;padding:15px;border-radius:8px;margin:20px 0;overflow-x:auto}";
-    html += ".bar-row{display:flex;align-items:center;height:20px;margin:2px 0}";
-    html += ".bar-label{width:60px;text-align:right;padding-right:8px;font-size:0.8em;color:#888}";
-    html += ".bar{height:16px;border-radius:2px;min-width:1px;transition:width 0.3s}";
-    html += ".bar.active{background:#ff4444}";
-    html += ".bar.idle{background:#16213e}";
-    html += ".indicator{display:inline-block;width:20px;height:20px;border-radius:50%;margin-left:10px;vertical-align:middle}";
-    html += ".indicator.busy{background:#ff4444;box-shadow:0 0 10px #ff4444}";
-    html += ".indicator.idle{background:#44ff44;box-shadow:0 0 10px #44ff44}";
-    html += "button{background:#00d4ff;color:#000;border:none;padding:12px 24px;border-radius:6px;";
-    html += "font-size:1em;cursor:pointer;margin:5px}";
-    html += "button:hover{background:#00b4d8}";
-    html += "button.stop{background:#ff4444}button.stop:hover{background:#cc3333}";
-    html += "a{color:#00d4ff}";
-    html += "</style></head><body>";
+    html += "*{box-sizing:border-box;margin:0;padding:0}";
+    html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
+    html += "background:#0f1923;color:#c7d5e0;min-height:100vh;padding:20px}";
+    html += ".wrap{max-width:900px;margin:0 auto}";
+    html += "h1{font-size:1.6em;color:#fff;margin-bottom:4px}";
+    html += ".subtitle{color:#66c0f4;font-size:0.9em;margin-bottom:20px}";
+    html += ".card{background:#1b2838;border:1px solid #2a475e;border-radius:10px;padding:18px;margin-bottom:16px}";
+    html += ".card h2{font-size:0.85em;text-transform:uppercase;letter-spacing:1px;color:#66c0f4;margin-bottom:12px;border-bottom:1px solid #2a475e;padding-bottom:8px}";
+    html += ".btn{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:6px;font-size:0.85em;font-weight:600;text-decoration:none;border:none;cursor:pointer;transition:all 0.2s}";
+    html += ".btn-primary{background:#66c0f4;color:#0f1923}.btn-primary:hover{background:#88d0ff}";
+    html += ".btn-danger{background:#c0392b;color:#fff}.btn-danger:hover{background:#e04030}";
+    html += ".btn-secondary{background:#2a475e;color:#c7d5e0}.btn-secondary:hover{background:#3a5a7e}";
     
-    html += "<h1>SD Activity Monitor <span id='indicator' class='indicator idle'></span></h1>";
-    html += "<p><a href='/'>← Back to Status</a></p>";
+    // Monitor specific styles
+    html += ".stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}";
+    html += ".stat-box{background:#16213e;padding:15px;border-radius:8px;text-align:center;border:1px solid #2a475e}";
+    html += ".stat-val{font-size:1.8em;color:#66c0f4;display:block;margin:5px 0;font-family:monospace}";
+    html += ".stat-lbl{color:#8f98a0;font-size:0.85em}";
     
-    html += "<div style='margin:20px 0'>";
-    html += "<button onclick='startMonitor()'>Start Monitor</button>";
-    html += "<button class='stop' onclick='stopMonitor()'>Stop Monitor</button>";
-    html += "</div>";
-    
-    html += "<div class='stats'>";
-    html += "<div class='stat'><span class='label'>Last Pulse Count</span><span class='value' id='pulses'>--</span></div>";
-    html += "<div class='stat'><span class='label'>Consecutive Idle</span><span class='value' id='idle'>--</span></div>";
-    html += "<div class='stat'><span class='label'>Longest Idle</span><span class='value' id='longest'>--</span></div>";
-    html += "<div class='stat'><span class='label'>Active / Idle Samples</span><span class='value' id='ratio'>--</span></div>";
-    html += "</div>";
-    
-    html += "<h2>Activity Timeline (1 bar = 1 second)</h2>";
-    html += "<div class='bar-chart' id='chart'><em>Waiting for data...</em></div>";
-    
-    html += "<script>";
-    html += "let polling=null;";
-    html += "function startMonitor(){fetch('/api/monitor-start').then(()=>{if(!polling)polling=setInterval(fetchData,1000);})}";
-    html += "function stopMonitor(){fetch('/api/monitor-stop');if(polling){clearInterval(polling);polling=null;}}";
-    html += "function fetchData(){fetch('/api/sd-activity').then(r=>r.json()).then(d=>{";
-    html += "document.getElementById('pulses').textContent=d.last_pulse_count;";
-    html += "document.getElementById('idle').textContent=(d.consecutive_idle_ms/1000).toFixed(1)+'s';";
-    html += "document.getElementById('longest').textContent=(d.longest_idle_ms/1000).toFixed(1)+'s';";
-    html += "document.getElementById('ratio').textContent=d.total_active_samples+' / '+d.total_idle_samples;";
-    html += "let ind=document.getElementById('indicator');";
-    html += "ind.className='indicator '+(d.is_busy?'busy':'idle');";
-    html += "let chart=document.getElementById('chart');";
-    html += "if(d.samples&&d.samples.length>0){";
-    html += "let html='';";
-    html += "d.samples.forEach(s=>{";
-    html += "let w=Math.min(Math.max(s.p/10,1),300);";
-    html += "let cls=s.a?'active':'idle';";
-    html += "let sec=s.t%3600;let m=Math.floor(sec/60);let ss=sec%60;";
-    html += "let lbl=String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');";
-    html += "html+='<div class=\"bar-row\"><span class=\"bar-label\">'+lbl+'</span>';";
-    html += "html+='<div class=\"bar '+cls+'\" style=\"width:'+w+'px\" title=\"'+s.p+' pulses\"></div>';";
-    html += "html+=' <small>'+s.p+'</small></div>';";
-    html += "});chart.innerHTML=html;}";
-    html += "}).catch(e=>console.error('Fetch error:',e));}";
-    html += "startMonitor();";  // Auto-start on page load
-    html += "</script>";
-    
-    html += "</body></html>";
+    html += ".chart-container{background:#16213e;padding:15px;border-radius:8px;border:1px solid #2a475e;overflow-x:auto;min-height:200px}";
+    html += ".bar-row{display:flex;align-items:center;height:18px;margin:2px 0;font-family:monospace;font-size:0.8em}";
+    html += ".bar-lbl{width:50px;color:#8f98a0;text-align:right;padding-right:8px}";
+    html += ".bar-track{flex-grow:1;background:#0f1923;height:100%;border-radius:2px;overflow:hidden}";
+    html += ".bar-fill{height:100%;transition:width 0.3s}";
+    html += ".bar-fill.active{background:#ff4444}";
+    html += ".bar-fill.idle{background:#2a475e}";
+    html += ".indicator{display:inline-block;width:12px;height:12px;border-radius:50%;margin-left:10px}";
+    html += ".indicator.busy{background:#ff4444;box-shadow:0 0 8px #ff4444}";
+    html += ".indicator.idle{background:#44ff44;box-shadow:0 0 8px #44ff44}";
+    html += "</style></head><body><div class='wrap'>";
     
     server->send(200, "text/html; charset=utf-8", html);
+    
+    // Header
+    html = "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:20px'>";
+    html += "<div><h1>SD Activity Monitor <span id='indicator' class='indicator idle'></span></h1>";
+    html += "<p class='subtitle'>Real-time Bus Traffic Analysis</p></div>";
+    html += "<button onclick='stopAndExit()' class='btn btn-secondary'>&larr; Back to Status</button>";
+    html += "</div>";
+    sendChunk(html);
+    
+    // Explanation Card
+    html = "<div class='card'>";
+    html += "<h2>About This Tool</h2>";
+    html += "<p style='font-size:0.9em;color:#c7d5e0;line-height:1.5'>This tool monitors electrical signals on the SD card bus to detect when the CPAP machine is writing data. <strong>Use this when the CPAP is turned on and the SD card is inserted.</strong></p>";
+    html += "<p style='font-size:0.9em;color:#c7d5e0;margin-top:8px'>It helps identify the best 'Idle' times to configure for safe uploads. When the bus is 'Busy' (Red), the CPAP is writing. When 'Idle' (Green), it is safe to take control.</p>";
+    html += "</div>";
+    sendChunk(html);
+    
+    // Controls
+    html = "<div class='card'>";
+    html += "<h2>Controls</h2>";
+    html += "<div style='display:flex;gap:10px'>";
+    html += "<button id='btn-start' onclick='startMonitor()' class='btn btn-primary'>Start Monitoring</button>";
+    html += "<button id='btn-stop' onclick='stopMonitor()' class='btn btn-danger' style='display:none'>Stop Monitoring</button>";
+    html += "</div></div>";
+    sendChunk(html);
+    
+    // Stats Grid
+    html = "<div class='stats-grid'>";
+    html += "<div class='stat-box'><span class='stat-lbl'>Pulse Count (1s)</span><span class='stat-val' id='pulses'>--</span></div>";
+    html += "<div class='stat-box'><span class='stat-lbl'>Consecutive Idle</span><span class='stat-val' id='idle'>--</span></div>";
+    html += "<div class='stat-box'><span class='stat-lbl'>Longest Idle</span><span class='stat-val' id='longest'>--</span></div>";
+    html += "<div class='stat-box'><span class='stat-lbl'>Active/Idle Ratio</span><span class='stat-val' id='ratio'>--</span></div>";
+    html += "</div>";
+    sendChunk(html);
+    
+    // Chart
+    html = "<div class='card'>";
+    html += "<h2>Activity Timeline (Last 60s)</h2>";
+    html += "<div class='chart-container' id='chart'><em>Waiting for data...</em></div>";
+    html += "</div>";
+    sendChunk(html);
+    
+    // Scripts
+    html = "<script>";
+    html += "let polling=null;";
+    html += "function stopAndExit(){stopMonitor(); setTimeout(()=>{window.location.href='/';}, 500);}";
+    html += "function startMonitor(){fetch('/api/monitor-start').then(()=>{";
+    html += "  document.getElementById('btn-start').style.display='none';";
+    html += "  document.getElementById('btn-stop').style.display='inline-flex';";
+    html += "  if(!polling) polling=setInterval(fetchData,1000);";
+    html += "});}";
+    html += "function stopMonitor(){fetch('/api/monitor-stop');";
+    html += "  document.getElementById('btn-start').style.display='inline-flex';";
+    html += "  document.getElementById('btn-stop').style.display='none';";
+    html += "  if(polling){clearInterval(polling);polling=null;}";
+    html += "}";
+    html += "function fetchData(){fetch('/api/sd-activity').then(r=>r.json()).then(d=>{";
+    html += "  document.getElementById('pulses').textContent=d.last_pulse_count;";
+    html += "  document.getElementById('idle').textContent=(d.consecutive_idle_ms/1000).toFixed(1)+'s';";
+    html += "  document.getElementById('longest').textContent=(d.longest_idle_ms/1000).toFixed(1)+'s';";
+    html += "  document.getElementById('ratio').textContent=d.total_active_samples+' / '+d.total_idle_samples;";
+    html += "  let ind=document.getElementById('indicator');";
+    html += "  ind.className='indicator '+(d.is_busy?'busy':'idle');";
+    html += "  let chart=document.getElementById('chart');";
+    html += "  if(d.samples&&d.samples.length>0){";
+    html += "    let html='';";
+    html += "    d.samples.forEach(s=>{";
+    html += "      let w=Math.min(Math.max(s.p/10,1),100);";
+    html += "      let cls=s.a?'active':'idle';";
+    html += "      let sec=s.t%3600;let m=Math.floor(sec/60);let ss=sec%60;";
+    html += "      let lbl=String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');";
+    html += "      html+='<div class=\"bar-row\"><span class=\"bar-lbl\">'+lbl+'</span>';";
+    html += "      html+='<div class=\"bar-track\"><div class=\"bar-fill '+cls+'\" style=\"width:'+w+'%\"></div></div>';";
+    html += "      html+='</div>';";
+    html += "    });";
+    html += "    chart.innerHTML=html;";
+    html += "  }";
+    html += "}).catch(e=>console.error('Fetch error:',e));}";
+    html += "startMonitor();"; // Auto-start
+    html += "</script>";
+    
+    html += "</div></body></html>";
+    sendChunk(html);
+    
+    server->sendContent("");
 }
