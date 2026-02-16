@@ -370,11 +370,11 @@ void TestWebServer::handleApiConfig() {
         json += "\"upload_end_hour\":" + String(config->getUploadEndHour()) + ",";
         json += "\"inactivity_seconds\":" + String(config->getInactivitySeconds()) + ",";
         json += "\"exclusive_access_minutes\":" + String(config->getExclusiveAccessMinutes()) + ",";
-        json += "\"cooldown_minutes\":" + String(config->getCooldownMinutes()) + ",";
+        json += "\"cooldown_minutes\":" + String(config->getCooldownMinutes());
         sendChunk(json);
         
         // Cloud upload config
-        json = "";
+        json = ",";
         if (config->hasCloudEndpoint()) {
             json += "\"cloud_client_id\":\"" + escapeJson(config->getCloudClientId()) + "\",";
             json += "\"cloud_client_secret\":\"***HIDDEN***\",";
@@ -390,6 +390,7 @@ void TestWebServer::handleApiConfig() {
         }
         // Add credentials_secured field to indicate storage mode
         json += "\"credentials_secured\":" + String(credentialsSecured ? "true" : "false");
+        sendChunk(json);
     } else {
         // If config is null, send minimal JSON
         server->send(200, "application/json", json);
