@@ -403,6 +403,8 @@ bool SleepHQUploader::createImport() {
                     if (importIdVal > 0) {
                         currentImportId = String(importIdVal);
                         LOGF("[SleepHQ] Import created: %s (raw TLS)", currentImportId.c_str());
+                        extern volatile unsigned long g_uploadHeartbeat;
+                        g_uploadHeartbeat = millis();
                         return true;
                     }
                 }
@@ -568,6 +570,8 @@ bool SleepHQUploader::processImport() {
             if (httpCode == 200 || httpCode == 201) {
                 LOGF("[SleepHQ] Import %s submitted for processing", currentImportId.c_str());
                 currentImportId = "";
+                extern volatile unsigned long g_uploadHeartbeat;
+                g_uploadHeartbeat = millis();
                 return true;
             }
             LOG_ERRORF("[SleepHQ] Process import failed with HTTP %d (raw TLS)", httpCode);
@@ -1149,6 +1153,10 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             if (writeError) {
                 break;
             }
+            
+            // Feed software watchdog during large file streaming
+            extern volatile unsigned long g_uploadHeartbeat;
+            g_uploadHeartbeat = millis();
         }
         file.close();
 
@@ -1165,6 +1173,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 LOG_WARN("[SleepHQ] WiFi disconnected during stream, waiting for reconnection...");
                 unsigned long startWait = millis();
                 while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    extern volatile unsigned long g_uploadHeartbeat;
+                    g_uploadHeartbeat = millis();
                     delay(100);
                 }
             } else {
@@ -1175,6 +1185,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 WiFi.reconnect();
                 unsigned long wifiWait = millis();
                 while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
+                    extern volatile unsigned long g_uploadHeartbeat;
+                    g_uploadHeartbeat = millis();
                     delay(100);
                 }
                 resetTLS();
@@ -1194,6 +1206,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 LOG_WARN("[SleepHQ] WiFi disconnected during stream write, waiting for reconnection...");
                 unsigned long startWait = millis();
                 while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    extern volatile unsigned long g_uploadHeartbeat;
+                    g_uploadHeartbeat = millis();
                     delay(100);
                 }
             } else {
@@ -1203,6 +1217,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 WiFi.reconnect();
                 unsigned long wifiWait = millis();
                 while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
+                    extern volatile unsigned long g_uploadHeartbeat;
+                    g_uploadHeartbeat = millis();
                     delay(100);
                 }
                 resetTLS();
@@ -1256,6 +1272,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 LOG_WARN("[SleepHQ] WiFi disconnected awaiting response, waiting for reconnection...");
                 unsigned long startWait = millis();
                 while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    extern volatile unsigned long g_uploadHeartbeat;
+                    g_uploadHeartbeat = millis();
                     delay(100);
                 }
             }
@@ -1327,6 +1345,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 LOG_WARN("[SleepHQ] WiFi disconnected during headers, waiting for reconnection...");
                 unsigned long startWait = millis();
                 while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
+                    extern volatile unsigned long g_uploadHeartbeat;
+                    g_uploadHeartbeat = millis();
                     delay(100);
                 }
             }
@@ -1444,6 +1464,13 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         }
 
         bytesTransferred = totalSent;
+        
+        // Feed software watchdog after successful file upload
+        {
+            extern volatile unsigned long g_uploadHeartbeat;
+            g_uploadHeartbeat = millis();
+        }
+        
         return httpCode > 0;
     }
     return false;
