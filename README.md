@@ -48,9 +48,11 @@ Follow the included instructions to flash firmware to your SD WIFI PRO.
 ### 3. Create Simple Config
 Create `config.txt` on your SD card with just **6-10 lines**:
 
-**👇 Click the option you want to use** (or click ▸ to expand additional options):
+**👇👇👇 Click the option you want to use** (or click ▸ to expand additional options):
 
-<details open>
+---
+
+<details>
 <summary><b>📤 Network Share (SMB)</b></summary>
 
 ```ini
@@ -90,7 +92,11 @@ CLOUD_CLIENT_SECRET = your-client-secret
 ```
 </details>
 
+---
+
 **That's it!** Insert the SD card in your CPAP machine and you're done. Everything else has smart defaults.
+
+---
 
 **💻 Web Interface:** Once running, access the dashboard at **`http://cpap.local`** to monitor uploads, view logs, and manage settings.
 
