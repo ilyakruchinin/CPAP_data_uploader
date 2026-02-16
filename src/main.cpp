@@ -226,10 +226,18 @@ void setup() {
         delay(1000);
     }
 
-    // Check if a state reset was requested before last reboot (NVS flag)
+    // Check NVS flags from previous boot
     {
         Preferences resetPrefs;
         resetPrefs.begin("cpap_flags", false);
+        
+        // Check if software watchdog killed the upload task last boot
+        bool watchdogKill = resetPrefs.getBool("watchdog_kill", false);
+        if (watchdogKill) {
+            LOG_WARN("=== Previous boot: upload task was killed by software watchdog (hung >2 min) ===");
+            resetPrefs.putBool("watchdog_kill", false);
+        }
+        
         bool resetPending = resetPrefs.getBool("reset_state", false);
         if (resetPending) {
             LOG("=== Completing deferred state reset (flag set before reboot) ===");
@@ -707,28 +715,24 @@ void loop() {
     
     // ── Software watchdog for upload task ──
     // If the upload task hasn't sent a heartbeat in UPLOAD_WATCHDOG_TIMEOUT_MS, it's hung.
-    // Force-kill it and recover — prevents indefinite hang when IDLE0 WDT is disabled.
+    // Force-kill it and reboot — vTaskDelete mid-SD-I/O corrupts the SD bus,
+    // making remount impossible. A clean reboot is the only reliable recovery.
     if (uploadTaskRunning && g_uploadHeartbeat > 0 &&
         (millis() - g_uploadHeartbeat > UPLOAD_WATCHDOG_TIMEOUT_MS)) {
-        LOG_ERROR("[FSM] Upload task appears hung (no heartbeat for 2 minutes) — force killing");
+        LOG_ERROR("[FSM] Upload task appears hung (no heartbeat for 2 minutes) — rebooting");
+        
+        // Set NVS flag so we can log the reason on next boot
+        Preferences wdPrefs;
+        wdPrefs.begin("cpap_flags", false);
+        wdPrefs.putBool("watchdog_kill", true);
+        wdPrefs.end();
+        
         if (uploadTaskHandle) {
             vTaskDelete(uploadTaskHandle);
         }
-        uploadTaskRunning = false;
-        uploadTaskComplete = false;
-        uploadTaskHandle = nullptr;
-        g_uploadHeartbeat = 0;
         
-        // Re-subscribe IDLE0 to hardware watchdog
-        esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
-        
-        // Restore web server in uploader
-#ifdef ENABLE_TEST_WEBSERVER
-        if (uploader) uploader->setWebServer(testWebServer);
-#endif
-        
-        // Transition to error recovery
-        transitionTo(UploadState::RELEASING);
+        delay(300);
+        esp_restart();
     }
     
     // ── Web trigger handlers (operate independently of FSM) ──
