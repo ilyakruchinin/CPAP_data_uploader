@@ -63,7 +63,11 @@ Upload the firmware using the included scripts (details below in [Quick Start](#
 ### Step 2: Create `config.txt` 
 Create a file named `config.txt` on your SD card with **just these lines**:
 
-<details open>
+**👇👇👇 Click the option you want to use** (or click ▸ to expand additional options):
+
+---
+
+<details>
 <summary><b>📤 For Network Share (SMB)</b></summary>
 
 ```ini
@@ -98,6 +102,28 @@ CLOUD_CLIENT_SECRET = your-sleephq-client-secret
 **That's it!** Replace with your actual WiFi and SleepHQ credentials.
 </details>
 
+<details>
+<summary><b>🔄 For Both SMB + SleepHQ (Dual Upload)</b></summary>
+
+```ini
+# WiFi
+WIFI_SSID = YourWiFiName
+WIFI_PASSWORD = YourWiFiPassword
+
+# Dual Upload
+ENDPOINT_TYPE = SMB,CLOUD
+ENDPOINT = //192.168.1.100/cpap_backups
+ENDPOINT_USER = username
+ENDPOINT_PASSWORD = password
+CLOUD_CLIENT_ID = your-sleephq-client-id
+CLOUD_CLIENT_SECRET = your-sleephq-client-secret
+```
+
+**That's it!** Provide both SMB and SleepHQ credentials to upload to both destinations.
+</details>
+
+---
+
 **All other settings are optional and have smart defaults.**
 
 ### Step 3: Insert SD Card & Done!
@@ -106,6 +132,8 @@ Insert the SD card into your CPAP machine. The device will automatically:
 - ✅ Sync time
 - ✅ Wait for therapy to end (Smart Mode)
 - ✅ Upload your CPAP data
+
+**💻 Web Interface:** Once running, access the dashboard at **`http://cpap.local`** to monitor uploads, view logs, and manage settings.
 
 **No complex setup. No JSON syntax. Just simple key = value pairs.**
 
