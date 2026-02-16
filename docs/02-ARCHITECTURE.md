@@ -2,7 +2,7 @@
 
 ## 1. Upload Modes
 
-The firmware supports two upload modes, selected via `UPLOAD_MODE` in config.json.
+The firmware supports two upload modes, selected via `UPLOAD_MODE` in config.txt.
 
 ### 1.1 Scheduled Mode (`"scheduled"`)
 

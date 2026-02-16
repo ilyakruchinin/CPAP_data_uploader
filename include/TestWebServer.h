@@ -37,10 +37,13 @@ private:
     // Request handlers
     void handleRoot();
     void handleTriggerUpload();
-    void handleStatus();
+    void handleStatusPage();      // HTML Status Page
+    void handleApiStatus();       // JSON Status API
     void handleResetState();
-    void handleConfig();
-    void handleLogs();
+    void handleConfigPage();      // HTML Config Page
+    void handleApiConfig();       // JSON Config API
+    void handleLogs();            // HTML Logs Viewer (AJAX)
+    void handleApiLogs();         // Raw Logs API
     void handleNotFound();
     void handleMonitorStart();
     void handleMonitorStop();

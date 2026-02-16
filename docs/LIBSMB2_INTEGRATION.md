@@ -303,7 +303,7 @@ Linking .pio/build/pico32/firmware.elf
 ### Runtime Test
 
 1. Configure WiFi credentials
-2. Set SMB server details in `config.json`
+2. Set SMB server details in `config.txt`
 3. Upload firmware
 4. Monitor serial output for connection status
 
