@@ -268,10 +268,17 @@ void setup() {
         LOG_ERROR("Failed to load configuration - cannot continue");
         LOG_ERROR("Please check config.txt file on SD card");
         
-        // Dump logs to SD card for configuration failures
-        Logger::getInstance().dumpLogsToSDCard("config_load_failed");
-        
         sdManager.releaseControl();
+        
+        // Dump logs to SD card for configuration failures
+        bool dumped = Logger::getInstance().dumpLogsToSDCard("config_load_failed");
+        if (!dumped) {
+            LOG_WARN("Failed to dump logs to SD card (config_load_failed)");
+        }
+
+        // Fail-safe: always force SD switch back to CPAP before aborting setup
+        digitalWrite(SD_SWITCH_PIN, SD_SWITCH_CPAP_VALUE);
+        
         return;
     }
 
