@@ -23,9 +23,12 @@ v0.8.2 is a bug-fix release that resolves two critical issues reported in v0.8.1
 **Solution:** 
 - Changed CS_SENSE pin initialization from `INPUT_PULLUP` to `INPUT` (floating) to rely on external pull-ups.
 - Hardened the configuration-failure path to explicitly release SD control before log dump and force SD switch handoff back to CPAP as a final fail-safe before aborting setup.
+- Hardened mixed-backend config validation: when `ENDPOINT_TYPE=SMB,CLOUD` (or includes WEBDAV) and `ENDPOINT` is empty, SMB/WEBDAV are now disabled for that run while valid CLOUD uploads continue.
+- Added explicit startup visibility of effective backends (`SMB/CLOUD/WEBDAV`) after validation.
 
 **Files Changed:**
 - `src/main.cpp`: Updated pin mode and hardened `loadFromSD` error path handoff behavior
+- `src/Config.cpp`: Disabled invalid SMB/WEBDAV backends at validation time and logged effective backend set
 - `src/SDCardManager.cpp`: Changed `pinMode(CS_SENSE, INPUT)`
 - `src/TrafficMonitor.cpp`: Changed `pinMode(_pin, INPUT)`
 
