@@ -13,7 +13,7 @@ void SDCardManager::setControlPin(bool espControl) {
 bool SDCardManager::begin() {
     // Initialize control pins
     pinMode(SD_SWITCH_PIN, OUTPUT);
-    pinMode(CS_SENSE, INPUT_PULLUP);
+    pinMode(CS_SENSE, INPUT);
     
     // Explicitly release control to CPAP machine on boot
     // This ensures the CPAP machine has access to the SD card immediately
