@@ -27,8 +27,8 @@ TrafficMonitor::TrafficMonitor()
 void TrafficMonitor::begin(int pin) {
     _pin = pin;
     
-    // Configure GPIO as input with pull-up
-    pinMode(_pin, INPUT_PULLUP);
+    // Configure GPIO as input (floating - rely on external pull-ups on SD bus)
+    pinMode(_pin, INPUT);
     
     // Configure PCNT unit
     pcnt_config_t pcntConfig = {};

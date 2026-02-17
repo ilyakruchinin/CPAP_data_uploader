@@ -152,7 +152,7 @@ void setup() {
     // CRITICAL: Immediately release SD card control to CPAP machine
     // This must happen before any delays to prevent CPAP machine errors
     // Initialize control pins
-    pinMode(CS_SENSE, INPUT_PULLUP);
+    pinMode(CS_SENSE, INPUT);
     pinMode(SD_SWITCH_PIN, OUTPUT);
     digitalWrite(SD_SWITCH_PIN, SD_SWITCH_CPAP_VALUE);
     
