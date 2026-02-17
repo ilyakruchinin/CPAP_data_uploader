@@ -469,17 +469,22 @@ bool Config::loadFromSD(fs::FS &sd) {
     
     bool hasValidEndpoint = false;
     if (hasSmbEndpoint()) {
-        hasValidEndpoint = !endpoint.isEmpty();
-        if (!hasValidEndpoint) {
-            LOG_ERROR("SMB endpoint configured but ENDPOINT is empty");
+        bool smbValid = !endpoint.isEmpty();
+        if (!smbValid) {
+            LOG_WARN("SMB endpoint configured but ENDPOINT is empty - SMB backend will be disabled for this run");
+            _hasSmbEndpoint = false;
+        } else {
+            hasValidEndpoint = true;
         }
     }
     if (hasWebdavEndpoint()) {
         bool webdavValid = !endpoint.isEmpty();
         if (!webdavValid) {
-            LOG_ERROR("WEBDAV endpoint configured but ENDPOINT is empty");
+            LOG_WARN("WEBDAV endpoint configured but ENDPOINT is empty - WEBDAV backend will be disabled for this run");
+            _hasWebdavEndpoint = false;
+        } else {
+            hasValidEndpoint = true;
         }
-        hasValidEndpoint = hasValidEndpoint || webdavValid;
     }
     if (hasCloudEndpoint()) {
         bool cloudValid = !cloudClientId.isEmpty();
@@ -530,6 +535,10 @@ bool Config::loadFromSD(fs::FS &sd) {
         LOG("========================================");
         LOG("Configuration loaded successfully");
         LOGF("Endpoint type: %s", endpointType.c_str());
+        LOGF("Backends active this run: SMB=%s CLOUD=%s WEBDAV=%s",
+             hasSmbEndpoint() ? "YES" : "NO",
+             hasCloudEndpoint() ? "YES" : "NO",
+             hasWebdavEndpoint() ? "YES" : "NO");
         LOG_DEBUGF("Storage mode: %s", storePlainText ? "PLAIN TEXT" : "SECURE");
         LOG_DEBUGF("Credentials in flash: %s", credentialsInFlash ? "YES" : "NO");
         // ... (logging continues)
