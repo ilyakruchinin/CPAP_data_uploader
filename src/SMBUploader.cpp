@@ -16,6 +16,12 @@ extern "C" {
 #define UPLOAD_BUFFER_SIZE 8192
 #define UPLOAD_BUFFER_FALLBACK_SIZE 4096
 
+extern volatile unsigned long g_uploadHeartbeat;
+
+static inline void feedUploadHeartbeat() {
+    g_uploadHeartbeat = millis();
+}
+
 SMBUploader::SMBUploader(const String& endpoint, const String& user, const String& password)
     : smbUser(user), smbPassword(password), smb2(nullptr), connected(false) {
     parseEndpoint(endpoint);
@@ -311,6 +317,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             localFile.close();
             return false;
         }
+        feedUploadHeartbeat();
     }
     
     // Open remote file for writing
@@ -344,6 +351,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         }
         LOG_WARN("[SMB] Using fallback buffer size for this file");
     }
+    feedUploadHeartbeat();
     
     // Track upload timing
     unsigned long startTime = millis();
@@ -386,6 +394,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         }
         
         bytesTransferred += bytesWritten;
+        feedUploadHeartbeat();
         
         // Print progress for large files (every 1MB)
         if (bytesTransferred % (1024 * 1024) == 0) {
@@ -402,20 +411,21 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         LOG("[SMB] Upload incomplete - file may be corrupted on remote server");
         success = false;
     }
-    
+        
     // Cleanup
     free(buffer);
-    
+
     // Close remote file
     if (smb2_close(smb2, remoteFile) < 0) {
         LOGF("[SMB] WARNING: Failed to close remote file: %s", smb2_get_error(smb2));
         // Don't fail the upload if close fails - data was already written
     }
-    
+
     localFile.close();
-    
+    feedUploadHeartbeat();
+        
     unsigned long uploadTime = millis() - startTime;
-    
+        
     if (success) {
         float transferRate = uploadTime > 0 ? (bytesTransferred / 1024.0) / (uploadTime / 1000.0) : 0.0;
         LOGF("[SMB] Upload complete: %lu bytes in %lu ms (%.2f KB/s)", 
