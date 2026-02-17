@@ -12,8 +12,9 @@ extern "C" {
     #include "smb2/libsmb2.h"
 }
 
-// Buffer size for file streaming (32KB for good performance)
-#define UPLOAD_BUFFER_SIZE 32768
+// Buffer size for file streaming (8KB to avoid fragmentation in mixed-backend mode)
+#define UPLOAD_BUFFER_SIZE 8192
+#define UPLOAD_BUFFER_FALLBACK_SIZE 4096
 
 SMBUploader::SMBUploader(const String& endpoint, const String& user, const String& password)
     : smbUser(user), smbPassword(password), smb2(nullptr), connected(false) {
@@ -327,14 +328,21 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         return false;
     }
     
-    // Allocate buffer for streaming
+    // Allocate buffer for streaming (try primary size, fallback to smaller if fragmented)
     uint8_t* buffer = (uint8_t*)malloc(UPLOAD_BUFFER_SIZE);
+    size_t bufferSize = UPLOAD_BUFFER_SIZE;
     if (buffer == nullptr) {
-        LOG("[SMB] ERROR: Failed to allocate upload buffer");
-        LOG("[SMB] System may be low on memory");
-        smb2_close(smb2, remoteFile);
-        localFile.close();
-        return false;
+        LOG_WARN("[SMB] Failed to allocate primary upload buffer, trying fallback size");
+        buffer = (uint8_t*)malloc(UPLOAD_BUFFER_FALLBACK_SIZE);
+        bufferSize = UPLOAD_BUFFER_FALLBACK_SIZE;
+        if (buffer == nullptr) {
+            LOG("[SMB] ERROR: Failed to allocate fallback upload buffer");
+            LOG("[SMB] System may be low on memory");
+            smb2_close(smb2, remoteFile);
+            localFile.close();
+            return false;
+        }
+        LOG_WARN("[SMB] Using fallback buffer size for this file");
     }
     
     // Track upload timing
@@ -345,7 +353,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
     unsigned long totalBytesRead = 0;
     
     while (localFile.available()) {
-        size_t bytesRead = localFile.read(buffer, UPLOAD_BUFFER_SIZE);
+        size_t bytesRead = localFile.read(buffer, bufferSize);
         if (bytesRead == 0) {
             // Check if we've read all expected bytes
             if (totalBytesRead < fileSize) {
