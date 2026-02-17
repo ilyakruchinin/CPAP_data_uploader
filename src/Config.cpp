@@ -125,12 +125,6 @@ String Config::trimComment(String line) {
         return line.substring(0, commentPos);
     }
     
-    // Handle C++ style comments
-    commentPos = line.indexOf("//");
-    if (commentPos != -1) {
-        return line.substring(0, commentPos);
-    }
-    
     return line;
 }
 
