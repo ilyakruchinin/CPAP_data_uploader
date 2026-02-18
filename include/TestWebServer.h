@@ -25,7 +25,8 @@ class TestWebServer {
 private:
     WebServer* server;
     Config* config;
-    UploadStateManager* stateManager;
+    UploadStateManager* stateManager;     // cloud (or sole) state manager
+    UploadStateManager* smbStateManager;  // SMB state manager (may be null)
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
     CPAPMonitor* cpapMonitor;
@@ -82,6 +83,7 @@ public:
     
     // Update manager references (needed after uploader recreation)
     void updateManagers(UploadStateManager* state, ScheduleManager* schedule);
+    void setSmbStateManager(UploadStateManager* sm);
     void setWiFiManager(WiFiManager* wifi);
     void setTrafficMonitor(TrafficMonitor* tm);
 

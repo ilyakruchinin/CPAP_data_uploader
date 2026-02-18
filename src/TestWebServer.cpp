@@ -76,6 +76,7 @@ TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
     : server(nullptr),
       config(cfg),
       stateManager(state),
+      smbStateManager(nullptr),
       scheduleManager(schedule),
       wifiManager(wifi),
       cpapMonitor(monitor),
@@ -479,8 +480,12 @@ void TestWebServer::handleStatusPage() {
     server->sendHeader("Connection", "close");
     server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }
-// GET /api/status - serve pre-built static status snapshot. Zero heap allocation.
+// GET /api/status - rebuild snapshot on demand then serve it.
+// Must NOT rely on the main-loop periodic rebuild: during blocking uploads
+// the main loop is frozen, so g_webStatusBuf would be permanently stale.
+// updateStatusSnapshot() is stack-only (no heap) and safe to call here.
 void TestWebServer::handleApiStatus() {
+    updateStatusSnapshot();
     addCorsHeaders(server);
     server->send(200, "application/json", g_webStatusBuf);
 }
@@ -506,11 +511,24 @@ void TestWebServer::updateStatusSnapshot() {
         rssi = wifiManager->getSignalStrength();
         strncpy(wifiIp, wifiManager->getIPAddress().c_str(), sizeof(wifiIp) - 1);
     }
+    // Show folder counts from whichever backend is currently active so the
+    // progress bar moves during both the SMB pass and the cloud pass.
+    // When idle, fall back to the primary (cloud) state manager.
     int comp = 0, inc = 0, pend = 0;
-    if (stateManager) {
-        comp = stateManager->getCompletedFoldersCount();
-        inc  = stateManager->getIncompleteFoldersCount();
-        pend = stateManager->getPendingFoldersCount();
+    UploadStateManager* activeSm = nullptr;
+    if (g_smbSessionStatus.uploadActive && smbStateManager) {
+        activeSm = smbStateManager;           // SMB pass is running
+    } else if (g_cloudSessionStatus.uploadActive && stateManager) {
+        activeSm = stateManager;              // Cloud pass is running
+    } else if (stateManager) {
+        activeSm = stateManager;              // Idle — show primary (cloud) counts
+    } else if (smbStateManager) {
+        activeSm = smbStateManager;           // SMB-only config, idle
+    }
+    if (activeSm) {
+        comp = activeSm->getCompletedFoldersCount();
+        inc  = activeSm->getIncompleteFoldersCount();
+        pend = activeSm->getPendingFoldersCount();
     }
     long nextUp = -1; bool timeSynced = false;
     if (scheduleManager) {
@@ -590,6 +608,8 @@ void TestWebServer::updateManagers(UploadStateManager* state, ScheduleManager* s
     stateManager = state;
     scheduleManager = schedule;
 }
+
+void TestWebServer::setSmbStateManager(UploadStateManager* sm) { smbStateManager = sm; }
 
 // Set WiFi manager reference
 void TestWebServer::setWiFiManager(WiFiManager* wifi) {
