@@ -50,6 +50,11 @@ static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
            strstr(smbError, "STATUS_NETWORK_NAME_DELETED") != nullptr ||
            strstr(smbError, "Wrong signature in received PDU") != nullptr ||
            strstr(smbError, "Wrong signature") != nullptr ||
+           strstr(smbError, "smb2_service: POLLERR") != nullptr ||
+           strstr(smbError, "POLLERR") != nullptr ||
+           strstr(smbError, "Unknown socket error") != nullptr ||
+           strstr(smbError, "Connect failed with errno") != nullptr ||
+           strstr(smbError, "Host is unreachable") != nullptr ||
            strstr(smbError, "timed out") != nullptr ||
            strstr(smbError, "TIMEOUT") != nullptr ||
            strstr(smbError, "Connection reset") != nullptr;
@@ -515,6 +520,11 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             }
 
             if (remoteFile == nullptr) {
+                if (isRecoverableSmbWriteError(errno, error)) {
+                    LOG_WARN("[SMB] Open failed with transport/socket state error; disconnecting SMB context");
+                    disconnect();
+                }
+
                 LOGF("[SMB] ERROR: Failed to open remote file: %s", error);
                 LOGF("[SMB] Remote path: %s", fullRemotePath.c_str());
                 LOG("[SMB] Possible causes:");
@@ -545,6 +555,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         // Stream file data
         bool success = true;
         bool skipRemoteClose = false;
+        bool transportErrorDetected = false;
         unsigned long totalBytesRead = 0;
 
         while (localFile.available()) {
@@ -576,10 +587,16 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
                 LOG("[SMB]   - Remote server disk full");
                 LOG("[SMB]   - SMB command timeout");
 
-                if (attempt < SMB_UPLOAD_MAX_ATTEMPTS && isRecoverableSmbWriteError(writeErrno, error)) {
-                    shouldRetry = true;
+                bool recoverableTransportError = isRecoverableSmbWriteError(writeErrno, error);
+                if (recoverableTransportError) {
+                    transportErrorDetected = true;
                     skipRemoteClose = true;
-                    LOG_WARN("[SMB] Recoverable SMB transport error detected, will reconnect and retry once");
+                    if (attempt < SMB_UPLOAD_MAX_ATTEMPTS) {
+                        shouldRetry = true;
+                        LOG_WARN("[SMB] Recoverable SMB transport error detected, will reconnect and retry once");
+                    } else {
+                        LOG_WARN("[SMB] Recoverable SMB transport error detected but retry budget exhausted");
+                    }
                 }
 
                 success = false;
@@ -638,7 +655,11 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         if (skipRemoteClose) {
             LOG_WARN("[SMB] Skipping smb2_close after recoverable transport failure; forcing reconnect");
         } else if (smb2_close(smb2, remoteFile) < 0) {
-            LOGF("[SMB] WARNING: Failed to close remote file: %s", smb2_get_error(smb2));
+            const char* closeError = smb2_get_error(smb2);
+            LOGF("[SMB] WARNING: Failed to close remote file: %s", closeError);
+            if (isRecoverableSmbWriteError(errno, closeError)) {
+                transportErrorDetected = true;
+            }
             // Don't fail the upload if close fails - data was already written
         }
 
@@ -663,6 +684,11 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         LOGF("[SMB] Upload failed - Expected %u bytes, transferred %lu bytes",
              (unsigned int)fileSize,
              attemptBytesTransferred);
+
+        if (transportErrorDetected) {
+            LOG_WARN("[SMB] Forcing SMB disconnect after transport failure to avoid stale socket reuse");
+            disconnect();
+        }
 
         if (!shouldRetry) {
             return false;
