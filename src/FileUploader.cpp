@@ -84,6 +84,29 @@ bool FileUploader::begin(fs::FS &sd) {
             config->getEndpointPassword()
         );
         LOG("[FileUploader] SMBUploader created (will connect during upload)");
+        
+        // Pre-allocate SMB buffer NOW (before Cloud TLS init fragments heap)
+        // Adaptive size based on current heap state
+        uint32_t maxAlloc = ESP.getMaxAllocHeap();
+        size_t smbBufferSize;
+        if (maxAlloc > 80000) {
+            smbBufferSize = 8192;  // 8KB for pristine heap
+        } else if (maxAlloc > 50000) {
+            smbBufferSize = 4096;  // 4KB for moderate heap
+        } else if (maxAlloc > 30000) {
+            smbBufferSize = 2048;  // 2KB for fragmented heap
+        } else {
+            smbBufferSize = 1024;  // 1KB minimum
+        }
+        
+        LOGF("[FileUploader] Heap state: free=%u, max_alloc=%u, allocating SMB buffer=%u",
+             ESP.getFreeHeap(), maxAlloc, smbBufferSize);
+        
+        if (!smbUploader->allocateBuffer(smbBufferSize)) {
+            LOG_ERROR("[FileUploader] Failed to allocate SMB buffer - SMB uploads may fail");
+            // Don't fail init - let upload attempts handle the error
+        }
+        
         anyBackendCreated = true;
     }
 #endif
