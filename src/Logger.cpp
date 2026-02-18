@@ -3,10 +3,40 @@
 #ifndef UNIT_TEST
 #include "SDCardManager.h"
 #include <WiFi.h>
+
+#ifdef ENABLE_LOG_RESOURCE_SUFFIX
+#include <errno.h>
+#include <fcntl.h>
+#endif
 #endif
 
 #include <stdarg.h>
 #include <time.h>
+
+#ifndef UNIT_TEST
+#ifdef ENABLE_LOG_RESOURCE_SUFFIX
+namespace {
+
+int getFreeFileDescriptorCount() {
+    // ESP-IDF/Arduino doesn't expose a stable public API for fd range across all versions.
+    // Use a conservative bounded scan for diagnostics.
+    static constexpr int kFdScanLimit = 64;
+
+    int openCount = 0;
+    for (int fd = 0; fd < kFdScanLimit; ++fd) {
+        errno = 0;
+        if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) {
+            openCount++;
+        }
+    }
+
+    int freeCount = kFdScanLimit - openCount;
+    return freeCount >= 0 ? freeCount : 0;
+}
+
+}  // namespace
+#endif
+#endif
 
 // Singleton instance getter
 Logger& Logger::getInstance() {
@@ -97,6 +127,20 @@ void Logger::log(const char* message) {
 
     // Prepend timestamp
     String timestampedMsg = getTimestamp() + String(message);
+
+#ifndef UNIT_TEST
+#ifdef ENABLE_LOG_RESOURCE_SUFFIX
+    const uint32_t freeHeap = ESP.getFreeHeap();
+    const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
+    const int freeFdCount = getFreeFileDescriptorCount();
+
+    timestampedMsg += " [res fh=" + String(freeHeap) +
+                      " ma=" + String(maxAllocHeap) +
+                      " fd=" + (freeFdCount >= 0 ? String(freeFdCount) : String("?")) +
+                      "]";
+#endif
+#endif
+
     const char* finalMsg = timestampedMsg.c_str();
     size_t len = timestampedMsg.length();
     
@@ -360,6 +404,89 @@ size_t Logger::printLogs(Print& output) {
         bytesWritten += bytesToRead;
         pos += bytesToRead;
         
+        // Yield to allow other tasks to run
+        yield();
+    }
+
+    return bytesWritten;
+}
+
+// Print only the newest tail of logs to a Print destination
+size_t Logger::printLogsTail(Print& output, size_t maxBytes) {
+    if (!initialized || buffer == nullptr || mutex == nullptr || maxBytes == 0) {
+        return 0;
+    }
+
+    // Acquire mutex for thread-safe buffer access
+    if (xSemaphoreTake(mutex, portMAX_DELAY) != pdTRUE) {
+        return 0;
+    }
+
+    // Calculate available data to read (from tail to head)
+    uint32_t availableBytes = headIndex - tailIndex;
+    if (availableBytes > bufferSize) {
+        availableBytes = bufferSize;
+    }
+
+    if (availableBytes == 0) {
+        xSemaphoreGive(mutex);
+        return 0;
+    }
+
+    // Snapshot indices under lock, but trim the start to requested tail size
+    uint32_t currentHead = headIndex;
+    uint32_t currentTail = tailIndex;
+
+    uint32_t tailBytes = (maxBytes < availableBytes) ? (uint32_t)maxBytes : availableBytes;
+    uint32_t desiredStart = (currentHead > tailBytes) ? (currentHead - tailBytes) : 0;
+    if (desiredStart > currentTail) {
+        currentTail = desiredStart;
+    }
+
+    xSemaphoreGive(mutex);
+
+    size_t bytesWritten = 0;
+    char chunk[128];
+    uint32_t pos = currentTail;
+
+    while (pos < currentHead) {
+        // Re-acquire mutex to read a chunk safely
+        if (xSemaphoreTake(mutex, portMAX_DELAY) != pdTRUE) {
+            break;
+        }
+
+        // Check if our reader position has been overtaken by writer (buffer wrap)
+        if (tailIndex > pos) {
+            pos = tailIndex;
+        }
+
+        if (pos >= currentHead) {
+            xSemaphoreGive(mutex);
+            break;
+        }
+
+        size_t bytesToRead = sizeof(chunk);
+        if (currentHead - pos < bytesToRead) {
+            bytesToRead = currentHead - pos;
+        }
+
+        if (bytesToRead == 0) {
+            xSemaphoreGive(mutex);
+            break;
+        }
+
+        for (size_t i = 0; i < bytesToRead; i++) {
+            size_t physicalPos = (pos + i) % bufferSize;
+            chunk[i] = buffer[physicalPos];
+        }
+
+        xSemaphoreGive(mutex);
+
+        // Write chunk to output
+        output.write((const uint8_t*)chunk, bytesToRead);
+        bytesWritten += bytesToRead;
+        pos += bytesToRead;
+
         // Yield to allow other tasks to run
         yield();
     }

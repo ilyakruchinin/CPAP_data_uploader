@@ -5,7 +5,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-WiFiManager::WiFiManager() : connected(false) {}
+WiFiManager::WiFiManager() : connected(false), mdnsStarted(false) {}
 
 void WiFiManager::setupEventHandlers() {
     WiFi.onEvent(onWiFiEvent);
@@ -224,6 +224,10 @@ bool WiFiManager::isConnected() const {
 }
 
 void WiFiManager::disconnect() {
+    if (mdnsStarted) {
+        MDNS.end();
+        mdnsStarted = false;
+    }
     WiFi.disconnect();
     connected = false;
 }
@@ -276,14 +280,23 @@ bool WiFiManager::startMDNS(const String& hostname) {
     }
 
     LOGF("Starting mDNS responder with hostname: %s.local", name.c_str());
+
+    // Ensure stale responder state from prior reconnects is released first.
+    if (mdnsStarted) {
+        MDNS.end();
+        mdnsStarted = false;
+        delay(10);
+    }
     
     if (MDNS.begin(name.c_str())) {
         LOG("mDNS responder started successfully");
         // Advertise web server service
         MDNS.addService("http", "tcp", 80);
+        mdnsStarted = true;
         return true;
     } else {
         LOG_ERROR("Failed to start mDNS responder");
+        mdnsStarted = false;
         return false;
     }
 }
