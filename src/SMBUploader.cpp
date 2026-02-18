@@ -256,15 +256,14 @@ bool SMBUploader::createDirectory(const String& path) {
         return true;  // Root always exists
     }
     
-    // Check heap before attempting directory operations
-    // libsmb2 needs contiguous memory for PDU structures, commands, and buffers
+    // Check heap before attempting directory operations.
+    // IMPORTANT: Do not skip create/check in low-memory mode, otherwise we can
+    // incorrectly report success and then fail smb2_open with PATH_NOT_FOUND.
     uint32_t maxAlloc = ESP.getMaxAllocHeap();
     if (maxAlloc < 50000) {
-        // Too fragmented - libsmb2 stat/mkdir will likely fail with OOM
-        // Assume directory exists to avoid cascade failures
-        LOG_DEBUGF("[SMB] Low memory (%u bytes), skipping directory check for: %s", maxAlloc, cleanPath.c_str());
-        LOG_DEBUG("[SMB] Assuming directory exists to prevent libsmb2 internal OOM");
-        return true;
+        LOG_WARNF("[SMB] Low memory (%u bytes), still validating/creating directory: %s",
+                  maxAlloc,
+                  cleanPath.c_str());
     }
     
     // Check if directory already exists
@@ -384,9 +383,10 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         LOG_DEBUGF("[SMB] Remote path: %s", fullRemotePath.c_str());
 
         // Ensure parent directory exists
+        String parentDir;
         int lastSlash = fullRemotePath.lastIndexOf('/');
         if (lastSlash > 0) {
-            String parentDir = fullRemotePath.substring(0, lastSlash);
+            parentDir = fullRemotePath.substring(0, lastSlash);
             if (!createDirectory(parentDir)) {
                 LOGF("[SMB] ERROR: Failed to create parent directory: %s", parentDir.c_str());
                 LOG("[SMB] Check permissions on remote share");
@@ -400,14 +400,35 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         struct smb2fh* remoteFile = smb2_open(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
         if (remoteFile == nullptr) {
             const char* error = smb2_get_error(smb2);
-            LOGF("[SMB] ERROR: Failed to open remote file: %s", error);
-            LOGF("[SMB] Remote path: %s", fullRemotePath.c_str());
-            LOG("[SMB] Possible causes:");
-            LOG("[SMB]   - Insufficient permissions on remote share");
-            LOG("[SMB]   - Disk full on remote server");
-            LOG("[SMB]   - Invalid characters in filename");
-            localFile.close();
-            return false;
+
+            // Defensive recovery: if parent path is missing, create it again and retry open once.
+            if (!parentDir.isEmpty() && error &&
+                (strstr(error, "STATUS_OBJECT_PATH_NOT_FOUND") != nullptr ||
+                 strstr(error, "PATH_NOT_FOUND") != nullptr)) {
+                LOG_WARNF("[SMB] Parent path missing for %s, retrying directory creation", parentDir.c_str());
+                if (createDirectory(parentDir)) {
+                    feedUploadHeartbeat();
+                    remoteFile = smb2_open(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
+                    if (remoteFile != nullptr) {
+                        LOG_DEBUGF("[SMB] Recovered missing directory path: %s", parentDir.c_str());
+                    } else {
+                        error = smb2_get_error(smb2);
+                    }
+                } else {
+                    LOG_WARNF("[SMB] Retry directory creation failed for: %s", parentDir.c_str());
+                }
+            }
+
+            if (remoteFile == nullptr) {
+                LOGF("[SMB] ERROR: Failed to open remote file: %s", error);
+                LOGF("[SMB] Remote path: %s", fullRemotePath.c_str());
+                LOG("[SMB] Possible causes:");
+                LOG("[SMB]   - Insufficient permissions on remote share");
+                LOG("[SMB]   - Disk full on remote server");
+                LOG("[SMB]   - Invalid characters in filename");
+                localFile.close();
+                return false;
+            }
         }
 
         // Check if upload buffer is allocated
