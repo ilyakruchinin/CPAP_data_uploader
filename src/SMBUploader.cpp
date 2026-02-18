@@ -1,5 +1,6 @@
 #include "SMBUploader.h"
 #include "Logger.h"
+#include "NetworkRecovery.h"
 
 #ifdef ENABLE_SMB_UPLOAD
 
@@ -18,7 +19,7 @@ extern "C" {
 // Buffer size for file streaming (8KB to avoid fragmentation in mixed-backend mode)
 #define UPLOAD_BUFFER_SIZE 8192
 #define UPLOAD_BUFFER_FALLBACK_SIZE 4096
-#define SMB_COMMAND_TIMEOUT_SECONDS 30
+#define SMB_COMMAND_TIMEOUT_SECONDS 15
 #define SMB_UPLOAD_MAX_ATTEMPTS 2
 #define SMB_WRITE_EAGAIN_RETRIES 6
 #define SMB_WRITE_EAGAIN_BASE_DELAY_MS 20
@@ -87,29 +88,12 @@ static bool isTransientSmbSocketBackpressure(int errorCode, const char* smbError
 }
 
 static bool recoverWiFiAfterSmbTransportFailure() {
-    const unsigned long WIFI_WAIT_TIMEOUT_MS = 10000;
-
-    if (WiFi.status() == WL_CONNECTED) {
-        LOG_WARN("[SMB] WiFi link is still up after SMB reconnect failure; skipping WiFi cycle to avoid tearing down other sockets");
-        return true;
-    }
-
-    LOG_WARN("[SMB] WiFi is disconnected during SMB reconnect; attempting WiFi reconnect");
-
-    WiFi.reconnect();
-    unsigned long wifiWaitStart = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - wifiWaitStart < WIFI_WAIT_TIMEOUT_MS) {
-        feedUploadHeartbeat();
-        delay(100);
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-        LOG_INFO("[SMB] WiFi recovered, will retry SMB reconnect once");
-        return true;
-    }
-
-    LOG_ERROR("[SMB] WiFi recovery failed after SMB transport error");
-    return false;
+    // Delegate to the coordinated cycle which enforces the SMB-active guard,
+    // the 45-second cooldown, and the in-progress-cycle wait — preventing the
+    // double-cycle ASSOC_LEAVE storms that caused EHOSTUNREACH (errno 113).
+    // g_smbConnectionActive is already false here because disconnect() was
+    // called before this function, so the SMB guard does not block us.
+    return tryCoordinatedWifiCycle(true);
 }
 
 SMBUploader::SMBUploader(const String& endpoint, const String& user, const String& password)
@@ -234,6 +218,7 @@ bool SMBUploader::connect() {
     }
     
     connected = true;
+    g_smbConnectionActive = true;
     lastVerifiedParentDir = "";
     LOG("[SMB] Connected successfully");
     
@@ -259,6 +244,7 @@ bool SMBUploader::connect() {
 }
 
 void SMBUploader::disconnect() {
+    g_smbConnectionActive = false;
     if (smb2 != nullptr) {
         if (connected) {
             smb2_disconnect_share(smb2);
