@@ -47,29 +47,75 @@ bool TestWebServer::begin() {
     LOG("[TestWebServer] Initializing web server on port 80...");
     
     server = new WebServer(80);
+
+    // Collect Host header so requests to *.local can be redirected to the device IP.
+    const char* headerKeys[] = {"Host"};
+    server->collectHeaders(headerKeys, 1);
     
     // Register request handlers
-    server->on("/", [this]() { this->handleRoot(); });
-    server->on("/trigger-upload", [this]() { this->handleTriggerUpload(); });
+    server->on("/", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleRoot();
+    });
+    server->on("/trigger-upload", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleTriggerUpload();
+    });
     
     // HTML Views
-    server->on("/status", [this]() { this->handleStatusPage(); });
-    server->on("/config", [this]() { this->handleConfigPage(); });
-    server->on("/logs", [this]() { this->handleLogs(); });
-    server->on("/monitor", [this]() { this->handleMonitorPage(); });
+    server->on("/status", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleStatusPage();
+    });
+    server->on("/config", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleConfigPage();
+    });
+    server->on("/logs", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleLogs();
+    });
+    server->on("/monitor", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleMonitorPage();
+    });
     
     // APIs
-    server->on("/api/status", [this]() { this->handleApiStatus(); });
-    server->on("/api/config", [this]() { this->handleApiConfig(); });
-    server->on("/api/logs", [this]() { this->handleApiLogs(); });
-    server->on("/api/monitor-start", [this]() { this->handleMonitorStart(); });
-    server->on("/api/monitor-stop", [this]() { this->handleMonitorStop(); });
-    server->on("/api/sd-activity", [this]() { this->handleSdActivity(); });
-    server->on("/reset-state", [this]() { this->handleResetState(); });
+    server->on("/api/status", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiStatus();
+    });
+    server->on("/api/config", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiConfig();
+    });
+    server->on("/api/logs", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogs();
+    });
+    server->on("/api/monitor-start", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleMonitorStart();
+    });
+    server->on("/api/monitor-stop", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleMonitorStop();
+    });
+    server->on("/api/sd-activity", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleSdActivity();
+    });
+    server->on("/reset-state", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleResetState();
+    });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
-    server->on("/ota", [this]() { this->handleOTAPage(); });
+    server->on("/ota", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleOTAPage();
+    });
     server->on("/ota-upload", HTTP_POST, 
                [this]() { this->handleOTAUploadComplete(); },
                [this]() { this->handleOTAUpload(); });
@@ -78,6 +124,7 @@ bool TestWebServer::begin() {
     
     // Handle common browser requests silently
     server->on("/favicon.ico", [this]() { 
+        if (this->redirectToIpIfMdnsRequest()) return;
         // Return empty 204 No Content with proper content type
         server->send(204, "text/plain", ""); 
     });
@@ -105,6 +152,52 @@ void TestWebServer::handleClient() {
     if (server) {
         server->handleClient();
     }
+}
+
+bool TestWebServer::redirectToIpIfMdnsRequest() {
+    if (!server || server->method() != HTTP_GET) {
+        return false;
+    }
+
+    String host = server->header("Host");
+    if (host.isEmpty()) {
+        return false;
+    }
+
+    host.trim();
+    int colonPos = host.indexOf(':');
+    if (colonPos > 0) {
+        host = host.substring(0, colonPos);
+    }
+    host.toLowerCase();
+
+    if (!host.endsWith(".local")) {
+        return false;
+    }
+
+    if (!wifiManager || !wifiManager->isConnected()) {
+        return false;
+    }
+
+    String ip = wifiManager->getIPAddress();
+    if (ip.isEmpty() || ip == "Not connected") {
+        return false;
+    }
+
+    String uri = server->uri();
+    if (uri.isEmpty()) {
+        uri = "/";
+    }
+
+    String location = "http://" + ip + uri;
+    LOG_DEBUGF("[TestWebServer] Redirecting mDNS request %s -> %s", host.c_str(), location.c_str());
+
+    server->sendHeader("Location", location, true);
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Pragma", "no-cache");
+    server->sendHeader("Connection", "close");
+    server->send(302, "text/plain", "Redirecting to device IP");
+    return true;
 }
 
 // GET / - HTML status page (modern dark dashboard)

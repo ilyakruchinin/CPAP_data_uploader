@@ -64,6 +64,7 @@ private:
     int getPendingFilesCount();
     int getPendingFoldersCount();
     String escapeJson(const String& str);
+    bool redirectToIpIfMdnsRequest();
     
     // Static helper methods
     static void addCorsHeaders(WebServer* server);
