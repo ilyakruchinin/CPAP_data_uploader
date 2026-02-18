@@ -87,6 +87,7 @@ private:
     void finalizeCloudImport(class SDCardManager* sdManager, fs::FS &sd);
     bool cloudImportCreated;
     bool cloudImportFailed;
+    int  cloudDatalogFilesUploaded;  // DATALOG files uploaded this cloud pass; 0 = skip finalize
 
     // Return the primary state manager (cloud if configured, else smb)
     UploadStateManager* primaryStateManager() const {

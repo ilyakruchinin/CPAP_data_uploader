@@ -19,7 +19,8 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
       webServer(nullptr),
 #endif
       cloudImportCreated(false),
-      cloudImportFailed(false)
+      cloudImportFailed(false),
+      cloudDatalogFilesUploaded(0)
 #ifdef ENABLE_SMB_UPLOAD
       , smbUploader(nullptr)
 #endif
@@ -201,6 +202,18 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         if (smbUploader->isConnected()) smbUploader->end();
         smbStateManager->save(sd);
 
+        // Destroy the SMB uploader entirely to reclaim its 8 KB upload buffer
+        // before the cloud TLS pass.  After the SMB pass the uploader is no
+        // longer needed; freeing the buffer here can raise max_alloc by ~8 KB
+        // (from ~47 KB → ~55 KB), which is often the margin that lets both
+        // the OAuth and the import-creation TLS sessions succeed.
+        LOGF("[FileUploader] SMB pass done — heap before SMB teardown: fh=%u ma=%u",
+             (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+        delete smbUploader;
+        smbUploader = nullptr;
+        LOGF("[FileUploader] SMB uploader freed — heap after teardown:  fh=%u ma=%u",
+             (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+
         // Clear SMB status bar
         g_smbSessionStatus.uploadActive  = false;
         g_smbSessionStatus.filesUploaded  = 0;
@@ -210,67 +223,84 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
 #endif
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Cloud PASS — TLS/OAuth runs here; max_alloc drops to ~39 KB but SMB
-    // is already done, so the signing-buffer allocation failure cannot occur.
+    // Cloud PASS — single TLS session: begin() does OAuth + team-discovery +
+    // createImport() while heap is fresh (post-SMB-teardown). All DATALOG
+    // folders are uploaded into that one import; mandatory root/SETTINGS
+    // files and processImport() are called once at the very end.
     // ═══════════════════════════════════════════════════════════════════════
 #ifdef ENABLE_SLEEPHQ_UPLOAD
     if (!timerExpired && sleephqUploader && cloudStateManager) {
         LOG("[FileUploader] === Cloud Pass ===");
+        cloudDatalogFilesUploaded = 0;
 
-        std::vector<String> cloudFreshFolders, cloudOldFolders;
-        if (needFresh || needOld) {
-            std::vector<String> all = scanDatalogFolders(sd, cloudStateManager);
-            for (const String& f : all) {
-                if (isRecentFolder(f)) cloudFreshFolders.push_back(f);
-                else                   cloudOldFolders.push_back(f);
-            }
-            LOGF("[FileUploader] Cloud scan: %d fresh, %d old folders",
-                 (int)cloudFreshFolders.size(), (int)cloudOldFolders.size());
-        }
-
-        int consecutiveCloudFailures = 0;
-
-        auto runCloudFolder = [&](const String& folder) -> bool {
-            if (isTimerExpired()) {
-                timerExpired = true;
-                if (cloudImportCreated) finalizeCloudImport(sdManager, sd);
-                return false;
-            }
-            bool ok = uploadDatalogFolderCloud(sdManager, folder);
-            if (cloudImportCreated) {
-                finalizeCloudImport(sdManager, sd);
-            }
-            if (!ok) {
-                consecutiveCloudFailures++;
-                LOGF("[FileUploader] Folder %s had cloud errors, trying next", folder.c_str());
-                cloudImportFailed = false;
-                if (sleephqUploader && !sleephqUploader->isTlsAlive()) {
-                    sleephqUploader->resetConnection();
-                }
-                if (consecutiveCloudFailures >= 2) {
-                    LOG("[FileUploader] Cloud heap fragmented beyond recovery, stopping early");
-                    return false;
-                }
+        // Eagerly connect + create import NOW, while max_alloc is at its peak
+        // after SMB teardown.  begin() internally calls createImport() over
+        // the same TLS session — no second handshake required.
+        if (!sleephqUploader->isConnected()) {
+            LOG("[FileUploader] Initializing cloud session (OAuth + import)...");
+            LOGF("[FileUploader] Heap before cloud begin: fh=%u ma=%u",
+                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+            if (!sleephqUploader->begin()) {
+                LOG_ERROR("[FileUploader] Cloud init failed — skipping cloud pass");
+                cloudImportFailed = true;
             } else {
-                consecutiveCloudFailures = 0;
+                cloudImportCreated = true;
+                LOGF("[FileUploader] Cloud session ready — heap: fh=%u ma=%u",
+                     (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
             }
-#ifdef ENABLE_TEST_WEBSERVER
-            if (webServer) webServer->handleClient();
-#endif
-            return consecutiveCloudFailures < 2;
-        };
-
-        if (!timerExpired && needFresh) {
-            LOG("[FileUploader] Phase 1: Fresh DATALOG folders (cloud)");
-            for (const String& folder : cloudFreshFolders) {
-                if (!runCloudFolder(folder)) break;
+        } else {
+            // Already connected from a previous attempt; ensure import exists
+            if (!cloudImportCreated && !cloudImportFailed) {
+                if (!sleephqUploader->createImport()) {
+                    cloudImportFailed = true;
+                } else {
+                    cloudImportCreated = true;
+                }
             }
         }
 
-        if (!timerExpired && needOld && scheduleManager && scheduleManager->canUploadOldData()) {
-            LOG("[FileUploader] Phase 2: Old DATALOG folders (cloud)");
-            for (const String& folder : cloudOldFolders) {
-                if (!runCloudFolder(folder)) break;
+        if (!cloudImportFailed) {
+            std::vector<String> cloudFreshFolders, cloudOldFolders;
+            if (needFresh || needOld) {
+                std::vector<String> all = scanDatalogFolders(sd, cloudStateManager);
+                for (const String& f : all) {
+                    if (isRecentFolder(f)) cloudFreshFolders.push_back(f);
+                    else                   cloudOldFolders.push_back(f);
+                }
+                LOGF("[FileUploader] Cloud scan: %d fresh, %d old folders",
+                     (int)cloudFreshFolders.size(), (int)cloudOldFolders.size());
+            }
+
+            auto runCloudFolder = [&](const String& folder) -> bool {
+                if (isTimerExpired()) { timerExpired = true; return false; }
+                uploadDatalogFolderCloud(sdManager, folder);
+#ifdef ENABLE_TEST_WEBSERVER
+                if (webServer) webServer->handleClient();
+#endif
+                return true;
+            };
+
+            if (!timerExpired && needFresh) {
+                LOG("[FileUploader] Phase 1: Fresh DATALOG folders (cloud)");
+                for (const String& folder : cloudFreshFolders) {
+                    if (!runCloudFolder(folder)) break;
+                }
+            }
+            if (!timerExpired && needOld && scheduleManager && scheduleManager->canUploadOldData()) {
+                LOG("[FileUploader] Phase 2: Old DATALOG folders (cloud)");
+                for (const String& folder : cloudOldFolders) {
+                    if (!runCloudFolder(folder)) break;
+                }
+            }
+
+            // Finalize once: upload mandatory root/SETTINGS files then processImport.
+            // Skip if no DATALOG files were actually uploaded — an import with only
+            // mandatory/SETTINGS files violates requirements and wastes an import slot.
+            if (cloudImportCreated && cloudDatalogFilesUploaded > 0) {
+                LOGF("[FileUploader] Finalizing import: %d DATALOG files uploaded", cloudDatalogFilesUploaded);
+                finalizeCloudImport(sdManager, sd);
+            } else if (cloudImportCreated && cloudDatalogFilesUploaded == 0) {
+                LOG("[FileUploader] No new DATALOG files — skipping import finalize");
             }
         }
 
@@ -827,7 +857,12 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
 
     int uploadedCount    = 0;
     int skippedUnchanged = 0;
-    bool importAttempted = false;
+
+    // Import was created eagerly in begin() before this folder loop starts
+    if (cloudImportFailed || sleephqUploader->getCurrentImportId().isEmpty()) {
+        LOG_WARN("[FileUploader] [Cloud] No active import — skipping folder");
+        return true;
+    }
 
     for (const String& fileName : files) {
         String localPath = folderPath + "/" + fileName;
@@ -842,15 +877,6 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         if (fileSize == 0) {
             cloudStateManager->markFileUploaded(localPath, "empty_file", 0);
             continue;
-        }
-
-        // Lazily create import — only if there's actually something to upload
-        if (!importAttempted) {
-            if (!ensureCloudImport()) {
-                LOG_WARN("[FileUploader] Cloud import not available, skipping cloud for this folder");
-                break;
-            }
-            importAttempted = true;
         }
 
         LOGF("[FileUploader] Uploading file: %s (%lu bytes)", fileName.c_str(), fileSize);
@@ -870,6 +896,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         }
         if (isRecent) cloudStateManager->markFileUploaded(localPath, "", fileSize);
         uploadedCount++;
+        cloudDatalogFilesUploaded++;
         g_cloudSessionStatus.filesUploaded = uploadedCount;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), cloudBytes);
 #ifdef ENABLE_TEST_WEBSERVER
