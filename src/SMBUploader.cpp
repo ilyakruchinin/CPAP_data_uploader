@@ -31,7 +31,12 @@ static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
         errorCode == ENETRESET ||
         errorCode == ECONNRESET ||
         errorCode == ENOTCONN ||
-        errorCode == EPIPE) {
+        errorCode == EPIPE ||
+        errorCode == EAGAIN
+#ifdef EWOULDBLOCK
+        || errorCode == EWOULDBLOCK
+#endif
+    ) {
         return true;
     }
 
@@ -42,6 +47,8 @@ static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
     return strstr(smbError, "STATUS_IO_TIMEOUT") != nullptr ||
            strstr(smbError, "STATUS_CONNECTION_DISCONNECTED") != nullptr ||
            strstr(smbError, "STATUS_NETWORK_NAME_DELETED") != nullptr ||
+           strstr(smbError, "Wrong signature in received PDU") != nullptr ||
+           strstr(smbError, "Wrong signature") != nullptr ||
            strstr(smbError, "timed out") != nullptr ||
            strstr(smbError, "TIMEOUT") != nullptr ||
            strstr(smbError, "Connection reset") != nullptr;
@@ -508,6 +515,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
 
         // Stream file data
         bool success = true;
+        bool skipRemoteClose = false;
         unsigned long totalBytesRead = 0;
 
         while (localFile.available()) {
@@ -541,6 +549,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
 
                 if (attempt < SMB_UPLOAD_MAX_ATTEMPTS && isRecoverableSmbWriteError(writeErrno, error)) {
                     shouldRetry = true;
+                    skipRemoteClose = true;
                     LOG_WARN("[SMB] Recoverable SMB transport error detected, will reconnect and retry once");
                 }
 
@@ -595,8 +604,11 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             success = false;
         }
 
-        // Close remote file
-        if (smb2_close(smb2, remoteFile) < 0) {
+        // Close remote file. If transport is known broken and we are about to
+        // reconnect, skip close to avoid another blocking timeout call.
+        if (skipRemoteClose) {
+            LOG_WARN("[SMB] Skipping smb2_close after recoverable transport failure; forcing reconnect");
+        } else if (smb2_close(smb2, remoteFile) < 0) {
             LOGF("[SMB] WARNING: Failed to close remote file: %s", smb2_get_error(smb2));
             // Don't fail the upload if close fails - data was already written
         }
