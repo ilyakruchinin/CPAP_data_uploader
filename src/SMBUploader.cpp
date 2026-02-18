@@ -674,12 +674,32 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         if (!connect()) {
             LOG_WARN("[SMB] Initial reconnect failed after transport error");
 
+            bool smbReconnected = false;
             if (recoverWiFiAfterSmbTransportFailure()) {
-                delay(200);
-                if (connect()) {
+                // Give network stack a brief settle window after WiFi reconnect,
+                // then try SMB connect a few times before giving up.
+                const int SMB_RECONNECT_ATTEMPTS_AFTER_WIFI = 3;
+                for (int reconnectAttempt = 1;
+                     reconnectAttempt <= SMB_RECONNECT_ATTEMPTS_AFTER_WIFI;
+                     ++reconnectAttempt) {
+                    if (reconnectAttempt > 1) {
+                        LOG_WARNF("[SMB] SMB reconnect retry %d/%d after WiFi recovery",
+                                  reconnectAttempt,
+                                  SMB_RECONNECT_ATTEMPTS_AFTER_WIFI);
+                    }
+
+                    delay(200 * reconnectAttempt);
+                    if (connect()) {
+                        smbReconnected = true;
+                        break;
+                    }
                     feedUploadHeartbeat();
-                    continue;
                 }
+            }
+
+            if (smbReconnected) {
+                feedUploadHeartbeat();
+                continue;
             }
 
             LOG_ERROR("[SMB] Reconnect failed - cannot retry upload");
