@@ -800,6 +800,12 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
                 uploadSuccess = false;
             } else {
                 bytesTransferred = smbBytes;
+                
+                // Reconnect after each file to free libsmb2 internal buffers
+                // This prevents accumulated fragmentation in libsmb2's PDU/command structures
+                LOG_DEBUG("[FileUploader] Reconnecting SMB to free internal buffers (1-conn-per-file policy)");
+                smbUploader->end();
+                yield();  // Allow TCP cleanup
             }
         }
 #endif
