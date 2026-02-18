@@ -65,6 +65,7 @@ TaskHandle_t uploadTaskHandle = nullptr;
 // Software watchdog: upload task updates this heartbeat; main loop kills task if stale
 volatile unsigned long g_uploadHeartbeat = 0;
 const unsigned long UPLOAD_WATCHDOG_TIMEOUT_MS = 120000;  // 2 minutes
+const uint32_t UPLOAD_ASYNC_MIN_MAX_ALLOC_BYTES = 50000;   // Below this, prefer blocking upload to preserve heap
 
 struct UploadTaskParams {
     FileUploader* uploader;
@@ -494,6 +495,24 @@ void uploadTaskFunction(void* pvParameters) {
     vTaskDelete(NULL);  // Self-delete
 }
 
+static void runUploadBlocking(DataFilter filter) {
+    int maxMinutes = config.getExclusiveAccessMinutes();
+    UploadResult result = uploader->uploadWithExclusiveAccess(&sdManager, maxMinutes, filter);
+    switch (result) {
+        case UploadResult::COMPLETE:
+            transitionTo(UploadState::COMPLETE);
+            break;
+        case UploadResult::TIMEOUT:
+            uploadCycleHadTimeout = true;
+            transitionTo(UploadState::RELEASING);
+            break;
+        case UploadResult::ERROR:
+            LOG_ERROR("[FSM] Upload error");
+            transitionTo(UploadState::RELEASING);
+            break;
+    }
+}
+
 void handleUploading() {
     if (!uploader) {
         transitionTo(UploadState::RELEASING);
@@ -516,6 +535,16 @@ void handleUploading() {
         } else {
             LOG_WARN("[FSM] No data category eligible, releasing");
             transitionTo(UploadState::RELEASING);
+            return;
+        }
+
+        const uint32_t freeHeapBeforeTask = ESP.getFreeHeap();
+        const uint32_t maxAllocBeforeTask = ESP.getMaxAllocHeap();
+        if (maxAllocBeforeTask < UPLOAD_ASYNC_MIN_MAX_ALLOC_BYTES) {
+            LOG_WARNF("[FSM] Low contiguous heap (%u bytes, free=%u) - using blocking upload to preserve memory",
+                      maxAllocBeforeTask,
+                      freeHeapBeforeTask);
+            runUploadBlocking(filter);
             return;
         }
         
@@ -550,7 +579,10 @@ void handleUploading() {
         );
         
         if (rc != pdPASS) {
-            LOG_ERROR("[FSM] Failed to create upload task — falling back to blocking upload");
+            LOG_ERRORF("[FSM] Failed to create upload task (rc=%ld, free=%u, max_alloc=%u) — falling back to blocking upload",
+                       (long)rc,
+                       ESP.getFreeHeap(),
+                       ESP.getMaxAllocHeap());
             uploadTaskRunning = false;
             delete params;
             // Re-subscribe IDLE0 since task didn't start
@@ -559,13 +591,7 @@ void handleUploading() {
             uploader->setWebServer(testWebServer);
 #endif
             // Fallback: run synchronously (old behavior)
-            int maxMinutes = config.getExclusiveAccessMinutes();
-            UploadResult result = uploader->uploadWithExclusiveAccess(&sdManager, maxMinutes, filter);
-            switch (result) {
-                case UploadResult::COMPLETE: transitionTo(UploadState::COMPLETE); break;
-                case UploadResult::TIMEOUT:  uploadCycleHadTimeout = true; transitionTo(UploadState::RELEASING); break;
-                case UploadResult::ERROR:    LOG_ERROR("[FSM] Upload error"); transitionTo(UploadState::RELEASING); break;
-            }
+            runUploadBlocking(filter);
         } else {
             LOG("[FSM] Upload task started on Core 0 (non-blocking)");
         }
