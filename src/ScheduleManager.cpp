@@ -1,6 +1,5 @@
 #include "ScheduleManager.h"
 #include "Logger.h"
-#include <ESP32Ping.h>
 
 ScheduleManager::ScheduleManager() :
     uploadStartHour(8),
@@ -51,23 +50,9 @@ bool ScheduleManager::syncTime() {
     LOG("[NTP] Waiting 5 seconds for network to stabilize...");
     delay(5000);
     
-    // First, check if we can reach the NTP server via ping
-    LOG("[NTP] Testing connectivity to NTP server...");
-    bool pingSuccess = Ping.ping(ntpServer, 3);  // 3 ping attempts
-    
-    if (pingSuccess) {
-        float avgTime = Ping.averageTime();
-        // Only log if we got a valid average time
-        if (avgTime > 0 && avgTime < 10000) {  // Sanity check: 0-10 seconds
-            LOGF("[NTP] Ping successful! Average time: %.1f ms", avgTime);
-        } else {
-            LOG("[NTP] Ping reported success but with invalid timing");
-        }
-    } else {
-        LOG("[NTP] WARNING: Cannot ping NTP server (ICMP may be blocked)");
-        LOG("[NTP] This is normal for many networks - NTP uses UDP, not ICMP");
-        LOG("[NTP] Proceeding with NTP sync...");
-    }
+    // Skip ICMP ping pre-check to reduce dependency footprint.
+    // ICMP reachability is not required for NTP (uses UDP/123).
+    LOG("[NTP] Proceeding directly with UDP NTP sync (ICMP pre-check disabled)");
     
     // Configure time with NTP server and timezone offset (convert hours to seconds)
     long gmtOffsetSeconds = gmtOffsetHours * 3600L;

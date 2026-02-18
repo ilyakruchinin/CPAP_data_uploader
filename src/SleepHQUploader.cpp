@@ -687,28 +687,17 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
     LOG_DEBUGF("[SleepHQ] Uploading: %s (%lu bytes, hash: %s, free: %u, max_alloc: %u)",
                localPath.c_str(), lockedFileSize, contentHash.c_str(), freeHeap, maxAlloc);
     
-    // Policy: 1-connection-per-file for large files (>5KB) to avoid timeouts
-    // BUT: If memory is low (fragmented), we MUST preserve the existing connection
-    // because we might not be able to allocate a new SSL context if we close it.
-    bool lowMemory = (maxAlloc < 50000); // 50KB threshold (SSL needs ~40KB contiguous)
+    // Prefer one persistent TLS session across the entire import.
+    // Reconnecting per large file increases TLS handshake churn and heap fragmentation risk.
+    bool lowMemory = (maxAlloc < 50000); // 50KB threshold (SSL reconnect often needs ~40KB contiguous)
     if (!lowMemory) {
         lowMemoryKeepAliveWarned = false;
+    } else if (!lowMemoryKeepAliveWarned) {
+        LOG_WARNF("[SleepHQ] Low memory (%u bytes contiguous) - preserving TLS keep-alive to avoid reconnect churn", maxAlloc);
+        lowMemoryKeepAliveWarned = true;
     }
-    bool useKeepAlive = (lockedFileSize <= 5 * 1024) || lowMemory;
-    
-    if (tlsClient && tlsClient->connected()) {
-        if (!useKeepAlive) {
-            LOG_INFO("[SleepHQ] Refreshing TLS connection for stability (policy: 1-conn-per-file)");
-            tlsClient->stop(); 
-            yield();
-        } else if (lowMemory && lockedFileSize > 5 * 1024) {
-            if (!lowMemoryKeepAliveWarned) {
-                LOG_WARNF("[SleepHQ] Low memory (%u bytes contiguous) - forcing keep-alive to preserve SSL context", maxAlloc);
-                lowMemoryKeepAliveWarned = true;
-            }
-            useKeepAlive = true; // override keep-alive policy
-        }
-    }
+
+    const bool useKeepAlive = true;
     
     // Ensure WiFi is in high performance mode for upload
     WiFi.setSleep(false);
