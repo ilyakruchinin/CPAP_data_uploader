@@ -62,6 +62,8 @@ void sendUploadRateLimitResponse(WebServer* server,
     server->sendHeader("Connection", "close");
     server->sendHeader("Retry-After", "1");
     server->send(429, contentType, body);
+    // Proactively release socket resources under upload-time pressure.
+    server->client().stop();
 }
 }
 
@@ -574,16 +576,21 @@ void TestWebServer::handleNotFound() {
     if (uri == "/favicon.ico" || uri == "/apple-touch-icon.png" || 
         uri == "/apple-touch-icon-precomposed.png" || uri == "/robots.txt") {
         server->send(404, "text/plain", "Not found");
+        if (isUploadInProgress()) {
+            server->client().stop();
+        }
         return;
     }
 
     // During uploads keep 404 handling allocation-free and rate-limited.
     if (isUploadUiRateLimited(kUploadUiSlotNotFound, isUploadInProgress(), kUploadNotFoundMinIntervalMs)) {
         server->send(404, "text/plain", "Not found");
+        server->client().stop();
         return;
     }
     if (isUploadInProgress()) {
         server->send(404, "text/plain", "Not found");
+        server->client().stop();
         return;
     }
     
