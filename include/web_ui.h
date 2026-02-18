@@ -56,6 +56,11 @@ nav button:hover:not(.act){background:#3a5a7e}
 .sm{margin-top:7px;font-size:.86em;min-height:1.2em}.sm.ok{color:#44ff44}.sm.er{color:#ff4444}.sm.info{color:#66c0f4}
 .wb{background:#3a2a1a;border:1px solid #aa6622;border-radius:8px;padding:12px;margin-bottom:12px}
 .wb h3{color:#ffaa44;font-size:.86em;margin-bottom:5px}.wb ul{padding-left:16px;color:#c7d5e0;font-size:.82em}.wb li{margin-bottom:3px}
+.pfc{background:linear-gradient(90deg,#aa66ff,#cc88ff)}
+.be{margin-bottom:13px}.bh{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+.bt-s{color:#66c0f4;font-size:.82em;font-weight:700;letter-spacing:.5px}
+.bt-c{color:#aa66ff;font-size:.82em;font-weight:700;letter-spacing:.5px}
+.bd-i{font-size:.79em;color:#8f98a0;margin-top:4px;min-height:1.1em;padding-left:2px}
 </style></head><body>
 <div class=wrap>
 <h1>CPAP Data Uploader</h1>
@@ -91,17 +96,22 @@ nav button:hover:not(.act){background:#3a5a7e}
 </div>
 <div class=cards>
 <div class=card style="grid-column:1/-1"><h2>Upload Progress</h2>
-<div class=row><span class=k>Data folders</span><span id=d-fold class=v></span></div>
-<div class=prog><div id=d-pf class=pf style=width:0%></div></div>
-<div class=row style="margin-top:7px"><span class=k>SMB</span><span id=d-smb class=v>—</span></div>
-<div class=row><span class=k>Cloud</span><span id=d-cloud class=v>—</span></div>
-<div class=row><span class=k>Status</span><span id=d-fst class=v></span></div>
+<div class=be>
+<div class=bh><span class=bt-s>SMB</span><span id=d-smb-st class=v>—</span></div>
+<div class=prog><div id=d-pf-smb class=pf style=width:0%></div></div>
+<div id=d-smb-det class=bd-i></div>
+</div>
+<div class=be>
+<div class=bh><span class=bt-c>Cloud</span><span id=d-cloud-st class=v>—</span></div>
+<div class=prog><div id=d-pf-cloud class="pf pfc" style=width:0%></div></div>
+<div id=d-cloud-det class=bd-i></div>
+</div>
+<div class=row style="border-top:1px solid #2a475e;padding-top:8px;margin-top:2px"><span class=k>Status</span><span id=d-fst class=v></span></div>
 </div>
 </div>
 <div class=card style="margin-bottom:14px"><h2>Actions</h2>
 <div class=actions>
 <button id=btn-up class="btn bp" onclick=triggerUpload()>&#9650; Trigger Upload</button>
-<button class="btn bs" onclick="tab('mon')">&#128200; SD Monitor</button>
 <button id=btn-rst class="btn bd" onclick=resetState()>Reset State</button>
 </div>
 </div>
@@ -217,15 +227,20 @@ function renderStatus(d){
   set('d-ip',d.wifi_ip||'—');
   set('d-ep',cfg.endpoint_type||d.endpoint_type||'—');
   set('d-up',fmtUp(d.uptime||0));
-  var comp=d.completed||0,inc=d.incomplete||0,tot=comp+inc;
-  set('d-fold',comp+' / '+tot);
-  var pct=tot>0?Math.round(comp*100/tot):0;
-  document.getElementById('d-pf').style.width=pct+'%';
-  var smbS='—',clS='—';
-  if(d.smb_active){smbS=d.smb_up+' / '+d.smb_total+(d.smb_folder?' ('+d.smb_folder+')':'');}
-  if(d.cloud_active){clS=d.cloud_up+' / '+d.cloud_total+(d.cloud_folder?' ('+d.cloud_folder+')':'');}
-  set('d-smb',smbS); set('d-cloud',clS);
-  var fst=inc>0?'&#9888; '+inc+' folder(s) pending':comp>0?'&#10003; Complete':'Waiting for first scan';
+  var sc=d.smb_comp||0,si=d.smb_inc||0,st2=sc+si;
+  var cc=d.cloud_comp||0,ci=d.cloud_inc||0,ct=cc+ci;
+  document.getElementById('d-pf-smb').style.width=(st2>0?Math.round(sc*100/st2):0)+'%';
+  document.getElementById('d-pf-cloud').style.width=(ct>0?Math.round(cc*100/ct):0)+'%';
+  var sR=si>0?'<span style=color:#ffaa44>'+si+' left</span>':'<span style=color:#44ff44>&#10003; done</span>';
+  var cR=ci>0?'<span style=color:#ffaa44>'+ci+' left</span>':'<span style=color:#44ff44>&#10003; done</span>';
+  document.getElementById('d-smb-st').innerHTML=st2>0?sc+' / '+st2+' &nbsp;'+sR:'—';
+  document.getElementById('d-cloud-st').innerHTML=ct>0?cc+' / '+ct+' &nbsp;'+cR:'—';
+  var smbDet=d.smb_active?'Uploading '+d.smb_up+' / '+d.smb_total+' files'+(d.smb_folder?' &middot; '+d.smb_folder:''):'';
+  var clDet=d.cloud_active?'Uploading '+d.cloud_up+' / '+d.cloud_total+' files'+(d.cloud_folder?' &middot; '+d.cloud_folder:''):'';
+  document.getElementById('d-smb-det').innerHTML=smbDet;
+  document.getElementById('d-cloud-det').innerHTML=clDet;
+  var pend=(si||0)+(ci||0);
+  var fst=pend>0?'&#9888; '+pend+' folder(s) pending':(sc+cc>0?'&#10003; All synced':'Waiting for first scan');
   seti('d-fst',fst);
   set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
 }

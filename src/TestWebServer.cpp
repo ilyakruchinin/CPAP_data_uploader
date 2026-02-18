@@ -511,24 +511,17 @@ void TestWebServer::updateStatusSnapshot() {
         rssi = wifiManager->getSignalStrength();
         strncpy(wifiIp, wifiManager->getIPAddress().c_str(), sizeof(wifiIp) - 1);
     }
-    // Show folder counts from whichever backend is currently active so the
-    // progress bar moves during both the SMB pass and the cloud pass.
-    // When idle, fall back to the primary (cloud) state manager.
-    int comp = 0, inc = 0, pend = 0;
-    UploadStateManager* activeSm = nullptr;
-    if (g_smbSessionStatus.uploadActive && smbStateManager) {
-        activeSm = smbStateManager;           // SMB pass is running
-    } else if (g_cloudSessionStatus.uploadActive && stateManager) {
-        activeSm = stateManager;              // Cloud pass is running
-    } else if (stateManager) {
-        activeSm = stateManager;              // Idle — show primary (cloud) counts
-    } else if (smbStateManager) {
-        activeSm = smbStateManager;           // SMB-only config, idle
+    // Read each backend's folder counts independently for the two-bar UI.
+    // In SMB-only mode stateManager == smbStateManager (same pointer), so
+    // guard against double-counting by skipping the cloud read in that case.
+    int smbComp = 0, smbInc = 0, clComp = 0, clInc = 0;
+    if (smbStateManager) {
+        smbComp = smbStateManager->getCompletedFoldersCount();
+        smbInc  = smbStateManager->getIncompleteFoldersCount();
     }
-    if (activeSm) {
-        comp = activeSm->getCompletedFoldersCount();
-        inc  = activeSm->getIncompleteFoldersCount();
-        pend = activeSm->getPendingFoldersCount();
+    if (stateManager && stateManager != smbStateManager) {
+        clComp = stateManager->getCompletedFoldersCount();
+        clInc  = stateManager->getIncompleteFoldersCount();
     }
     long nextUp = -1; bool timeSynced = false;
     if (scheduleManager) {
@@ -549,7 +542,7 @@ void TestWebServer::updateStatusSnapshot() {
         ",\"time\":\"%s\",\"time_synced\":%s"
         ",\"free_heap\":%u,\"max_alloc\":%u"
         ",\"wifi\":%s,\"rssi\":%d,\"wifi_ip\":\"%s\""
-        ",\"completed\":%d,\"incomplete\":%d,\"pending\":%d"
+        ",\"smb_comp\":%d,\"smb_inc\":%d,\"cloud_comp\":%d,\"cloud_inc\":%d"
         ",\"next_upload\":%ld"
         ",\"smb_active\":%s,\"smb_folder\":\"%s\",\"smb_up\":%d,\"smb_total\":%d"
         ",\"cloud_active\":%s,\"cloud_folder\":\"%s\",\"cloud_up\":%d,\"cloud_total\":%d"
@@ -558,7 +551,7 @@ void TestWebServer::updateStatusSnapshot() {
         timeBuf, timeSynced ? "true" : "false",
         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
         wifiConn ? "true" : "false", rssi, wifiIp,
-        comp, inc, pend,
+        smbComp, smbInc, clComp, clInc,
         nextUp,
         smbActive ? "true" : "false", smbFolder, smbUp, smbTotal,
         clActive  ? "true" : "false", cloudFolder, clUp,  clTotal,
