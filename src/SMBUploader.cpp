@@ -23,12 +23,18 @@ static inline void feedUploadHeartbeat() {
 }
 
 SMBUploader::SMBUploader(const String& endpoint, const String& user, const String& password)
-    : smbUser(user), smbPassword(password), smb2(nullptr), connected(false) {
+    : smbUser(user), smbPassword(password), smb2(nullptr), connected(false),
+      uploadBuffer(nullptr), uploadBufferSize(0) {
     parseEndpoint(endpoint);
 }
 
 SMBUploader::~SMBUploader() {
     end();
+    if (uploadBuffer) {
+        free(uploadBuffer);
+        uploadBuffer = nullptr;
+        uploadBufferSize = 0;
+    }
 }
 
 bool SMBUploader::parseEndpoint(const String& endpoint) {
@@ -178,6 +184,27 @@ void SMBUploader::end() {
 
 bool SMBUploader::isConnected() const {
     return connected;
+}
+
+bool SMBUploader::allocateBuffer(size_t size) {
+    // Free existing buffer if already allocated
+    if (uploadBuffer) {
+        free(uploadBuffer);
+        uploadBuffer = nullptr;
+        uploadBufferSize = 0;
+    }
+    
+    // Allocate new buffer
+    uploadBuffer = (uint8_t*)malloc(size);
+    if (!uploadBuffer) {
+        LOG_ERRORF("[SMB] Failed to allocate upload buffer (%u bytes)", size);
+        LOG("[SMB] System may be low on memory");
+        return false;
+    }
+    
+    uploadBufferSize = size;
+    LOGF("[SMB] Allocated upload buffer: %u bytes", uploadBufferSize);
+    return true;
 }
 
 bool SMBUploader::createDirectory(const String& path) {
@@ -335,33 +362,28 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         return false;
     }
     
-    // Allocate buffer for streaming (try primary size, fallback to smaller if fragmented)
-    uint8_t* buffer = (uint8_t*)malloc(UPLOAD_BUFFER_SIZE);
-    size_t bufferSize = UPLOAD_BUFFER_SIZE;
-    if (buffer == nullptr) {
-        LOG_WARN("[SMB] Failed to allocate primary upload buffer, trying fallback size");
-        buffer = (uint8_t*)malloc(UPLOAD_BUFFER_FALLBACK_SIZE);
-        bufferSize = UPLOAD_BUFFER_FALLBACK_SIZE;
-        if (buffer == nullptr) {
-            LOG("[SMB] ERROR: Failed to allocate fallback upload buffer");
-            LOG("[SMB] System may be low on memory");
-            smb2_close(smb2, remoteFile);
-            localFile.close();
-            return false;
-        }
-        LOG_WARN("[SMB] Using fallback buffer size for this file");
+    // Check if upload buffer is allocated
+    if (!uploadBuffer) {
+        LOG("[SMB] ERROR: No upload buffer allocated");
+        LOG("[SMB] Call allocateBuffer() before uploading");
+        smb2_close(smb2, remoteFile);
+        localFile.close();
+        return false;
     }
     feedUploadHeartbeat();
     
-    // Track upload timing
+    // Track upload timing and progress
     unsigned long startTime = millis();
+    unsigned long lastProgressTime = millis();
+    unsigned long lastBytesTransferred = 0;
+    const unsigned long PROGRESS_TIMEOUT_MS = 30000;  // 30 seconds without progress
     
     // Stream file data
     bool success = true;
     unsigned long totalBytesRead = 0;
     
     while (localFile.available()) {
-        size_t bytesRead = localFile.read(buffer, bufferSize);
+        size_t bytesRead = localFile.read(uploadBuffer, uploadBufferSize);
         if (bytesRead == 0) {
             // Check if we've read all expected bytes
             if (totalBytesRead < fileSize) {
@@ -374,7 +396,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         
         totalBytesRead += bytesRead;
         
-        ssize_t bytesWritten = smb2_write(smb2, remoteFile, buffer, bytesRead);
+        ssize_t bytesWritten = smb2_write(smb2, remoteFile, uploadBuffer, bytesRead);
         if (bytesWritten < 0) {
             const char* error = smb2_get_error(smb2);
             LOGF("[SMB] ERROR: Write failed at offset %lu: %s", bytesTransferred, error);
@@ -394,6 +416,24 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         }
         
         bytesTransferred += bytesWritten;
+        
+        // Update progress tracking
+        if (bytesTransferred > lastBytesTransferred) {
+            lastProgressTime = millis();
+            lastBytesTransferred = bytesTransferred;
+        }
+        
+        // Check for progress timeout (stalled upload)
+        if (millis() - lastProgressTime > PROGRESS_TIMEOUT_MS) {
+            LOGF("[SMB] ERROR: Upload stalled - no progress for %lu seconds", PROGRESS_TIMEOUT_MS / 1000);
+            LOG("[SMB] Possible causes:");
+            LOG("[SMB]   - Network connection stalled");
+            LOG("[SMB]   - SMB server not responding");
+            LOG("[SMB]   - Socket write blocked");
+            success = false;
+            break;
+        }
+        
         feedUploadHeartbeat();
         
         // Print progress for large files (every 1MB)
@@ -411,10 +451,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         LOG("[SMB] Upload incomplete - file may be corrupted on remote server");
         success = false;
     }
-        
-    // Cleanup
-    free(buffer);
-
+    
     // Close remote file
     if (smb2_close(smb2, remoteFile) < 0) {
         LOGF("[SMB] WARNING: Failed to close remote file: %s", smb2_get_error(smb2));
