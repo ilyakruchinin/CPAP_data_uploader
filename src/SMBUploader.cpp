@@ -4,6 +4,8 @@
 #ifdef ENABLE_SMB_UPLOAD
 
 #include <fcntl.h>  // For O_WRONLY, O_CREAT, O_TRUNC flags
+#include <errno.h>
+#include <string.h>
 
 // Include libsmb2 headers
 // Note: These will be available when libsmb2 is added as ESP-IDF component
@@ -15,11 +17,34 @@ extern "C" {
 // Buffer size for file streaming (8KB to avoid fragmentation in mixed-backend mode)
 #define UPLOAD_BUFFER_SIZE 8192
 #define UPLOAD_BUFFER_FALLBACK_SIZE 4096
+#define SMB_COMMAND_TIMEOUT_SECONDS 30
+#define SMB_UPLOAD_MAX_ATTEMPTS 2
 
 extern volatile unsigned long g_uploadHeartbeat;
 
 static inline void feedUploadHeartbeat() {
     g_uploadHeartbeat = millis();
+}
+
+static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
+    if (errorCode == ETIMEDOUT ||
+        errorCode == ENETRESET ||
+        errorCode == ECONNRESET ||
+        errorCode == ENOTCONN ||
+        errorCode == EPIPE) {
+        return true;
+    }
+
+    if (!smbError) {
+        return false;
+    }
+
+    return strstr(smbError, "STATUS_IO_TIMEOUT") != nullptr ||
+           strstr(smbError, "STATUS_CONNECTION_DISCONNECTED") != nullptr ||
+           strstr(smbError, "STATUS_NETWORK_NAME_DELETED") != nullptr ||
+           strstr(smbError, "timed out") != nullptr ||
+           strstr(smbError, "TIMEOUT") != nullptr ||
+           strstr(smbError, "Connection reset") != nullptr;
 }
 
 SMBUploader::SMBUploader(const String& endpoint, const String& user, const String& password)
@@ -112,6 +137,10 @@ bool SMBUploader::connect() {
         LOG("[SMB] This may indicate a memory allocation failure");
         return false;
     }
+
+    // Critical: libsmb2 synchronous calls block indefinitely unless timeout is configured.
+    smb2_set_timeout(smb2, SMB_COMMAND_TIMEOUT_SECONDS);
+    LOG_DEBUGF("[SMB] libsmb2 command timeout set to %d seconds", SMB_COMMAND_TIMEOUT_SECONDS);
     
     // Set security mode (allow guest if no credentials)
     if (smbUser.isEmpty()) {
@@ -325,171 +354,210 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         fullRemotePath = fullRemotePath.substring(1);
     }
     
-    // Open local file from SD card
-    File localFile = sd.open(localPath, FILE_READ);
-    if (!localFile) {
-        LOGF("[SMB] ERROR: Failed to open local file: %s", localPath.c_str());
-        LOG("[SMB] File may not exist or SD card has read errors");
-        return false;
-    }
-    
-    size_t fileSize = localFile.size();
-    
-    // Sanity check file size
-    if (fileSize == 0) {
-        LOGF("[SMB] WARNING: File is empty: %s", localPath.c_str());
-        localFile.close();
-        return false;
-    }
-    
-    LOG_DEBUGF("[SMB] Uploading %s (%u bytes)", localPath.c_str(), fileSize);
-    LOG_DEBUGF("[SMB] Remote path: %s", fullRemotePath.c_str());
-    
-    // Ensure parent directory exists
-    int lastSlash = fullRemotePath.lastIndexOf('/');
-    if (lastSlash > 0) {
-        String parentDir = fullRemotePath.substring(0, lastSlash);
-        if (!createDirectory(parentDir)) {
-            LOGF("[SMB] ERROR: Failed to create parent directory: %s", parentDir.c_str());
-            LOG("[SMB] Check permissions on remote share");
+    for (int attempt = 1; attempt <= SMB_UPLOAD_MAX_ATTEMPTS; ++attempt) {
+        bool shouldRetry = false;
+        unsigned long attemptBytesTransferred = 0;
+
+        if (attempt > 1) {
+            LOG_WARNF("[SMB] Retry attempt %d/%d for %s",
+                      attempt, SMB_UPLOAD_MAX_ATTEMPTS, localPath.c_str());
+        }
+
+        // Open local file from SD card
+        File localFile = sd.open(localPath, FILE_READ);
+        if (!localFile) {
+            LOGF("[SMB] ERROR: Failed to open local file: %s", localPath.c_str());
+            LOG("[SMB] File may not exist or SD card has read errors");
+            return false;
+        }
+
+        size_t fileSize = localFile.size();
+
+        // Sanity check file size
+        if (fileSize == 0) {
+            LOGF("[SMB] WARNING: File is empty: %s", localPath.c_str());
+            localFile.close();
+            return false;
+        }
+
+        LOG_DEBUGF("[SMB] Uploading %s (%u bytes)", localPath.c_str(), (unsigned int)fileSize);
+        LOG_DEBUGF("[SMB] Remote path: %s", fullRemotePath.c_str());
+
+        // Ensure parent directory exists
+        int lastSlash = fullRemotePath.lastIndexOf('/');
+        if (lastSlash > 0) {
+            String parentDir = fullRemotePath.substring(0, lastSlash);
+            if (!createDirectory(parentDir)) {
+                LOGF("[SMB] ERROR: Failed to create parent directory: %s", parentDir.c_str());
+                LOG("[SMB] Check permissions on remote share");
+                localFile.close();
+                return false;
+            }
+            feedUploadHeartbeat();
+        }
+
+        // Open remote file for writing
+        struct smb2fh* remoteFile = smb2_open(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
+        if (remoteFile == nullptr) {
+            const char* error = smb2_get_error(smb2);
+            LOGF("[SMB] ERROR: Failed to open remote file: %s", error);
+            LOGF("[SMB] Remote path: %s", fullRemotePath.c_str());
+            LOG("[SMB] Possible causes:");
+            LOG("[SMB]   - Insufficient permissions on remote share");
+            LOG("[SMB]   - Disk full on remote server");
+            LOG("[SMB]   - Invalid characters in filename");
+            localFile.close();
+            return false;
+        }
+
+        // Check if upload buffer is allocated
+        if (!uploadBuffer) {
+            LOG("[SMB] ERROR: No upload buffer allocated");
+            LOG("[SMB] Call allocateBuffer() before uploading");
+            smb2_close(smb2, remoteFile);
             localFile.close();
             return false;
         }
         feedUploadHeartbeat();
-    }
-    
-    // Open remote file for writing
-    // Convert Arduino String to C string for libsmb2
-    struct smb2fh* remoteFile = smb2_open(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
-    if (remoteFile == nullptr) {
-        const char* error = smb2_get_error(smb2);
-        LOGF("[SMB] ERROR: Failed to open remote file: %s", error);
-        LOGF("[SMB] Remote path: %s", fullRemotePath.c_str());
-        LOG("[SMB] Possible causes:");
-        LOG("[SMB]   - Insufficient permissions on remote share");
-        LOG("[SMB]   - Disk full on remote server");
-        LOG("[SMB]   - Invalid characters in filename");
-        localFile.close();
-        return false;
-    }
-    
-    // Check if upload buffer is allocated
-    if (!uploadBuffer) {
-        LOG("[SMB] ERROR: No upload buffer allocated");
-        LOG("[SMB] Call allocateBuffer() before uploading");
-        smb2_close(smb2, remoteFile);
-        localFile.close();
-        return false;
-    }
-    feedUploadHeartbeat();
-    
-    // Track upload timing and progress
-    unsigned long startTime = millis();
-    unsigned long lastProgressTime = millis();
-    unsigned long lastBytesTransferred = 0;
-    const unsigned long PROGRESS_TIMEOUT_MS = 30000;  // 30 seconds without progress
-    
-    // Stream file data
-    bool success = true;
-    unsigned long totalBytesRead = 0;
-    
-    while (localFile.available()) {
-        size_t bytesRead = localFile.read(uploadBuffer, uploadBufferSize);
-        if (bytesRead == 0) {
-            // Check if we've read all expected bytes
-            if (totalBytesRead < fileSize) {
-                LOGF("[SMB] ERROR: Unexpected end of file, read %lu of %u bytes", totalBytesRead, fileSize);
-                LOG("[SMB] SD card may have read errors");
-                success = false;
+
+        // Track upload timing and progress
+        unsigned long startTime = millis();
+        unsigned long lastProgressTime = millis();
+        unsigned long lastBytesTransferred = 0;
+        const unsigned long PROGRESS_TIMEOUT_MS = 30000;  // 30 seconds without progress
+
+        // Stream file data
+        bool success = true;
+        unsigned long totalBytesRead = 0;
+
+        while (localFile.available()) {
+            size_t bytesRead = localFile.read(uploadBuffer, uploadBufferSize);
+            if (bytesRead == 0) {
+                // Check if we've read all expected bytes
+                if (totalBytesRead < fileSize) {
+                    LOGF("[SMB] ERROR: Unexpected end of file, read %lu of %u bytes",
+                         totalBytesRead, (unsigned int)fileSize);
+                    LOG("[SMB] SD card may have read errors");
+                    success = false;
+                }
+                break;
             }
-            break;
+
+            totalBytesRead += bytesRead;
+
+            ssize_t bytesWritten = smb2_write(smb2, remoteFile, uploadBuffer, bytesRead);
+            if (bytesWritten < 0) {
+                const char* error = smb2_get_error(smb2);
+                int writeErrno = errno;
+                LOGF("[SMB] ERROR: Write failed at offset %lu: %s (errno=%d: %s)",
+                     attemptBytesTransferred,
+                     error ? error : "unknown",
+                     writeErrno,
+                     strerror(writeErrno));
+                LOG("[SMB] Possible causes:");
+                LOG("[SMB]   - Network connection lost");
+                LOG("[SMB]   - Remote server disk full");
+                LOG("[SMB]   - SMB command timeout");
+
+                if (attempt < SMB_UPLOAD_MAX_ATTEMPTS && isRecoverableSmbWriteError(writeErrno, error)) {
+                    shouldRetry = true;
+                    LOG_WARN("[SMB] Recoverable SMB transport error detected, will reconnect and retry once");
+                }
+
+                success = false;
+                break;
+            }
+
+            if ((size_t)bytesWritten != bytesRead) {
+                LOGF("[SMB] ERROR: Incomplete write, expected %u bytes, wrote %d", bytesRead, bytesWritten);
+                LOG("[SMB] Network may be unstable");
+                success = false;
+                break;
+            }
+
+            attemptBytesTransferred += bytesWritten;
+
+            // Update progress tracking
+            if (attemptBytesTransferred > lastBytesTransferred) {
+                lastProgressTime = millis();
+                lastBytesTransferred = attemptBytesTransferred;
+            }
+
+            // Check for progress timeout (stalled upload)
+            if (millis() - lastProgressTime > PROGRESS_TIMEOUT_MS) {
+                LOGF("[SMB] ERROR: Upload stalled - no progress for %lu seconds", PROGRESS_TIMEOUT_MS / 1000);
+                LOG("[SMB] Possible causes:");
+                LOG("[SMB]   - Network connection stalled");
+                LOG("[SMB]   - SMB server not responding");
+                LOG("[SMB]   - Socket write blocked");
+                success = false;
+                break;
+            }
+
+            feedUploadHeartbeat();
+
+            // Print progress for large files (every 1MB)
+            if (attemptBytesTransferred % (1024 * 1024) == 0) {
+                LOG_DEBUGF("[SMB] Progress: %lu KB / %u KB",
+                           attemptBytesTransferred / 1024,
+                           (unsigned int)fileSize / 1024);
+            }
+
+            // Yield to prevent watchdog timeout on large files
+            yield();
         }
-        
-        totalBytesRead += bytesRead;
-        
-        ssize_t bytesWritten = smb2_write(smb2, remoteFile, uploadBuffer, bytesRead);
-        if (bytesWritten < 0) {
-            const char* error = smb2_get_error(smb2);
-            LOGF("[SMB] ERROR: Write failed at offset %lu: %s", bytesTransferred, error);
-            LOG("[SMB] Possible causes:");
-            LOG("[SMB]   - Network connection lost");
-            LOG("[SMB]   - Remote server disk full");
-            LOG("[SMB]   - SMB session timeout");
+
+        // Verify we transferred all bytes
+        if (success && attemptBytesTransferred != fileSize) {
+            LOGF("[SMB] ERROR: Size mismatch, transferred %lu bytes, expected %u",
+                 attemptBytesTransferred, (unsigned int)fileSize);
+            LOG("[SMB] Upload incomplete - file may be corrupted on remote server");
             success = false;
-            break;
         }
-        
-        if ((size_t)bytesWritten != bytesRead) {
-            LOGF("[SMB] ERROR: Incomplete write, expected %u bytes, wrote %d", bytesRead, bytesWritten);
-            LOG("[SMB] Network may be unstable");
-            success = false;
-            break;
+
+        // Close remote file
+        if (smb2_close(smb2, remoteFile) < 0) {
+            LOGF("[SMB] WARNING: Failed to close remote file: %s", smb2_get_error(smb2));
+            // Don't fail the upload if close fails - data was already written
         }
-        
-        bytesTransferred += bytesWritten;
-        
-        // Update progress tracking
-        if (bytesTransferred > lastBytesTransferred) {
-            lastProgressTime = millis();
-            lastBytesTransferred = bytesTransferred;
-        }
-        
-        // Check for progress timeout (stalled upload)
-        if (millis() - lastProgressTime > PROGRESS_TIMEOUT_MS) {
-            LOGF("[SMB] ERROR: Upload stalled - no progress for %lu seconds", PROGRESS_TIMEOUT_MS / 1000);
-            LOG("[SMB] Possible causes:");
-            LOG("[SMB]   - Network connection stalled");
-            LOG("[SMB]   - SMB server not responding");
-            LOG("[SMB]   - Socket write blocked");
-            success = false;
-            break;
-        }
-        
+
+        localFile.close();
         feedUploadHeartbeat();
-        
-        // Print progress for large files (every 1MB)
-        if (bytesTransferred % (1024 * 1024) == 0) {
-            LOG_DEBUGF("[SMB] Progress: %lu KB / %u KB", bytesTransferred / 1024, fileSize / 1024);
+
+        unsigned long uploadTime = millis() - startTime;
+
+        if (success) {
+            bytesTransferred = attemptBytesTransferred;
+            float transferRate = uploadTime > 0 ? (attemptBytesTransferred / 1024.0f) / (uploadTime / 1000.0f) : 0.0f;
+            LOGF("[SMB] Upload complete: %lu bytes in %lu ms (%.2f KB/s)",
+                 attemptBytesTransferred, uploadTime, transferRate);
+            LOG_DEBUGF("[SMB] File size verification: SD=%u bytes, Transferred=%lu bytes, Match=%s",
+                       (unsigned int)fileSize,
+                       attemptBytesTransferred,
+                       (attemptBytesTransferred == fileSize) ? "YES" : "NO");
+            return true;
         }
-        
-        // Yield to prevent watchdog timeout on large files
-        yield();
-    }
-    
-    // Verify we transferred all bytes
-    if (success && bytesTransferred != fileSize) {
-        LOGF("[SMB] ERROR: Size mismatch, transferred %lu bytes, expected %u", bytesTransferred, fileSize);
-        LOG("[SMB] Upload incomplete - file may be corrupted on remote server");
-        success = false;
-    }
-    
-    // Close remote file
-    if (smb2_close(smb2, remoteFile) < 0) {
-        LOGF("[SMB] WARNING: Failed to close remote file: %s", smb2_get_error(smb2));
-        // Don't fail the upload if close fails - data was already written
+
+        bytesTransferred = attemptBytesTransferred;
+        LOGF("[SMB] Upload failed - Expected %u bytes, transferred %lu bytes",
+             (unsigned int)fileSize,
+             attemptBytesTransferred);
+
+        if (!shouldRetry) {
+            return false;
+        }
+
+        LOG_WARN("[SMB] Reconnecting SMB context after recoverable transport error...");
+        disconnect();
+        delay(150);
+        if (!connect()) {
+            LOG_ERROR("[SMB] Reconnect failed - cannot retry upload");
+            return false;
+        }
+        feedUploadHeartbeat();
     }
 
-    localFile.close();
-    feedUploadHeartbeat();
-        
-    unsigned long uploadTime = millis() - startTime;
-        
-    if (success) {
-        float transferRate = uploadTime > 0 ? (bytesTransferred / 1024.0) / (uploadTime / 1000.0) : 0.0;
-        LOGF("[SMB] Upload complete: %lu bytes in %lu ms (%.2f KB/s)", 
-             bytesTransferred, uploadTime, transferRate);
-        LOG_DEBUGF("[SMB] File size verification: SD=%u bytes, Transferred=%lu bytes, Match=%s",
-             fileSize, bytesTransferred, (bytesTransferred == fileSize) ? "YES" : "NO");
-        
-        if (bytesTransferred != fileSize) {
-            LOG("[SMB] ERROR: Size mismatch detected! File may be corrupted on remote server");
-        }
-    } else {
-        LOGF("[SMB] Upload failed - Expected %u bytes, transferred %lu bytes", 
-             fileSize, bytesTransferred);
-    }
-    
-    return success;
+    return false;
 }
 
 int SMBUploader::countRemoteFiles(const String& remotePath) {
