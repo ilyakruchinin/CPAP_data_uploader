@@ -233,9 +233,29 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         LOG("[FileUploader] === Cloud Pass ===");
         cloudDatalogFilesUploaded = 0;
 
-        // Eagerly connect + create import NOW, while max_alloc is at its peak
-        // after SMB teardown.  begin() internally calls createImport() over
-        // the same TLS session — no second handshake required.
+        // Pre-flight scan — SD-only, no network. Determines whether any cloud
+        // work exists before spending heap on OAuth + team-discovery + createImport.
+        std::vector<String> cloudFreshFolders, cloudOldFolders;
+        if (needFresh || needOld) {
+            std::vector<String> all = scanDatalogFolders(sd, cloudStateManager);
+            for (const String& f : all) {
+                if (isRecentFolder(f)) cloudFreshFolders.push_back(f);
+                else                   cloudOldFolders.push_back(f);
+            }
+            LOGF("[FileUploader] Cloud scan: %d fresh, %d old folders",
+                 (int)cloudFreshFolders.size(), (int)cloudOldFolders.size());
+        }
+
+        bool cloudHasWork = !cloudFreshFolders.empty() ||
+                            (!cloudOldFolders.empty() &&
+                             scheduleManager && scheduleManager->canUploadOldData());
+
+        if (!cloudHasWork) {
+            LOG("[FileUploader] Cloud: nothing to upload — skipping auth + import");
+        } else {
+        // Connect + create import NOW, while max_alloc is at its peak after
+        // SMB teardown. begin() reuses the same TLS session for all three steps
+        // (OAuth, team-discovery, createImport) — no second handshake required.
         if (!sleephqUploader->isConnected()) {
             LOG("[FileUploader] Initializing cloud session (OAuth + import)...");
             LOGF("[FileUploader] Heap before cloud begin: fh=%u ma=%u",
@@ -260,16 +280,6 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         }
 
         if (!cloudImportFailed) {
-            std::vector<String> cloudFreshFolders, cloudOldFolders;
-            if (needFresh || needOld) {
-                std::vector<String> all = scanDatalogFolders(sd, cloudStateManager);
-                for (const String& f : all) {
-                    if (isRecentFolder(f)) cloudFreshFolders.push_back(f);
-                    else                   cloudOldFolders.push_back(f);
-                }
-                LOGF("[FileUploader] Cloud scan: %d fresh, %d old folders",
-                     (int)cloudFreshFolders.size(), (int)cloudOldFolders.size());
-            }
 
             auto runCloudFolder = [&](const String& folder) -> bool {
                 if (isTimerExpired()) { timerExpired = true; return false; }
@@ -303,6 +313,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 LOG("[FileUploader] No new DATALOG files — skipping import finalize");
             }
         }
+        } // cloudHasWork
 
         cloudStateManager->save(sd);
 
