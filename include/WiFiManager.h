@@ -11,6 +11,7 @@ enum class WifiPowerSaving;
 class WiFiManager {
 private:
     bool connected;
+    bool mdnsStarted;
     static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info);
 
 public:
