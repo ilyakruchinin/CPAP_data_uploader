@@ -6,6 +6,7 @@
 #include <fcntl.h>  // For O_WRONLY, O_CREAT, O_TRUNC flags
 #include <errno.h>
 #include <string.h>
+#include <WiFi.h>
 
 // Include libsmb2 headers
 // Note: These will be available when libsmb2 is added as ESP-IDF component
@@ -58,6 +59,34 @@ static bool isSmbPduAllocationError(const char* smbError) {
     return smbError &&
            (strstr(smbError, "Failed to allocate pdu") != nullptr ||
             strstr(smbError, "allocate pdu") != nullptr);
+}
+
+static bool recoverWiFiAfterSmbTransportFailure() {
+    const unsigned long WIFI_WAIT_TIMEOUT_MS = 10000;
+
+    if (WiFi.status() == WL_CONNECTED) {
+        LOG_WARN("[SMB] WiFi is connected but SMB reconnect failed; cycling WiFi to clear socket state");
+        WiFi.disconnect(false);
+        delay(1000);
+        feedUploadHeartbeat();
+    } else {
+        LOG_WARN("[SMB] WiFi is disconnected during SMB reconnect; attempting WiFi reconnect");
+    }
+
+    WiFi.reconnect();
+    unsigned long wifiWaitStart = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - wifiWaitStart < WIFI_WAIT_TIMEOUT_MS) {
+        feedUploadHeartbeat();
+        delay(100);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        LOG_INFO("[SMB] WiFi recovered, will retry SMB reconnect once");
+        return true;
+    }
+
+    LOG_ERROR("[SMB] WiFi recovery failed after SMB transport error");
+    return false;
 }
 
 SMBUploader::SMBUploader(const String& endpoint, const String& user, const String& password)
@@ -643,6 +672,16 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         disconnect();
         delay(150);
         if (!connect()) {
+            LOG_WARN("[SMB] Initial reconnect failed after transport error");
+
+            if (recoverWiFiAfterSmbTransportFailure()) {
+                delay(200);
+                if (connect()) {
+                    feedUploadHeartbeat();
+                    continue;
+                }
+            }
+
             LOG_ERROR("[SMB] Reconnect failed - cannot retry upload");
             return false;
         }
