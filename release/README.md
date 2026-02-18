@@ -512,15 +512,19 @@ GMT_OFFSET_HOURS = 0
 1. Waits for upload eligibility based on configured mode (`UPLOAD_MODE`)
    - Smart mode: shortly after therapy ends (activity + inactivity detection)
    - Scheduled mode: during configured upload window
-2. Takes control of SD card (only when CPAP is idle)
-3. Uploads new/changed files in priority order:
-   - DATALOG folders (newest first)
-   - Root files if present (`STR.edf`, `Identification.crc`, `Identification.tgt`, `Identification.json`)
-   - SETTINGS files
-4. **SMB:** Automatically creates directories on remote share
-   **Cloud:** Associates data with your SleepHQ account
-5. Releases SD card after session or time budget exhausted
-6. Saves progress to `.upload_state.v2` (snapshot) and `.upload_state.v2.log` (append-only journal)
+2. **Pre-flight scan** checks for new/changed files (SD-only, no network)
+3. Takes control of SD card (only when CPAP is idle)
+4. **Staged upload processing** (optimizes memory usage):
+   - SMB pass: Upload to network share
+   - Cloud pass: Upload to SleepHQ (only if files exist)
+5. Uploads new/changed files in priority order:
+   - **SMB**: Root/SETTINGS files first, then DATALOG folders (newest first)
+   - **Cloud**: DATALOG folders first (newest first), then Root/SETTINGS files (only if DATALOG files uploaded)
+6. **SMB:** Automatically creates directories on remote share
+   **Cloud:** Associates data with your SleepHQ account (OAuth only if needed)
+7. Releases SD card after session or time budget exhausted
+8. **Automatic heap recovery** reboots if memory fragmented (seamless fast-boot)
+9. Saves progress to separate state files for each backend (`.upload_state.v2.smb`/`.cloud` + journals)
 
 ### Smart File Tracking
 - **DATALOG folders**: Tracks completion (all files uploaded = done)
@@ -683,6 +687,17 @@ The firmware includes an optional test web server for development and troublesho
 - Verify `GMT_OFFSET_HOURS` is correct (timestamps matter)
 - View logs for specific API error messages
 
+**Frequent Reboots**
+- Normal: Automatic heap recovery reboots when memory fragmented
+- Check logs for "Heap fragmented" messages
+- Reboots are seamless and preserve upload state
+- If excessive, check for large file uploads or mixed backend usage
+
+**Nothing Uploads**
+- Check if files have actually changed (pre-flight scan skips unchanged files)
+- Verify recent completed folders have file size changes
+- Check logs for "nothing to upload — skipping" messages
+
 ### SMB Connection Issues
 
 **Cannot connect to SMB share**
@@ -748,8 +763,8 @@ http://<device-ip>/logs
 ```
 
 **Check Upload State**
-- Look for `.upload_state.v2` and `.upload_state.v2.log` on SD card
-- Contains upload history, retry counts, and incremental journal updates
+- Look for `.upload_state.v2.smb`/`.cloud` and their `.log` files on SD card
+- Contains upload history, retry counts, and incremental journal updates for each backend
 
 ---
 
@@ -759,8 +774,10 @@ http://<device-ip>/logs
 ```
 /
 ├── config.txt               # Your configuration (you create this)
-├── .upload_state.v2         # Upload tracking snapshot (auto-created)
-├── .upload_state.v2.log     # Upload tracking journal (auto-created)
+├── .upload_state.v2.smb     # SMB upload tracking (auto-created)
+├── .upload_state.v2.smb.log # SMB upload journal (auto-created)
+├── .upload_state.v2.cloud   # Cloud upload tracking (auto-created)
+├── .upload_state.v2.cloud.log # Cloud upload journal (auto-created)
 ├── Identification.json      # ResMed 11 identification (if present)
 ├── Identification.crc       # Identification checksum (if present)
 ├── Identification.tgt       # ResMed 9/10 identification (if present)

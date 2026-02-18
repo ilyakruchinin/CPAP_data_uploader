@@ -235,7 +235,50 @@ heap stability.
 
 ---
 
-## 4. Upload Session Flow (UPLOADING State Detail)
+## 4. Heap Management & Recovery System
+
+### 4.1 Memory Fragmentation Challenge
+The ESP32's heap becomes fragmented during extended upload sessions, especially with mixed SMB+CLOUD operations. TLS connections, response parsing, and state management all contribute to reduced contiguous heap (`max_alloc`).
+
+### 4.2 Automatic Recovery System
+```cpp
+const uint32_t SD_MOUNT_MIN_ALLOC = 45000;
+if (ESP.getMaxAllocHeap() < SD_MOUNT_MIN_ALLOC) {
+    LOG("[FSM] Heap fragmented — fast-reboot to restore heap");
+    esp_restart();
+}
+```
+
+**Recovery Process:**
+1. **Detection**: Monitor `max_alloc` after each upload pass
+2. **Threshold**: Reboot if `max_alloc < 45KB` (insufficient for SD mount)
+3. **Fast-boot**: `esp_reset_reason() == ESP_RST_SW` skips stabilization delays
+4. **Seamless**: Upload state preserved, user unnoticeable
+
+### 4.3 Staged Backend Processing
+To minimize heap pressure:
+1. **SMB Pass**: Process while heap is fresh (~73KB max_alloc)
+2. **Teardown**: Destroy SMB uploader, reclaim 8KB buffer
+3. **Cloud Pass**: Process with optimized TLS handling
+4. **Benefit**: Isolates memory pressure between backends
+
+### 4.4 Pre-flight Scans
+Before any network activity:
+```cpp
+bool hasWork = !scanDatalogFolders().empty() || mandatoryChanged;
+if (!hasWork) {
+    LOG("[Backend] nothing to upload — skipping");
+}
+```
+
+**Benefits:**
+- Avoids OAuth when no Cloud files exist
+- Prevents SMB connection when nothing needs upload
+- Saves heap for actual upload operations
+
+---
+
+## 5. Upload Session Flow (UPLOADING State Detail)
 
 ```
 UPLOADING state entered
@@ -273,7 +316,8 @@ UPLOADING state entered
     - The RAM-heavy in-memory path for small files was removed.
     - Upload state uses v2 bounded structures + incremental persistence:
       - fixed-size in-memory arrays for folders/retry/file fingerprints
-      - append-only journal (`/.upload_state.v2.log`) with periodic snapshot compaction (`/.upload_state.v2`)
+      - separate state files per backend: `.upload_state.v2.smb`/`.cloud` + `.log`
+      - append-only journal with periodic snapshot compaction
       - recent DATALOG uses size-only tracking
       - per-file immediate state saves were removed from `uploadSingleFile()`
     - *Impact*: predictable RAM footprint and lower heap fragmentation risk during TLS-heavy sessions.
@@ -317,7 +361,45 @@ uninterrupted SD card access between cycles. The inactivity check (Z seconds, de
 
 ---
 
-## 6. SD Activity Monitor (Web UI Feature)
+## 6. Progressive Web App Interface
+
+### 6.1 PWA Architecture
+The web interface is implemented as a Progressive Web App with pre-allocated buffers to prevent heap fragmentation during uploads.
+
+### 6.2 Buffer Management
+```cpp
+// All HTML/JS content generated at startup
+const char* getMainPageHtml() {
+    return R"(<!DOCTYPE html><html>...</html>)";
+}
+
+// Pre-allocated JSON buffer for status
+char statusBuffer[1024];
+snprintf(statusBuffer, sizeof(statusBuffer), "{\"state\":\"%s\"...}", state);
+```
+
+**Benefits:**
+- No runtime memory allocation during uploads
+- Consistent memory usage patterns
+- Reliable operation under heap pressure
+
+### 6.3 Real-time Features
+- **Auto-refresh**: 5-second page reload for dashboard
+- **Live status**: JSON API for custom monitoring
+- **Progress tracking**: Real-time upload progress bars
+- **Manual controls**: Upload triggers, state reset, soft reboots
+
+### 6.4 Rate Limiting
+```cpp
+bool isUploadUiRateLimited(slot, uploadInProgress, minInterval) {
+    // Prevent server overload during uploads
+    return uploadInProgress && (now - lastServed[slot]) < minInterval;
+}
+```
+
+---
+
+## 7. SD Activity Monitor (Web UI Feature)
 
 ### Purpose
 

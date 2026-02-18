@@ -217,7 +217,9 @@ Extensive testing with the SleepHQ API (v1) revealed critical optimization oppor
 TLS streaming and upload-state persistence are both implemented in low-churn form to protect contiguous heap during long sessions.
 
 1. **Upload state persistence architecture**
-    * Upload state uses a **v2 line-based snapshot+journal** model (`/.upload_state.v2`, `/.upload_state.v2.log`).
+    * Upload state uses a **v2 line-based snapshot+journal** model with separate files per backend:
+      - SMB: `.upload_state.v2.smb` + `.upload_state.v2.smb.log`
+      - Cloud: `.upload_state.v2.cloud` + `.upload_state.v2.cloud.log`
     * In-memory state uses bounded fixed-size arrays for completed folders, pending folders, retry state, and file fingerprints.
     * Persistence is append-first (journal), with periodic compaction into snapshot.
 

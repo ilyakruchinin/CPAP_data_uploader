@@ -124,6 +124,9 @@ Access the dashboard at `http://cpap.local` to monitor your upload progress:
   - <u>Automatic detection of CPAP therapy session ending</u> (based on SD card activity)
   - **You get your last night of sleep data within a few minutes after taking your mask off**
 - Scheduled upload mode: predictable upload window with timezone support
+- **Progressive Web App interface** with pre-allocated buffers (prevents heap fragmentation)
+- **Automatic heap recovery** with seamless soft-reboots when memory fragmented
+- **Pre-flight scans** - only authenticates when files need uploading
 - **Over-The-Air (OTA) firmware updates** via web interface
 - **Local Network Discovery (mDNS)**: Access the device via `http://cpap.local` (configurable hostname)
 - Secure credential storage in ESP32 flash memory (optional)
@@ -200,13 +203,15 @@ pio run -e pico32-ota     # OTA build (1.5MB app space, web updates)
 3. **Waits for upload eligibility based on mode**
    - **Smart mode:** starts shortly after therapy ends (activity detection)
    - **Scheduled mode:** uploads during configured window
-4. **Uploads required CPAP data** to your network share or the Cloud (SleepHQ)
+4. **Pre-flight scan** checks if files need uploading (skips authentication if nothing new)
+5. **Uploads required CPAP data** in stages (SMB first, then Cloud) to optimize memory
    - Takes exclusive control of SD card (default 5 minutes). **Only accesses the card when NOT in use** by the CPAP machine (no therapy running, automatic detection)
    - Uploads `DATALOG/` folders and `SETTINGS/` files
    - Uploads root files **if present**: `STR.edf`, `Identification.crc`, `Identification.tgt` (ResMed 9/10), `Identification.json` (ResMed 11)
    - Tracks what's been uploaded (no duplicates)
    - Releases SD card for CPAP machine use
-5. **Repeats** automatically (periodically, daily if in "scheduled" mode)
+6. **Automatic heap recovery** reboots if memory becomes fragmented (seamless, fast-boot)
+7. **Repeats** automatically (periodically, daily if in "scheduled" mode)
 
 The device respects your CPAP machine's need for SD card access by only accessing the card when it's not used by CPAP, keeping upload sessions short and releasing control immediately after each session.
 

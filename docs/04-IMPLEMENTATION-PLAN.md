@@ -257,7 +257,7 @@ Implemented changes:
 
 Validation focus:
 - Verify pruning log appears on first boot after migration.
-- Verify `/.upload_state.v2` remains compact and `/.upload_state.v2.log` is periodically compacted.
+- Verify `/.upload_state.v2.smb`/`.cloud` remain compact and `.log` files are periodically compacted.
 - Verify long sessions complete without reboot orchestration.
 
 ---
