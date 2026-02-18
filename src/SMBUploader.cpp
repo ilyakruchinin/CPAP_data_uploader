@@ -20,6 +20,8 @@ extern "C" {
 #define UPLOAD_BUFFER_FALLBACK_SIZE 4096
 #define SMB_COMMAND_TIMEOUT_SECONDS 30
 #define SMB_UPLOAD_MAX_ATTEMPTS 2
+#define SMB_WRITE_EAGAIN_RETRIES 6
+#define SMB_WRITE_EAGAIN_BASE_DELAY_MS 20
 
 extern volatile unsigned long g_uploadHeartbeat;
 
@@ -66,17 +68,33 @@ static bool isSmbPduAllocationError(const char* smbError) {
             strstr(smbError, "allocate pdu") != nullptr);
 }
 
+static bool isTransientSmbSocketBackpressure(int errorCode, const char* smbError) {
+    if (errorCode == EAGAIN
+#ifdef EWOULDBLOCK
+        || errorCode == EWOULDBLOCK
+#endif
+    ) {
+        return true;
+    }
+
+    if (!smbError) {
+        return false;
+    }
+
+    return strstr(smbError, "Resource temporarily unavailable") != nullptr ||
+           strstr(smbError, "No more processes") != nullptr ||
+           strstr(smbError, "EAGAIN") != nullptr;
+}
+
 static bool recoverWiFiAfterSmbTransportFailure() {
     const unsigned long WIFI_WAIT_TIMEOUT_MS = 10000;
 
     if (WiFi.status() == WL_CONNECTED) {
-        LOG_WARN("[SMB] WiFi is connected but SMB reconnect failed; cycling WiFi to clear socket state");
-        WiFi.disconnect(false);
-        delay(1000);
-        feedUploadHeartbeat();
-    } else {
-        LOG_WARN("[SMB] WiFi is disconnected during SMB reconnect; attempting WiFi reconnect");
+        LOG_WARN("[SMB] WiFi link is still up after SMB reconnect failure; skipping WiFi cycle to avoid tearing down other sockets");
+        return true;
     }
+
+    LOG_WARN("[SMB] WiFi is disconnected during SMB reconnect; attempting WiFi reconnect");
 
     WiFi.reconnect();
     unsigned long wifiWaitStart = millis();
@@ -573,21 +591,50 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
 
             totalBytesRead += bytesRead;
 
-            ssize_t bytesWritten = smb2_write(smb2, remoteFile, uploadBuffer, bytesRead);
+            ssize_t bytesWritten = -1;
+            int writeErrno = 0;
+            const char* writeError = nullptr;
+
+            for (int writeAttempt = 0; writeAttempt <= SMB_WRITE_EAGAIN_RETRIES; ++writeAttempt) {
+                bytesWritten = smb2_write(smb2, remoteFile, uploadBuffer, bytesRead);
+                if (bytesWritten >= 0) {
+                    break;
+                }
+
+                writeErrno = errno;
+                writeError = smb2_get_error(smb2);
+
+                if (!isTransientSmbSocketBackpressure(writeErrno, writeError) ||
+                    writeAttempt == SMB_WRITE_EAGAIN_RETRIES) {
+                    break;
+                }
+
+                if (writeAttempt == 0 || writeAttempt == SMB_WRITE_EAGAIN_RETRIES - 1) {
+                    LOG_WARNF("[SMB] Transient socket backpressure at offset %lu (errno=%d), retrying write (%d/%d)",
+                              attemptBytesTransferred,
+                              writeErrno,
+                              writeAttempt + 1,
+                              SMB_WRITE_EAGAIN_RETRIES);
+                }
+
+                feedUploadHeartbeat();
+                delay(SMB_WRITE_EAGAIN_BASE_DELAY_MS * (writeAttempt + 1));
+            }
+
             if (bytesWritten < 0) {
-                const char* error = smb2_get_error(smb2);
-                int writeErrno = errno;
+                const char* error = writeError ? writeError : smb2_get_error(smb2);
+                int finalErrno = writeErrno != 0 ? writeErrno : errno;
                 LOGF("[SMB] ERROR: Write failed at offset %lu: %s (errno=%d: %s)",
                      attemptBytesTransferred,
                      error ? error : "unknown",
-                     writeErrno,
-                     strerror(writeErrno));
+                     finalErrno,
+                     strerror(finalErrno));
                 LOG("[SMB] Possible causes:");
                 LOG("[SMB]   - Network connection lost");
                 LOG("[SMB]   - Remote server disk full");
                 LOG("[SMB]   - SMB command timeout");
 
-                bool recoverableTransportError = isRecoverableSmbWriteError(writeErrno, error);
+                bool recoverableTransportError = isRecoverableSmbWriteError(finalErrno, error);
                 if (recoverableTransportError) {
                     transportErrorDetected = true;
                     skipRemoteClose = true;
