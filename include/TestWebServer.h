@@ -65,6 +65,8 @@ private:
     int getPendingFoldersCount();
     String escapeJson(const String& str);
     bool redirectToIpIfMdnsRequest();
+    bool isUploadInProgress() const;
+    bool rejectHeavyRequestDuringUpload(const char* endpoint);
     
     // Static helper methods
     static void addCorsHeaders(WebServer* server);

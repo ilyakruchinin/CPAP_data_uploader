@@ -16,6 +16,7 @@ volatile bool g_stopMonitorFlag = false;
 extern UploadState currentState;
 extern unsigned long stateEnteredAt;
 extern unsigned long cooldownStartedAt;
+extern volatile bool uploadTaskRunning;
 
 // Constructor
 TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
@@ -55,6 +56,7 @@ bool TestWebServer::begin() {
     // Register request handlers
     server->on("/", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
+        if (this->rejectHeavyRequestDuringUpload("/")) return;
         this->handleRoot();
     });
     server->on("/trigger-upload", [this]() {
@@ -65,32 +67,39 @@ bool TestWebServer::begin() {
     // HTML Views
     server->on("/status", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
+        if (this->rejectHeavyRequestDuringUpload("/status")) return;
         this->handleStatusPage();
     });
     server->on("/config", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
+        if (this->rejectHeavyRequestDuringUpload("/config")) return;
         this->handleConfigPage();
     });
     server->on("/logs", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
+        if (this->rejectHeavyRequestDuringUpload("/logs")) return;
         this->handleLogs();
     });
     server->on("/monitor", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
+        if (this->rejectHeavyRequestDuringUpload("/monitor")) return;
         this->handleMonitorPage();
     });
     
     // APIs
     server->on("/api/status", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
+        if (this->rejectHeavyRequestDuringUpload("/api/status")) return;
         this->handleApiStatus();
     });
     server->on("/api/config", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
+        if (this->rejectHeavyRequestDuringUpload("/api/config")) return;
         this->handleApiConfig();
     });
     server->on("/api/logs", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
+        if (this->rejectHeavyRequestDuringUpload("/api/logs")) return;
         this->handleApiLogs();
     });
     server->on("/api/monitor-start", [this]() {
@@ -103,6 +112,7 @@ bool TestWebServer::begin() {
     });
     server->on("/api/sd-activity", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
+        if (this->rejectHeavyRequestDuringUpload("/api/sd-activity")) return;
         this->handleSdActivity();
     });
     server->on("/reset-state", [this]() {
@@ -152,6 +162,30 @@ void TestWebServer::handleClient() {
     if (server) {
         server->handleClient();
     }
+}
+
+bool TestWebServer::isUploadInProgress() const {
+    return uploadTaskRunning;
+}
+
+bool TestWebServer::rejectHeavyRequestDuringUpload(const char* endpoint) {
+    if (!server || !isUploadInProgress()) {
+        return false;
+    }
+
+    static unsigned long lastWarnMs = 0;
+    const unsigned long now = millis();
+    if (now - lastWarnMs >= 5000) {
+        LOG_WARNF("[TestWebServer] Rejecting heavy endpoint during upload: %s", endpoint ? endpoint : "(unknown)");
+        lastWarnMs = now;
+    }
+
+    addCorsHeaders(server);
+    server->sendHeader("Retry-After", "5");
+    server->send(503,
+                 "application/json",
+                 "{\"status\":\"busy\",\"message\":\"Upload in progress. Retry shortly.\"}");
+    return true;
 }
 
 bool TestWebServer::redirectToIpIfMdnsRequest() {
@@ -441,8 +475,8 @@ void TestWebServer::handleApiConfig() {
     // Add CORS headers
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    // Send headers with empty content to start chunked response
-    server->send(200, "application/json", "");
+    // Send headers with whitespace payload to avoid noisy zero-length warning in WebServer::send()
+    server->send(200, "application/json", " ");
     
     auto sendChunk = [this](const String& s) { server->sendContent(s); };
     
@@ -495,7 +529,7 @@ void TestWebServer::handleApiConfig() {
         sendChunk(json);
     } else {
         // If config is null, send minimal JSON
-        server->send(200, "application/json", json);
+        sendChunk(json);
     }
     
     json = "}";
@@ -686,7 +720,7 @@ void TestWebServer::handleApiLogs() {
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     // Send headers with correct content type
-    server->send(200, "text/plain; charset=utf-8", "");
+    server->send(200, "text/plain; charset=utf-8", " ");
     // Stream logs directly
     ChunkedPrint chunkedOutput(server);
     Logger::getInstance().printLogs(chunkedOutput);
@@ -777,7 +811,7 @@ void TestWebServer::handleApiStatus() {
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     // Send headers with correct content type
-    server->send(200, "application/json", "");
+    server->send(200, "application/json", " ");
     
     auto sendChunk = [this](const String& s) { server->sendContent(s); };
     
