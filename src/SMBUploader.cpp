@@ -47,6 +47,12 @@ static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
            strstr(smbError, "Connection reset") != nullptr;
 }
 
+static bool isSmbPduAllocationError(const char* smbError) {
+    return smbError &&
+           (strstr(smbError, "Failed to allocate pdu") != nullptr ||
+            strstr(smbError, "allocate pdu") != nullptr);
+}
+
 SMBUploader::SMBUploader(const String& endpoint, const String& user, const String& password)
     : smbUser(user), smbPassword(password), smb2(nullptr), connected(false),
       uploadBuffer(nullptr), uploadBufferSize(0), lastVerifiedParentDir("") {
@@ -283,6 +289,17 @@ bool SMBUploader::createDirectory(const String& path) {
             return false;
         }
     } else {
+        const char* statError = smb2_get_error(smb2);
+
+        // Under heavy fragmentation/libsmb2 pressure, stat itself may fail due
+        // to PDU allocation. Do not misclassify as "directory missing".
+        if (isSmbPduAllocationError(statError)) {
+            LOG_WARNF("[SMB] Directory stat failed due libsmb2 memory pressure for %s: %s",
+                      cleanPath.c_str(),
+                      statError);
+            return false;
+        }
+
         // Stat failed - directory might not exist or we might not have permissions
         LOGF("[SMB] Directory does not exist: %s (will create)", cleanPath.c_str());
     }
@@ -304,6 +321,13 @@ bool SMBUploader::createDirectory(const String& path) {
     int mkdir_result = smb2_mkdir(smb2, cleanPath.c_str());
     if (mkdir_result < 0) {
         const char* error = smb2_get_error(smb2);
+
+        if (isSmbPduAllocationError(error)) {
+            LOG_WARNF("[SMB] Directory create failed due libsmb2 memory pressure for %s: %s",
+                      cleanPath.c_str(),
+                      error);
+            return false;
+        }
         
         // Check if error is because directory already exists
         // STATUS_INVALID_PARAMETER can mean the directory already exists in some SMB implementations
@@ -392,13 +416,22 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             parentDir = fullRemotePath.substring(0, lastSlash);
             if (parentDir != lastVerifiedParentDir) {
                 if (!createDirectory(parentDir)) {
-                    LOGF("[SMB] ERROR: Failed to create parent directory: %s", parentDir.c_str());
-                    LOG("[SMB] Check permissions on remote share");
-                    localFile.close();
-                    return false;
+                    uint32_t maxAllocNow = ESP.getMaxAllocHeap();
+                    if (maxAllocNow < 50000) {
+                        LOG_WARNF("[SMB] Parent directory check/create deferred under low memory (%u bytes): %s",
+                                  maxAllocNow,
+                                  parentDir.c_str());
+                        LOG_WARN("[SMB] Proceeding with direct open; PATH_NOT_FOUND recovery will retry creation");
+                    } else {
+                        LOGF("[SMB] ERROR: Failed to create parent directory: %s", parentDir.c_str());
+                        LOG("[SMB] Check permissions on remote share");
+                        localFile.close();
+                        return false;
+                    }
+                } else {
+                    lastVerifiedParentDir = parentDir;
+                    feedUploadHeartbeat();
                 }
-                lastVerifiedParentDir = parentDir;
-                feedUploadHeartbeat();
             }
         }
 
@@ -412,7 +445,26 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
                 (strstr(error, "STATUS_OBJECT_PATH_NOT_FOUND") != nullptr ||
                  strstr(error, "PATH_NOT_FOUND") != nullptr)) {
                 LOG_WARNF("[SMB] Parent path missing for %s, retrying directory creation", parentDir.c_str());
-                if (createDirectory(parentDir)) {
+
+                bool dirReady = createDirectory(parentDir);
+
+                // If directory recovery fails under low memory, reconnect SMB
+                // context and retry once to clear any stale libsmb2 state.
+                if (!dirReady) {
+                    uint32_t maxAllocNow = ESP.getMaxAllocHeap();
+                    if (maxAllocNow < 50000) {
+                        LOG_WARN("[SMB] Low memory during directory recovery; reconnecting SMB context and retrying once");
+                        disconnect();
+                        delay(150);
+                        if (connect()) {
+                            dirReady = createDirectory(parentDir);
+                        } else {
+                            error = "SMB reconnect failed during directory recovery";
+                        }
+                    }
+                }
+
+                if (dirReady) {
                     lastVerifiedParentDir = parentDir;
                     feedUploadHeartbeat();
                     remoteFile = smb2_open(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
