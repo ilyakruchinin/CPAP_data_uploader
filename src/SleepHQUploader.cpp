@@ -989,8 +989,15 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                     } else {
                         // WiFi connected but TLS connect failed — attempt coordinated cycle.
                         // Skips if SMB holds an active connection or cooldown has not elapsed.
-                        tryCoordinatedWifiCycle(true);
-                        resetTLS();
+                        // Only reset TLS again if the cycle actually ran (WiFi was cycled);
+                        // if skipped, the fresh client from the resetTLS() above is still good.
+                        if (tryCoordinatedWifiCycle(true)) {
+                            resetTLS();
+                            if (!tlsClient) {
+                                LOG_ERROR("[SleepHQ] TLS client allocation failed after WiFi cycle (OOM)");
+                                return false;
+                            }
+                        }
                     }
                     
                     continue; 

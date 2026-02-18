@@ -404,6 +404,10 @@ void setup() {
             uploader->setWebServer(testWebServer);
             LOG_DEBUG("Web server linked to uploader for responsive handling");
         }
+
+        // Build static config snapshot once — served from g_webConfigBuf with zero heap alloc.
+        testWebServer->initConfigSnapshot();
+        LOG_DEBUG("[WebStatus] Config snapshot built");
     } else {
         LOG_ERROR("Failed to start test web server");
     }
@@ -744,6 +748,13 @@ void loop() {
     // Handle web server requests
     if (testWebServer) {
         testWebServer->handleClient();
+        // Refresh status snapshot every 3 s — assembles JSON using snprintf into
+        // g_webStatusBuf (stack only, zero heap allocation).
+        static unsigned long lastStatusSnapMs = 0;
+        if (millis() - lastStatusSnapMs >= 3000) {
+            testWebServer->updateStatusSnapshot();
+            lastStatusSnapMs = millis();
+        }
     }
     
     // ── Software watchdog for upload task ──

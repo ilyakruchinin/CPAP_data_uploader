@@ -9,6 +9,7 @@
 #include "WiFiManager.h"
 #include "CPAPMonitor.h"
 #include "TrafficMonitor.h"
+#include "WebStatus.h"
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -83,6 +84,11 @@ public:
     void updateManagers(UploadStateManager* state, ScheduleManager* schedule);
     void setWiFiManager(WiFiManager* wifi);
     void setTrafficMonitor(TrafficMonitor* tm);
+
+    // Zero-heap status snapshot — call from main loop every ~2-3 s
+    void updateStatusSnapshot();
+    // Config snapshot — call once after Config is loaded at boot
+    void initConfigSnapshot();
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA manager access
