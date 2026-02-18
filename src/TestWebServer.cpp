@@ -109,6 +109,9 @@ void TestWebServer::handleClient() {
 
 // GET / - HTML status page (modern dark dashboard)
 void TestWebServer::handleRoot() {
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Pragma", "no-cache");
+    server->sendHeader("Connection", "close");
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
 
     auto sendChunk = [this](const String& s) {
@@ -118,7 +121,6 @@ void TestWebServer::handleRoot() {
     String html = "<!DOCTYPE html><html><head>";
     html += "<title>CPAP Data Uploader</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<meta http-equiv='refresh' content='5'>";
     html += "<style>";
     html += "*{box-sizing:border-box;margin:0;padding:0}";
     html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
@@ -171,6 +173,7 @@ void TestWebServer::handleRoot() {
     // ── Header ──
     html = "<h1>CPAP Data Uploader</h1>";
     html += "<p class='subtitle'>Firmware " + String(FIRMWARE_VERSION) + " &middot; " + getUptimeString() + " uptime</p>";
+    html += "<p style='font-size:0.82em;color:#8f98a0;margin:4px 0 14px 0'>Auto-refresh is disabled during upload runs to reduce heap churn. Use browser refresh when needed.</p>";
     sendChunk(html);
 
     // ── FSM State + System card (side by side) ──
@@ -430,6 +433,9 @@ void TestWebServer::addCorsHeaders(WebServer* server) {
     server->sendHeader("Access-Control-Allow-Origin", "*");
     server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Pragma", "no-cache");
+    server->sendHeader("Connection", "close");
 }
 
 // Helper: Get uptime as formatted string
