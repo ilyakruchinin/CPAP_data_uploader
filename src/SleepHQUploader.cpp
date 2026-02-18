@@ -118,6 +118,15 @@ bool SleepHQUploader::begin() {
         }
     }
     
+    // Create the import session while the TLS connection is still alive from
+    // the OAuth and team-discovery requests above.  This avoids a second
+    // SSL handshake (which would fail at low max_alloc) when ensureCloudImport()
+    // calls createImport() later.
+    if (!createImport()) {
+        LOG_ERROR("[SleepHQ] Failed to create initial import session");
+        return false;
+    }
+
     connected = true;
     LOG("[SleepHQ] Cloud uploader initialized successfully");
     return true;

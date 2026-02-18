@@ -2,6 +2,7 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <Preferences.h>
+
 #include "Config.h"
 #include "SDCardManager.h"
 #include "WiFiManager.h"
@@ -12,6 +13,11 @@
 
 #include "TrafficMonitor.h"
 #include "UploadFSM.h"
+
+// Survives esp_restart() — set before a heap-recovery reboot so setup() can
+// skip cold-boot delays (stabilization, Smart Wait, NTP settle) that are only
+// needed on true power-on boots.
+RTC_DATA_ATTR bool g_heapRecoveryBoot = false;
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -188,35 +194,43 @@ void setup() {
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
 
-    // Smart Boot Delay
-    // 1. Wait 2 seconds unconditionally for voltage stabilization and CPAP boot start
-    LOG("Waiting 2s for electrical stabilization...");
-    delay(2000);
+    // Smart Boot Delay — skipped on heap-recovery reboots (CPAP is already idle,
+    // bus was silent, and voltages are stable from the previous run).
+    bool fastBoot = g_heapRecoveryBoot;
+    // NOTE: g_heapRecoveryBoot is cleared AFTER uploader->begin() so that
+    // ScheduleManager::syncTime() (called inside begin()) also sees the flag.
+    if (fastBoot) {
+        LOG("[FastBoot] Heap-recovery reboot — skipping stabilization + Smart Wait");
+    } else {
+        // 1. Wait 2 seconds unconditionally for voltage stabilization and CPAP boot start
+        LOG("Waiting 2s for electrical stabilization...");
+        delay(2000);
 
-    // 2. Wait for bus silence (CPAP finished initial card checks)
-    // We look for 3 seconds of continuous silence, with a max timeout of 20 seconds
-    LOG("Checking for CPAP SD card activity (Smart Wait)...");
-    
-    unsigned long waitStart = millis();
-    const unsigned long MAX_WAIT_MS = 20000;     // Max time to wait in this phase
-    const unsigned long REQUIRED_IDLE_MS = 3000; // Required silence duration
-    bool busIsQuiet = false;
+        // 2. Wait for bus silence (CPAP finished initial card checks)
+        // We look for 3 seconds of continuous silence, with a max timeout of 20 seconds
+        LOG("Checking for CPAP SD card activity (Smart Wait)...");
 
-    while (millis() - waitStart < MAX_WAIT_MS) {
-        trafficMonitor.update(); // Update activity stats
-        
-        // Feed watchdog to prevent resets during long waits
-        delay(10); 
-        
-        if (trafficMonitor.isIdleFor(REQUIRED_IDLE_MS)) {
-            LOGF("Bus silence detected (%dms) - CPAP is idle", REQUIRED_IDLE_MS);
-            busIsQuiet = true;
-            break;
+        unsigned long waitStart = millis();
+        const unsigned long MAX_WAIT_MS = 20000;     // Max time to wait in this phase
+        const unsigned long REQUIRED_IDLE_MS = 3000; // Required silence duration
+        bool busIsQuiet = false;
+
+        while (millis() - waitStart < MAX_WAIT_MS) {
+            trafficMonitor.update(); // Update activity stats
+
+            // Feed watchdog to prevent resets during long waits
+            delay(10);
+
+            if (trafficMonitor.isIdleFor(REQUIRED_IDLE_MS)) {
+                LOGF("Bus silence detected (%dms) - CPAP is idle", REQUIRED_IDLE_MS);
+                busIsQuiet = true;
+                break;
+            }
         }
-    }
 
-    if (!busIsQuiet) {
-        LOG_WARN("Smart wait timed out - bus still active, but proceeding anyway");
+        if (!busIsQuiet) {
+            LOG_WARN("Smart wait timed out - bus still active, but proceeding anyway");
+        }
     }
     
     LOG("Boot delay complete, attempting SD card access...");
@@ -245,17 +259,24 @@ void setup() {
             resetPrefs.putBool("reset_state", false);
             resetPrefs.end();
             
+            // Delete all known state file paths: per-backend (current) + old default (legacy)
+            static const char* STATE_FILES[] = {
+                "/.upload_state.v2.smb",
+                "/.upload_state.v2.smb.log",
+                "/.upload_state.v2.cloud",
+                "/.upload_state.v2.cloud.log",
+                "/.upload_state.v2",        // legacy: pre-split single-manager path
+                "/.upload_state.v2.log",
+            };
             bool removedAny = false;
-            if (sdManager.getFS().remove("/.upload_state.v2")) {
-                LOG("Upload state snapshot deleted successfully");
-                removedAny = true;
-            }
-            if (sdManager.getFS().remove("/.upload_state.v2.log")) {
-                LOG("Upload state journal deleted successfully");
-                removedAny = true;
+            for (const char* path : STATE_FILES) {
+                if (sdManager.getFS().remove(path)) {
+                    LOGF("Deleted state file: %s", path);
+                    removedAny = true;
+                }
             }
             if (!removedAny) {
-                LOG_WARN("State files not found (may already be clean)");
+                LOG_WARN("No state files found (may already be clean)");
             }
             LOG("State reset complete — continuing with fresh start");
         } else {
@@ -334,6 +355,7 @@ void setup() {
             return;
         }
         sdManager.releaseControl();
+        g_heapRecoveryBoot = false;  // consumed — only skip delays on this one boot
         LOG("Uploader initialized successfully");
     } else {
         LOG_ERROR("Failed to take SD card control for uploader initialization");
@@ -644,7 +666,21 @@ void handleReleasing() {
         transitionTo(UploadState::MONITORING);
         return;
     }
-    
+
+    // TLS heap fragmentation check: the cloud TLS session permanently fragments heap,
+    // dropping max_alloc from ~47 KB to ~38.9 KB.  SD_MMC mount fails below ~45 KB
+    // contiguous, making all subsequent upload cycles fail.  A clean reboot restores
+    // the full contiguous heap without losing any state (files already saved).
+    const uint32_t SD_MOUNT_MIN_ALLOC = 45000;
+    uint32_t maxAlloc = ESP.getMaxAllocHeap();
+    if (maxAlloc < SD_MOUNT_MIN_ALLOC) {
+        LOGF("[FSM] Heap fragmented post-upload (max_alloc=%u < %u) — fast-reboot to restore heap",
+             maxAlloc, SD_MOUNT_MIN_ALLOC);
+        g_heapRecoveryBoot = true;
+        delay(200);
+        esp_restart();
+    }
+
     cooldownStartedAt = millis();
     transitionTo(UploadState::COOLDOWN);
 }
