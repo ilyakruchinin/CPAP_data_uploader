@@ -420,6 +420,10 @@ void setup() {
         // Set TrafficMonitor reference in web server for SD Activity Monitor
         testWebServer->setTrafficMonitor(&trafficMonitor);
         LOG_DEBUG("TrafficMonitor linked to web server");
+
+        // Give web server access to the SMB state manager so updateStatusSnapshot()
+        // can show folder counts from the active backend (SMB pass vs cloud pass).
+        testWebServer->setSmbStateManager(uploader->getSmbStateManager());
         
         // Set web server reference in uploader for responsive handling during uploads
         if (uploader) {

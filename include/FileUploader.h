@@ -106,7 +106,8 @@ public:
                                            DataFilter filter);
 
     // Getters for internal components (for web interface access)
-    UploadStateManager* getStateManager() { return primaryStateManager(); }
+    UploadStateManager* getStateManager()    { return primaryStateManager(); }
+    UploadStateManager* getSmbStateManager() { return smbStateManager; }
     ScheduleManager* getScheduleManager() { return scheduleManager; }
     bool hasIncompleteFolders() {
         bool smb   = smbStateManager   && smbStateManager->getIncompleteFoldersCount()   > 0;
