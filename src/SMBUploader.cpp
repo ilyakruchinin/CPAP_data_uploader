@@ -49,7 +49,7 @@ static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
 
 SMBUploader::SMBUploader(const String& endpoint, const String& user, const String& password)
     : smbUser(user), smbPassword(password), smb2(nullptr), connected(false),
-      uploadBuffer(nullptr), uploadBufferSize(0) {
+      uploadBuffer(nullptr), uploadBufferSize(0), lastVerifiedParentDir("") {
     parseEndpoint(endpoint);
 }
 
@@ -169,6 +169,7 @@ bool SMBUploader::connect() {
     }
     
     connected = true;
+    lastVerifiedParentDir = "";
     LOG("[SMB] Connected successfully");
     
     // Test if we can access the base path (if configured)
@@ -201,6 +202,8 @@ void SMBUploader::disconnect() {
         smb2_destroy_context(smb2);
         smb2 = nullptr;
     }
+
+    lastVerifiedParentDir = "";
 }
 
 bool SMBUploader::begin() {
@@ -387,13 +390,16 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         int lastSlash = fullRemotePath.lastIndexOf('/');
         if (lastSlash > 0) {
             parentDir = fullRemotePath.substring(0, lastSlash);
-            if (!createDirectory(parentDir)) {
-                LOGF("[SMB] ERROR: Failed to create parent directory: %s", parentDir.c_str());
-                LOG("[SMB] Check permissions on remote share");
-                localFile.close();
-                return false;
+            if (parentDir != lastVerifiedParentDir) {
+                if (!createDirectory(parentDir)) {
+                    LOGF("[SMB] ERROR: Failed to create parent directory: %s", parentDir.c_str());
+                    LOG("[SMB] Check permissions on remote share");
+                    localFile.close();
+                    return false;
+                }
+                lastVerifiedParentDir = parentDir;
+                feedUploadHeartbeat();
             }
-            feedUploadHeartbeat();
         }
 
         // Open remote file for writing
@@ -407,6 +413,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
                  strstr(error, "PATH_NOT_FOUND") != nullptr)) {
                 LOG_WARNF("[SMB] Parent path missing for %s, retrying directory creation", parentDir.c_str());
                 if (createDirectory(parentDir)) {
+                    lastVerifiedParentDir = parentDir;
                     feedUploadHeartbeat();
                     remoteFile = smb2_open(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
                     if (remoteFile != nullptr) {

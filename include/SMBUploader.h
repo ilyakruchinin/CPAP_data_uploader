@@ -46,6 +46,10 @@ private:
     // Pre-allocated upload buffer (avoids per-file malloc/free fragmentation)
     uint8_t* uploadBuffer;
     size_t uploadBufferSize;
+
+    // Cache the last verified parent directory for current SMB session to
+    // avoid redundant stat/mkdir checks for every file in the same folder.
+    String lastVerifiedParentDir;
     
     /**
      * Parse SMB endpoint string into server and share components
