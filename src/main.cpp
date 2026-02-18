@@ -850,6 +850,15 @@ void loop() {
         esp_restart();
     }
     
+    // Soft reboot — skips stabilization, Smart Wait, and NTP settle delays
+    if (g_softRebootFlag) {
+        LOG("=== Soft Reboot Triggered via Web Interface ===");
+        g_softRebootFlag = false;
+        g_heapRecoveryBoot = true;  // survives esp_restart() via RTC_DATA_ATTR
+        delay(300);
+        esp_restart();
+    }
+
     // Check for upload trigger (force immediate upload — skip inactivity check)
     // Blocked while upload task is running — already uploading
     if (g_triggerUploadFlag && !uploadTaskRunning) {

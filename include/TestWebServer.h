@@ -18,6 +18,7 @@
 // Global trigger flags for upload and state reset
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
+extern volatile bool g_softRebootFlag;
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
 
@@ -41,6 +42,7 @@ private:
     void handleTriggerUpload();
     void handleStatusPage();      // HTML Status Page
     void handleApiStatus();       // JSON Status API
+    void handleSoftReboot();
     void handleResetState();
     void handleConfigPage();      // HTML Config Page
     void handleApiConfig();       // JSON Config API

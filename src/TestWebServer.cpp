@@ -9,6 +9,7 @@
 // Global trigger flags
 volatile bool g_triggerUploadFlag = false;
 volatile bool g_resetStateFlag = false;
+volatile bool g_softRebootFlag = false;
 
 // Monitoring trigger flags
 volatile bool g_monitorActivityFlag = false;
@@ -162,6 +163,10 @@ bool TestWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleResetState();
     });
+    server->on("/soft-reboot", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleSoftReboot();
+    });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -283,6 +288,15 @@ void TestWebServer::handleTriggerUpload() {
 
 // GET /status - JSON status information (Legacy - Removed, use handleApiStatus)
 
+
+// GET /soft-reboot - Reboot immediately, skipping cold-boot delays
+void TestWebServer::handleSoftReboot() {
+    LOG("[TestWebServer] Soft reboot requested via web interface");
+    addCorsHeaders(server);
+    server->send(200, "application/json",
+        "{\"status\":\"success\",\"message\":\"Rebooting now (waits skipped)...\"}");
+    g_softRebootFlag = true;
+}
 
 // GET /reset-state - Clear upload state
 void TestWebServer::handleResetState() {
