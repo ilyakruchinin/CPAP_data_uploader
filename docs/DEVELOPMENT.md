@@ -435,7 +435,7 @@ Current build sizes (with SMB enabled):
 - **Flash:** ~77.8% (1,223,321 / 1,572,864 bytes) - 1.5MB app partition
 - **RAM:** ~14.9% (48,776 / 327,680 bytes) - Static allocation
 
-**Dynamic Memory Analysis:** Upload state now uses a v2 line-based snapshot (`/.upload_state.v2`) plus append-only journal (`/.upload_state.v2.log`) with fixed-size in-memory structures. This avoids large `DynamicJsonDocument` allocations and reduces heap churn/fragmentation during frequent state updates.
+**Dynamic Memory Analysis:** Upload state now uses v2 line-based snapshots with separate files per backend (`.upload_state.v2.smb`/`.cloud`) plus append-only journals (`.log`) with fixed-size in-memory structures. This avoids large `DynamicJsonDocument` allocations and reduces heap churn/fragmentation during frequent state updates.
 
 ---
 
@@ -534,7 +534,7 @@ git push origin v0.3.0
 4. **Test Upload**
    - [ ] Files uploaded to SMB share (if SMB enabled)
    - [ ] Files uploaded to SleepHQ (if Cloud enabled)
-   - [ ] `.upload_state.v2` and `.upload_state.v2.log` created on SD card
+   - [ ] `.upload_state.v2.smb`/`.cloud` and `.upload_state.v2.smb.log`/`.cloud.log` created on SD card (depending on enabled backends)
    - [ ] No errors in serial output
 
 5. **Test Web Interface** (if enabled)
