@@ -800,12 +800,6 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
                 uploadSuccess = false;
             } else {
                 bytesTransferred = smbBytes;
-                
-                // Reconnect after each file to free libsmb2 internal buffers
-                // This prevents accumulated fragmentation in libsmb2's PDU/command structures
-                LOG_DEBUG("[FileUploader] Reconnecting SMB to free internal buffers (1-conn-per-file policy)");
-                smbUploader->end();
-                yield();  // Allow TCP cleanup
             }
         }
 #endif
@@ -887,6 +881,15 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
     } else {
         LOGF("[FileUploader] Successfully uploaded all %d files in folder", uploadedCount);
     }
+    
+    // Disconnect SMB after folder completes to free libsmb2 internal buffers
+    // (per-folder, not per-file, to avoid socket exhaustion)
+#ifdef ENABLE_SMB_UPLOAD
+    if (smbUploader && smbUploader->isConnected()) {
+        LOG_DEBUG("[FileUploader] Disconnecting SMB after folder to free internal buffers");
+        smbUploader->end();
+    }
+#endif
     
     // Mark folder as completed
     stateManager->markFolderCompleted(folderName);
