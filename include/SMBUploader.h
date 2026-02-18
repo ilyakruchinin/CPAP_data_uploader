@@ -43,6 +43,14 @@ private:
     struct smb2_context* smb2;  // libsmb2 context
     bool connected;
     
+    // Pre-allocated upload buffer (avoids per-file malloc/free fragmentation)
+    uint8_t* uploadBuffer;
+    size_t uploadBufferSize;
+
+    // Cache the last verified parent directory for current SMB session to
+    // avoid redundant stat/mkdir checks for every file in the same folder.
+    String lastVerifiedParentDir;
+    
     /**
      * Parse SMB endpoint string into server and share components
      * Expected format: //server/share or //server/share/path
@@ -122,6 +130,15 @@ public:
      * @return true if connected, false otherwise
      */
     bool isConnected() const;
+    
+    /**
+     * Pre-allocate upload buffer (must be called before first upload)
+     * Should be called BEFORE Cloud TLS initialization to get clean heap
+     * 
+     * @param size Buffer size to allocate (e.g., 8192, 4096, 2048, 1024)
+     * @return true if allocation successful, false otherwise
+     */
+    bool allocateBuffer(size_t size);
     
     /**
      * Scan remote directory and count files (for delta scan functionality)

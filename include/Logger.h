@@ -109,6 +109,17 @@ public:
     size_t printLogs(Print& output);
 
     /**
+     * Print only the newest tail of logs to a Print destination.
+     * Useful for web polling paths where full-buffer dumps are too expensive.
+     * Thread-safe.
+     *
+     * @param output The Print destination to write logs to
+     * @param maxBytes Maximum number of newest bytes to print
+     * @return Number of bytes written
+     */
+    size_t printLogsTail(Print& output, size_t maxBytes);
+
+    /**
      * Enable or disable SD card logging
      * WARNING: SD card logging is for debugging only and can cause conflicts
      * when accessing the SD card for CPAP data uploads. Use with caution.

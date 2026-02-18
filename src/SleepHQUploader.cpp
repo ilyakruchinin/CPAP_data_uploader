@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "NetworkRecovery.h"
 #include <esp32/rom/md5_hash.h>
 #include <esp_task_wdt.h>
 
@@ -117,6 +118,15 @@ bool SleepHQUploader::begin() {
         }
     }
     
+    // Create the import session while the TLS connection is still alive from
+    // the OAuth and team-discovery requests above.  This avoids a second
+    // SSL handshake (which would fail at low max_alloc) when ensureCloudImport()
+    // calls createImport() later.
+    if (!createImport()) {
+        LOG_ERROR("[SleepHQ] Failed to create initial import session");
+        return false;
+    }
+
     connected = true;
     LOG("[SleepHQ] Cloud uploader initialized successfully");
     return true;
@@ -687,28 +697,17 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
     LOG_DEBUGF("[SleepHQ] Uploading: %s (%lu bytes, hash: %s, free: %u, max_alloc: %u)",
                localPath.c_str(), lockedFileSize, contentHash.c_str(), freeHeap, maxAlloc);
     
-    // Policy: 1-connection-per-file for large files (>5KB) to avoid timeouts
-    // BUT: If memory is low (fragmented), we MUST preserve the existing connection
-    // because we might not be able to allocate a new SSL context if we close it.
-    bool lowMemory = (maxAlloc < 50000); // 50KB threshold (SSL needs ~40KB contiguous)
+    // Prefer one persistent TLS session across the entire import.
+    // Reconnecting per large file increases TLS handshake churn and heap fragmentation risk.
+    bool lowMemory = (maxAlloc < 50000); // 50KB threshold (SSL reconnect often needs ~40KB contiguous)
     if (!lowMemory) {
         lowMemoryKeepAliveWarned = false;
+    } else if (!lowMemoryKeepAliveWarned) {
+        LOG_WARNF("[SleepHQ] Low memory (%u bytes contiguous) - preserving TLS keep-alive to avoid reconnect churn", maxAlloc);
+        lowMemoryKeepAliveWarned = true;
     }
-    bool useKeepAlive = (lockedFileSize <= 5 * 1024) || lowMemory;
-    
-    if (tlsClient && tlsClient->connected()) {
-        if (!useKeepAlive) {
-            LOG_INFO("[SleepHQ] Refreshing TLS connection for stability (policy: 1-conn-per-file)");
-            tlsClient->stop(); 
-            yield();
-        } else if (lowMemory && lockedFileSize > 5 * 1024) {
-            if (!lowMemoryKeepAliveWarned) {
-                LOG_WARNF("[SleepHQ] Low memory (%u bytes contiguous) - forcing keep-alive to preserve SSL context", maxAlloc);
-                lowMemoryKeepAliveWarned = true;
-            }
-            useKeepAlive = true; // override keep-alive policy
-        }
-    }
+
+    const bool useKeepAlive = true;
     
     // Ensure WiFi is in high performance mode for upload
     WiFi.setSleep(false);
@@ -860,22 +859,9 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
                     LOG_ERROR("[SleepHQ] WiFi still disconnected");
                 }
             } else {
-                // WiFi connected but request failed — cycle to clear poisoned sockets
-                LOG_WARN("[SleepHQ] Cycling WiFi to clear socket state...");
-                WiFi.disconnect(false);
-                delay(1000);
-                esp_task_wdt_reset();  // Feed watchdog during disconnect
-                WiFi.reconnect();
-                unsigned long wifiWait = millis();
-                while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
-                    esp_task_wdt_reset();  // Feed watchdog during reconnection
-                    delay(100);
-                }
-                if (WiFi.status() == WL_CONNECTED) {
-                    LOG_INFO("[SleepHQ] WiFi reconnected after socket reset");
-                } else {
-                    LOG_ERROR("[SleepHQ] WiFi failed to reconnect");
-                }
+                // WiFi connected but request failed — attempt coordinated cycle.
+                // Skips if SMB holds an active connection or cooldown has not elapsed.
+                tryCoordinatedWifiCycle(true);
                 resetTLS();
             }
             
@@ -1010,24 +996,17 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                             LOG_ERROR("[SleepHQ] WiFi still disconnected");
                         }
                     } else {
-                        // WiFi connected but TLS connect failed — socket FD may be poisoned (errno 113).
-                        // Cycle WiFi to release all lwIP sockets and clear TIME_WAIT state.
-                        LOG_WARN("[SleepHQ] Socket likely poisoned, cycling WiFi to clear...");
-                        WiFi.disconnect(false);  // Disconnect without erasing credentials
-                        delay(1000);
-                        WiFi.reconnect();
-                        unsigned long wifiWait = millis();
-                        while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
-                            extern volatile unsigned long g_uploadHeartbeat;
-                            g_uploadHeartbeat = millis();  // Feed software watchdog
-                            delay(100);
+                        // WiFi connected but TLS connect failed — attempt coordinated cycle.
+                        // Skips if SMB holds an active connection or cooldown has not elapsed.
+                        // Only reset TLS again if the cycle actually ran (WiFi was cycled);
+                        // if skipped, the fresh client from the resetTLS() above is still good.
+                        if (tryCoordinatedWifiCycle(true)) {
+                            resetTLS();
+                            if (!tlsClient) {
+                                LOG_ERROR("[SleepHQ] TLS client allocation failed after WiFi cycle (OOM)");
+                                return false;
+                            }
                         }
-                        if (WiFi.status() == WL_CONNECTED) {
-                            LOG_INFO("[SleepHQ] WiFi reconnected after socket reset");
-                        } else {
-                            LOG_ERROR("[SleepHQ] WiFi failed to reconnect after socket reset");
-                        }
-                        resetTLS();  // Get a fresh TLS client after WiFi cycle
                     }
                     
                     continue; 
@@ -1168,29 +1147,10 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             }
             resetTLS(); // Full reset to clear FDs
             
-            // Check WiFi status and cycle if needed to clear poisoned sockets
-            if (WiFi.status() != WL_CONNECTED) {
-                LOG_WARN("[SleepHQ] WiFi disconnected during stream, waiting for reconnection...");
-                unsigned long startWait = millis();
-                while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
-                    extern volatile unsigned long g_uploadHeartbeat;
-                    g_uploadHeartbeat = millis();
-                    delay(100);
-                }
-            } else {
-                // WiFi up but socket likely poisoned — cycle to clear
-                LOG_WARN("[SleepHQ] Cycling WiFi to clear poisoned sockets after write error...");
-                WiFi.disconnect(false);
-                delay(1000);
-                WiFi.reconnect();
-                unsigned long wifiWait = millis();
-                while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
-                    extern volatile unsigned long g_uploadHeartbeat;
-                    g_uploadHeartbeat = millis();
-                    delay(100);
-                }
-                resetTLS();
-            }
+            // resetTLS() above already created a fresh WiFiClientSecure.
+            // Attempt a coordinated cycle only if SMB is idle and cooldown allows;
+            // write errors are usually transient buffer pressure, not dead WiFi.
+            tryCoordinatedWifiCycle(true);
             
             if (attempt == 0) {
                 continue;
@@ -1201,28 +1161,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         if (writeError) {
             resetTLS(); // Full reset to clear FDs
             
-            // Check WiFi status and cycle if needed to clear poisoned sockets
-            if (WiFi.status() != WL_CONNECTED) {
-                LOG_WARN("[SleepHQ] WiFi disconnected during stream write, waiting for reconnection...");
-                unsigned long startWait = millis();
-                while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
-                    extern volatile unsigned long g_uploadHeartbeat;
-                    g_uploadHeartbeat = millis();
-                    delay(100);
-                }
-            } else {
-                LOG_WARN("[SleepHQ] Cycling WiFi to clear poisoned sockets after write fail...");
-                WiFi.disconnect(false);
-                delay(1000);
-                WiFi.reconnect();
-                unsigned long wifiWait = millis();
-                while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 10000) {
-                    extern volatile unsigned long g_uploadHeartbeat;
-                    g_uploadHeartbeat = millis();
-                    delay(100);
-                }
-                resetTLS();
-            }
+            // Attempt a coordinated cycle only if SMB is idle and cooldown allows.
+            tryCoordinatedWifiCycle(true);
             
             if (attempt == 0) {
                 LOG_WARN("[SleepHQ] Streaming write failed, reconnecting...");

@@ -2,6 +2,7 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <Preferences.h>
+
 #include "Config.h"
 #include "SDCardManager.h"
 #include "WiFiManager.h"
@@ -12,6 +13,12 @@
 
 #include "TrafficMonitor.h"
 #include "UploadFSM.h"
+
+// True when esp_restart() was the reset cause (ESP_RST_SW).
+// Any programmatic restart means the CPAP machine was already idle and
+// voltages are stable, so cold-boot delays (stabilization, Smart Wait,
+// NTP settle) can be skipped.  Set once in setup() from esp_reset_reason().
+bool g_heapRecoveryBoot = false;
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -65,6 +72,7 @@ TaskHandle_t uploadTaskHandle = nullptr;
 // Software watchdog: upload task updates this heartbeat; main loop kills task if stale
 volatile unsigned long g_uploadHeartbeat = 0;
 const unsigned long UPLOAD_WATCHDOG_TIMEOUT_MS = 120000;  // 2 minutes
+const uint32_t UPLOAD_ASYNC_MIN_MAX_ALLOC_BYTES = 50000;   // Below this, prefer blocking upload to preserve heap
 
 struct UploadTaskParams {
     FileUploader* uploader;
@@ -187,35 +195,44 @@ void setup() {
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
 
-    // Smart Boot Delay
-    // 1. Wait 2 seconds unconditionally for voltage stabilization and CPAP boot start
-    LOG("Waiting 2s for electrical stabilization...");
-    delay(2000);
+    // Smart Boot Delay — skipped on any programmatic restart (ESP_RST_SW).
+    // CPAP was already idle and voltages were stable, so the stabilization
+    // delay and Smart Wait add no value. Power-on, brownout, and watchdog
+    // resets all use distinct reason codes and still do the full wait.
+    g_heapRecoveryBoot = (esp_reset_reason() == ESP_RST_SW);
+    bool fastBoot = g_heapRecoveryBoot;
+    if (fastBoot) {
+        LOG("[FastBoot] Software reset — skipping stabilization + Smart Wait");
+    } else {
+        // 1. Wait 2 seconds unconditionally for voltage stabilization and CPAP boot start
+        LOG("Waiting 2s for electrical stabilization...");
+        delay(2000);
 
-    // 2. Wait for bus silence (CPAP finished initial card checks)
-    // We look for 3 seconds of continuous silence, with a max timeout of 20 seconds
-    LOG("Checking for CPAP SD card activity (Smart Wait)...");
-    
-    unsigned long waitStart = millis();
-    const unsigned long MAX_WAIT_MS = 20000;     // Max time to wait in this phase
-    const unsigned long REQUIRED_IDLE_MS = 3000; // Required silence duration
-    bool busIsQuiet = false;
+        // 2. Wait for bus silence (CPAP finished initial card checks)
+        // We look for 3 seconds of continuous silence, with a max timeout of 20 seconds
+        LOG("Checking for CPAP SD card activity (Smart Wait)...");
 
-    while (millis() - waitStart < MAX_WAIT_MS) {
-        trafficMonitor.update(); // Update activity stats
-        
-        // Feed watchdog to prevent resets during long waits
-        delay(10); 
-        
-        if (trafficMonitor.isIdleFor(REQUIRED_IDLE_MS)) {
-            LOGF("Bus silence detected (%dms) - CPAP is idle", REQUIRED_IDLE_MS);
-            busIsQuiet = true;
-            break;
+        unsigned long waitStart = millis();
+        const unsigned long MAX_WAIT_MS = 20000;     // Max time to wait in this phase
+        const unsigned long REQUIRED_IDLE_MS = 3000; // Required silence duration
+        bool busIsQuiet = false;
+
+        while (millis() - waitStart < MAX_WAIT_MS) {
+            trafficMonitor.update(); // Update activity stats
+
+            // Feed watchdog to prevent resets during long waits
+            delay(10);
+
+            if (trafficMonitor.isIdleFor(REQUIRED_IDLE_MS)) {
+                LOGF("Bus silence detected (%dms) - CPAP is idle", REQUIRED_IDLE_MS);
+                busIsQuiet = true;
+                break;
+            }
         }
-    }
 
-    if (!busIsQuiet) {
-        LOG_WARN("Smart wait timed out - bus still active, but proceeding anyway");
+        if (!busIsQuiet) {
+            LOG_WARN("Smart wait timed out - bus still active, but proceeding anyway");
+        }
     }
     
     LOG("Boot delay complete, attempting SD card access...");
@@ -244,17 +261,24 @@ void setup() {
             resetPrefs.putBool("reset_state", false);
             resetPrefs.end();
             
+            // Delete all known state file paths: per-backend (current) + old default (legacy)
+            static const char* STATE_FILES[] = {
+                "/.upload_state.v2.smb",
+                "/.upload_state.v2.smb.log",
+                "/.upload_state.v2.cloud",
+                "/.upload_state.v2.cloud.log",
+                "/.upload_state.v2",        // legacy: pre-split single-manager path
+                "/.upload_state.v2.log",
+            };
             bool removedAny = false;
-            if (sdManager.getFS().remove("/.upload_state.v2")) {
-                LOG("Upload state snapshot deleted successfully");
-                removedAny = true;
-            }
-            if (sdManager.getFS().remove("/.upload_state.v2.log")) {
-                LOG("Upload state journal deleted successfully");
-                removedAny = true;
+            for (const char* path : STATE_FILES) {
+                if (sdManager.getFS().remove(path)) {
+                    LOGF("Deleted state file: %s", path);
+                    removedAny = true;
+                }
             }
             if (!removedAny) {
-                LOG_WARN("State files not found (may already be clean)");
+                LOG_WARN("No state files found (may already be clean)");
             }
             LOG("State reset complete — continuing with fresh start");
         } else {
@@ -333,6 +357,7 @@ void setup() {
             return;
         }
         sdManager.releaseControl();
+        g_heapRecoveryBoot = false;  // consumed — only skip delays on this one boot
         LOG("Uploader initialized successfully");
     } else {
         LOG_ERROR("Failed to take SD card control for uploader initialization");
@@ -397,12 +422,20 @@ void setup() {
         // Set TrafficMonitor reference in web server for SD Activity Monitor
         testWebServer->setTrafficMonitor(&trafficMonitor);
         LOG_DEBUG("TrafficMonitor linked to web server");
+
+        // Give web server access to the SMB state manager so updateStatusSnapshot()
+        // can show folder counts from the active backend (SMB pass vs cloud pass).
+        testWebServer->setSmbStateManager(uploader->getSmbStateManager());
         
         // Set web server reference in uploader for responsive handling during uploads
         if (uploader) {
             uploader->setWebServer(testWebServer);
             LOG_DEBUG("Web server linked to uploader for responsive handling");
         }
+
+        // Build static config snapshot once — served from g_webConfigBuf with zero heap alloc.
+        testWebServer->initConfigSnapshot();
+        LOG_DEBUG("[WebStatus] Config snapshot built");
     } else {
         LOG_ERROR("Failed to start test web server");
     }
@@ -494,6 +527,24 @@ void uploadTaskFunction(void* pvParameters) {
     vTaskDelete(NULL);  // Self-delete
 }
 
+static void runUploadBlocking(DataFilter filter) {
+    int maxMinutes = config.getExclusiveAccessMinutes();
+    UploadResult result = uploader->uploadWithExclusiveAccess(&sdManager, maxMinutes, filter);
+    switch (result) {
+        case UploadResult::COMPLETE:
+            transitionTo(UploadState::COMPLETE);
+            break;
+        case UploadResult::TIMEOUT:
+            uploadCycleHadTimeout = true;
+            transitionTo(UploadState::RELEASING);
+            break;
+        case UploadResult::ERROR:
+            LOG_ERROR("[FSM] Upload error");
+            transitionTo(UploadState::RELEASING);
+            break;
+    }
+}
+
 void handleUploading() {
     if (!uploader) {
         transitionTo(UploadState::RELEASING);
@@ -516,6 +567,16 @@ void handleUploading() {
         } else {
             LOG_WARN("[FSM] No data category eligible, releasing");
             transitionTo(UploadState::RELEASING);
+            return;
+        }
+
+        const uint32_t freeHeapBeforeTask = ESP.getFreeHeap();
+        const uint32_t maxAllocBeforeTask = ESP.getMaxAllocHeap();
+        if (maxAllocBeforeTask < UPLOAD_ASYNC_MIN_MAX_ALLOC_BYTES) {
+            LOG_WARNF("[FSM] Low contiguous heap (%u bytes, free=%u) - using blocking upload to preserve memory",
+                      maxAllocBeforeTask,
+                      freeHeapBeforeTask);
+            runUploadBlocking(filter);
             return;
         }
         
@@ -550,7 +611,10 @@ void handleUploading() {
         );
         
         if (rc != pdPASS) {
-            LOG_ERROR("[FSM] Failed to create upload task — falling back to blocking upload");
+            LOG_ERRORF("[FSM] Failed to create upload task (rc=%ld, free=%u, max_alloc=%u) — falling back to blocking upload",
+                       (long)rc,
+                       ESP.getFreeHeap(),
+                       ESP.getMaxAllocHeap());
             uploadTaskRunning = false;
             delete params;
             // Re-subscribe IDLE0 since task didn't start
@@ -559,13 +623,7 @@ void handleUploading() {
             uploader->setWebServer(testWebServer);
 #endif
             // Fallback: run synchronously (old behavior)
-            int maxMinutes = config.getExclusiveAccessMinutes();
-            UploadResult result = uploader->uploadWithExclusiveAccess(&sdManager, maxMinutes, filter);
-            switch (result) {
-                case UploadResult::COMPLETE: transitionTo(UploadState::COMPLETE); break;
-                case UploadResult::TIMEOUT:  uploadCycleHadTimeout = true; transitionTo(UploadState::RELEASING); break;
-                case UploadResult::ERROR:    LOG_ERROR("[FSM] Upload error"); transitionTo(UploadState::RELEASING); break;
-            }
+            runUploadBlocking(filter);
         } else {
             LOG("[FSM] Upload task started on Core 0 (non-blocking)");
         }
@@ -614,7 +672,20 @@ void handleReleasing() {
         transitionTo(UploadState::MONITORING);
         return;
     }
-    
+
+    // TLS heap fragmentation check: the cloud TLS session permanently fragments heap,
+    // dropping max_alloc from ~47 KB to ~38.9 KB.  SD_MMC mount fails below ~45 KB
+    // contiguous, making all subsequent upload cycles fail.  A clean reboot restores
+    // the full contiguous heap without losing any state (files already saved).
+    const uint32_t SD_MOUNT_MIN_ALLOC = 45000;
+    uint32_t maxAlloc = ESP.getMaxAllocHeap();
+    if (maxAlloc < SD_MOUNT_MIN_ALLOC) {
+        LOGF("[FSM] Heap fragmented post-upload (max_alloc=%u < %u) — fast-reboot to restore heap",
+             maxAlloc, SD_MOUNT_MIN_ALLOC);
+        delay(200);
+        esp_restart();
+    }
+
     cooldownStartedAt = millis();
     transitionTo(UploadState::COOLDOWN);
 }
@@ -718,6 +789,13 @@ void loop() {
     // Handle web server requests
     if (testWebServer) {
         testWebServer->handleClient();
+        // Refresh status snapshot every 3 s — assembles JSON using snprintf into
+        // g_webStatusBuf (stack only, zero heap allocation).
+        static unsigned long lastStatusSnapMs = 0;
+        if (millis() - lastStatusSnapMs >= 3000) {
+            testWebServer->updateStatusSnapshot();
+            lastStatusSnapMs = millis();
+        }
     }
     
     // ── Software watchdog for upload task ──
@@ -773,6 +851,14 @@ void loop() {
         esp_restart();
     }
     
+    // Soft reboot — next boot detects ESP_RST_SW and skips all delays automatically
+    if (g_softRebootFlag) {
+        LOG("=== Soft Reboot Triggered via Web Interface ===");
+        g_softRebootFlag = false;
+        delay(300);
+        esp_restart();
+    }
+
     // Check for upload trigger (force immediate upload — skip inactivity check)
     // Blocked while upload task is running — already uploading
     if (g_triggerUploadFlag && !uploadTaskRunning) {

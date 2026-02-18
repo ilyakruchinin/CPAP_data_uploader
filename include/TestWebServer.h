@@ -9,6 +9,7 @@
 #include "WiFiManager.h"
 #include "CPAPMonitor.h"
 #include "TrafficMonitor.h"
+#include "WebStatus.h"
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -17,6 +18,7 @@
 // Global trigger flags for upload and state reset
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
+extern volatile bool g_softRebootFlag;
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
 
@@ -24,7 +26,8 @@ class TestWebServer {
 private:
     WebServer* server;
     Config* config;
-    UploadStateManager* stateManager;
+    UploadStateManager* stateManager;     // cloud (or sole) state manager
+    UploadStateManager* smbStateManager;  // SMB state manager (may be null)
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
     CPAPMonitor* cpapMonitor;
@@ -39,6 +42,7 @@ private:
     void handleTriggerUpload();
     void handleStatusPage();      // HTML Status Page
     void handleApiStatus();       // JSON Status API
+    void handleSoftReboot();
     void handleResetState();
     void handleConfigPage();      // HTML Config Page
     void handleApiConfig();       // JSON Config API
@@ -64,6 +68,8 @@ private:
     int getPendingFilesCount();
     int getPendingFoldersCount();
     String escapeJson(const String& str);
+    bool redirectToIpIfMdnsRequest();
+    bool isUploadInProgress() const;
     
     // Static helper methods
     static void addCorsHeaders(WebServer* server);
@@ -79,8 +85,14 @@ public:
     
     // Update manager references (needed after uploader recreation)
     void updateManagers(UploadStateManager* state, ScheduleManager* schedule);
+    void setSmbStateManager(UploadStateManager* sm);
     void setWiFiManager(WiFiManager* wifi);
     void setTrafficMonitor(TrafficMonitor* tm);
+
+    // Zero-heap status snapshot — call from main loop every ~2-3 s
+    void updateStatusSnapshot();
+    // Config snapshot — call once after Config is loaded at boot
+    void initConfigSnapshot();
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA manager access

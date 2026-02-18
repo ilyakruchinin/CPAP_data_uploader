@@ -113,6 +113,7 @@ private:
 public:
     String calculateChecksum(fs::FS &sd, const String& filePath);
     UploadStateManager();
+    void setPaths(const String& snapshotPath, const String& journalPath);
     
     bool begin(fs::FS &sd);
     

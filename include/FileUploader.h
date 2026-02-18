@@ -45,60 +45,77 @@ enum class DataFilter {
 class FileUploader {
 private:
     Config* config;
-    UploadStateManager* stateManager;
+    UploadStateManager* smbStateManager;    // tracks SMB-only uploads
+    UploadStateManager* cloudStateManager;  // tracks Cloud-only uploads
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
-    
+
 #ifdef ENABLE_TEST_WEBSERVER
-    TestWebServer* webServer;  // Optional web server for handling requests during uploads
+    TestWebServer* webServer;
 #endif
-    
-    // Uploader instances (only compiled if feature flag is enabled)
+
+    // Uploader instances
 #ifdef ENABLE_SMB_UPLOAD
     SMBUploader* smbUploader;
-#endif
-#ifdef ENABLE_WEBDAV_UPLOAD
-    WebDAVUploader* webdavUploader;
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
     SleepHQUploader* sleephqUploader;
 #endif
-    
-    // File scanning
-    std::vector<String> scanDatalogFolders(fs::FS &sd, bool includeCompleted = false);
+
+    // File scanning (sm = state manager used for completed/pending checks)
+    std::vector<String> scanDatalogFolders(fs::FS &sd, UploadStateManager* sm,
+                                           bool includeCompleted = false);
     std::vector<String> scanFolderFiles(fs::FS &sd, const String& folderPath);
     std::vector<String> scanSettingsFiles(fs::FS &sd);
-    
-    // Upload logic
-    bool uploadDatalogFolder(class SDCardManager* sdManager, const String& folderName);
-    bool uploadSingleFile(class SDCardManager* sdManager, const String& filePath, bool force = false);
-    
+
+    // ── SMB pass helpers ────────────────────────────────────────────────────
+    bool uploadMandatoryFilesSmb(class SDCardManager* sdManager, fs::FS &sd);
+    bool uploadSingleFileSmb(class SDCardManager* sdManager, const String& filePath,
+                             bool force = false);
+    bool uploadDatalogFolderSmb(class SDCardManager* sdManager, const String& folderName);
+
+    // ── Cloud pass helpers ───────────────────────────────────────────────────
+    bool uploadDatalogFolderCloud(class SDCardManager* sdManager, const String& folderName);
+    bool uploadSingleFileCloud(class SDCardManager* sdManager, const String& filePath,
+                               bool force = false);
+
     // Helper: check if a DATALOG folder name (YYYYMMDD) is within the recent window
     bool isRecentFolder(const String& folderName) const;
-    
-    // Helper: lazily create cloud import session on first actual upload
+
+    // Cloud import session management
     bool ensureCloudImport();
-    // Helper: finalize current import with mandatory files + processImport + reset
     void finalizeCloudImport(class SDCardManager* sdManager, fs::FS &sd);
     bool cloudImportCreated;
-    bool cloudImportFailed;  // True if ensureCloudImport() failed; skip cloud backend for session
+    bool cloudImportFailed;
+    int  cloudDatalogFilesUploaded;  // DATALOG files uploaded this cloud pass; 0 = skip finalize
+
+    // Return the primary state manager (cloud if configured, else smb)
+    UploadStateManager* primaryStateManager() const {
+        if (cloudStateManager) return cloudStateManager;
+        return smbStateManager;
+    }
 
 public:
     FileUploader(Config* cfg, WiFiManager* wifi);
     ~FileUploader();
-    
+
     bool begin(fs::FS &sd);
-    
+
     // FSM-driven exclusive access upload
-    UploadResult uploadWithExclusiveAccess(class SDCardManager* sdManager, int maxMinutes, DataFilter filter);
-    
+    UploadResult uploadWithExclusiveAccess(class SDCardManager* sdManager, int maxMinutes,
+                                           DataFilter filter);
+
     // Getters for internal components (for web interface access)
-    UploadStateManager* getStateManager() { return stateManager; }
+    UploadStateManager* getStateManager()    { return primaryStateManager(); }
+    UploadStateManager* getSmbStateManager() { return smbStateManager; }
     ScheduleManager* getScheduleManager() { return scheduleManager; }
-    bool hasIncompleteFolders() { return stateManager && stateManager->getIncompleteFoldersCount() > 0; }
-    
+    bool hasIncompleteFolders() {
+        bool smb   = smbStateManager   && smbStateManager->getIncompleteFoldersCount()   > 0;
+        bool cloud = cloudStateManager && cloudStateManager->getIncompleteFoldersCount() > 0;
+        return smb || cloud;
+    }
+
 #ifdef ENABLE_TEST_WEBSERVER
-    // Set web server for handling requests during uploads
     void setWebServer(TestWebServer* server) { webServer = server; }
 #endif
 };
