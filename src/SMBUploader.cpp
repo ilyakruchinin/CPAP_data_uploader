@@ -227,6 +227,17 @@ bool SMBUploader::createDirectory(const String& path) {
         return true;  // Root always exists
     }
     
+    // Check heap before attempting directory operations
+    // libsmb2 needs contiguous memory for PDU structures, commands, and buffers
+    uint32_t maxAlloc = ESP.getMaxAllocHeap();
+    if (maxAlloc < 50000) {
+        // Too fragmented - libsmb2 stat/mkdir will likely fail with OOM
+        // Assume directory exists to avoid cascade failures
+        LOG_DEBUGF("[SMB] Low memory (%u bytes), skipping directory check for: %s", maxAlloc, cleanPath.c_str());
+        LOG_DEBUG("[SMB] Assuming directory exists to prevent libsmb2 internal OOM");
+        return true;
+    }
+    
     // Check if directory already exists
     struct smb2_stat_64 st;
     int stat_result = smb2_stat(smb2, cleanPath.c_str(), &st);
