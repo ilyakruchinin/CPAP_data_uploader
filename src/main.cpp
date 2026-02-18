@@ -14,10 +14,13 @@
 #include "TrafficMonitor.h"
 #include "UploadFSM.h"
 
-// Survives esp_restart() — set before a heap-recovery reboot so setup() can
-// skip cold-boot delays (stabilization, Smart Wait, NTP settle) that are only
-// needed on true power-on boots.
-RTC_DATA_ATTR bool g_heapRecoveryBoot = false;
+// Set from NVS "cpap_flags"/"fast_boot" at the start of setup().
+// Written before esp_restart() by soft-reboot and heap-recovery paths so that
+// setup() can skip cold-boot delays (stabilization, Smart Wait, NTP settle)
+// that are only needed on true power-on boots.
+// NVS is used instead of RTC_DATA_ATTR because RTC memory is not reliably
+// preserved across esp_restart() on this hardware.
+bool g_heapRecoveryBoot = false;
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -194,11 +197,21 @@ void setup() {
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
 
-    // Smart Boot Delay — skipped on heap-recovery reboots (CPAP is already idle,
-    // bus was silent, and voltages are stable from the previous run).
+    // Smart Boot Delay — skipped when a soft-reboot or heap-recovery reboot wrote
+    // "fast_boot" to NVS before calling esp_restart().
+    // Read and immediately consume the NVS flag, then keep g_heapRecoveryBoot
+    // set so ScheduleManager::syncTime() (called inside uploader->begin()) can
+    // also skip its 5-second NTP settle delay.
+    {
+        Preferences prefs;
+        prefs.begin("cpap_flags", false);
+        g_heapRecoveryBoot = prefs.getBool("fast_boot", false);
+        if (g_heapRecoveryBoot) {
+            prefs.putBool("fast_boot", false); // consume — normal delays on next cold boot
+        }
+        prefs.end();
+    }
     bool fastBoot = g_heapRecoveryBoot;
-    // NOTE: g_heapRecoveryBoot is cleared AFTER uploader->begin() so that
-    // ScheduleManager::syncTime() (called inside begin()) also sees the flag.
     if (fastBoot) {
         LOG("[FastBoot] Heap-recovery reboot — skipping stabilization + Smart Wait");
     } else {
@@ -680,7 +693,12 @@ void handleReleasing() {
     if (maxAlloc < SD_MOUNT_MIN_ALLOC) {
         LOGF("[FSM] Heap fragmented post-upload (max_alloc=%u < %u) — fast-reboot to restore heap",
              maxAlloc, SD_MOUNT_MIN_ALLOC);
-        g_heapRecoveryBoot = true;
+        {
+            Preferences prefs;
+            prefs.begin("cpap_flags", false);
+            prefs.putBool("fast_boot", true);
+            prefs.end();
+        }
         delay(200);
         esp_restart();
     }
@@ -854,7 +872,12 @@ void loop() {
     if (g_softRebootFlag) {
         LOG("=== Soft Reboot Triggered via Web Interface ===");
         g_softRebootFlag = false;
-        g_heapRecoveryBoot = true;  // survives esp_restart() via RTC_DATA_ATTR
+        {
+            Preferences prefs;
+            prefs.begin("cpap_flags", false);
+            prefs.putBool("fast_boot", true);
+            prefs.end();
+        }
         delay(300);
         esp_restart();
     }
