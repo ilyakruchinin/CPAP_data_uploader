@@ -5,8 +5,6 @@
 #include <WiFi.h>
 
 #ifdef ENABLE_LOG_RESOURCE_SUFFIX
-#include <esp_err.h>
-#include <esp_vfs.h>
 #include <errno.h>
 #include <fcntl.h>
 #endif
@@ -20,24 +18,20 @@
 namespace {
 
 int getFreeFileDescriptorCount() {
-    int minFd = -1;
-    int maxFd = -1;
-
-    if (esp_vfs_get_fd_range(&minFd, &maxFd) != ESP_OK ||
-        minFd < 0 ||
-        maxFd < minFd) {
-        return -1;
-    }
+    // ESP-IDF/Arduino doesn't expose a stable public API for fd range across all versions.
+    // Use a conservative bounded scan for diagnostics.
+    static constexpr int kFdScanLimit = 64;
 
     int openCount = 0;
-    for (int fd = minFd; fd <= maxFd; ++fd) {
+    for (int fd = 0; fd < kFdScanLimit; ++fd) {
         errno = 0;
         if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) {
             openCount++;
         }
     }
 
-    return (maxFd - minFd + 1) - openCount;
+    int freeCount = kFdScanLimit - openCount;
+    return freeCount >= 0 ? freeCount : 0;
 }
 
 }  // namespace
