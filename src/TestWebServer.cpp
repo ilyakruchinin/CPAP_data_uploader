@@ -517,11 +517,13 @@ void TestWebServer::updateStatusSnapshot() {
         nextUp = scheduleManager->getSecondsUntilNextUpload();
         timeSynced = scheduleManager->isTimeSynced();
     }
-    char curFolder[33] = "";
-    strncpy(curFolder, (const char*)g_uploadSessionStatus.currentFolder, sizeof(curFolder) - 1);
-    int filesUp    = g_uploadSessionStatus.filesUploaded;
-    int filesTotal = g_uploadSessionStatus.filesTotal;
-    bool uploadActive = g_uploadSessionStatus.uploadActive;
+    char smbFolder[33]   = ""; int smbUp = 0, smbTotal = 0; bool smbActive = false;
+    char cloudFolder[33] = ""; int clUp  = 0, clTotal  = 0; bool clActive  = false;
+    strncpy(smbFolder,   (const char*)g_smbSessionStatus.currentFolder,   sizeof(smbFolder)   - 1);
+    strncpy(cloudFolder, (const char*)g_cloudSessionStatus.currentFolder, sizeof(cloudFolder) - 1);
+    smbUp    = g_smbSessionStatus.filesUploaded;   smbTotal = g_smbSessionStatus.filesTotal;
+    clUp     = g_cloudSessionStatus.filesUploaded; clTotal  = g_cloudSessionStatus.filesTotal;
+    smbActive = g_smbSessionStatus.uploadActive;   clActive  = g_cloudSessionStatus.uploadActive;
 
     char buf[WEB_STATUS_BUF_SIZE];
     int n = snprintf(buf, sizeof(buf),
@@ -531,8 +533,8 @@ void TestWebServer::updateStatusSnapshot() {
         ",\"wifi\":%s,\"rssi\":%d,\"wifi_ip\":\"%s\""
         ",\"completed\":%d,\"incomplete\":%d,\"pending\":%d"
         ",\"next_upload\":%ld"
-        ",\"upload_active\":%s,\"cur_folder\":\"%s\""
-        ",\"files_up\":%d,\"files_total\":%d"
+        ",\"smb_active\":%s,\"smb_folder\":\"%s\",\"smb_up\":%d,\"smb_total\":%d"
+        ",\"cloud_active\":%s,\"cloud_folder\":\"%s\",\"cloud_up\":%d,\"cloud_total\":%d"
         ",\"firmware\":\"%s\"}",
         st, inStateSec, upSec,
         timeBuf, timeSynced ? "true" : "false",
@@ -540,8 +542,8 @@ void TestWebServer::updateStatusSnapshot() {
         wifiConn ? "true" : "false", rssi, wifiIp,
         comp, inc, pend,
         nextUp,
-        uploadActive ? "true" : "false", curFolder,
-        filesUp, filesTotal,
+        smbActive ? "true" : "false", smbFolder, smbUp, smbTotal,
+        clActive  ? "true" : "false", cloudFolder, clUp,  clTotal,
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webStatusBuf, buf, n + 1);

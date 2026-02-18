@@ -14,18 +14,18 @@
 // updateStatusSnapshot() in the main task. No mutex needed — torn reads on a
 // status display are harmless.
 
-static const size_t WEB_STATUS_BUF_SIZE = 768;
+static const size_t WEB_STATUS_BUF_SIZE = 896;
 static const size_t WEB_CONFIG_BUF_SIZE = 1024;
 
 extern char g_webStatusBuf[WEB_STATUS_BUF_SIZE];
 extern char g_webConfigBuf[WEB_CONFIG_BUF_SIZE];
 
-struct UploadSessionStatus {
+struct SessionStatus {
+    bool uploadActive;
     char currentFolder[33];
     int  filesUploaded;
     int  filesTotal;
-    bool uploadActive;
-    char lastError[80];
 };
 
-extern volatile UploadSessionStatus g_uploadSessionStatus;
+extern volatile SessionStatus g_smbSessionStatus;
+extern volatile SessionStatus g_cloudSessionStatus;
