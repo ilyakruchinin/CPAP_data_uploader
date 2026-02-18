@@ -2,6 +2,8 @@
 #include "Logger.h"
 #include "UploadFSM.h"
 #include "version.h"
+#include "web_ui.h"
+#include "WebStatus.h"
 #include <time.h>
 
 // Global trigger flags
@@ -256,214 +258,12 @@ bool TestWebServer::redirectToIpIfMdnsRequest() {
     return true;
 }
 
-// GET / - HTML status page (modern dark dashboard)
+// GET / - Serve static SPA from PROGMEM. Zero heap allocation.
 void TestWebServer::handleRoot() {
-    if (isUploadUiRateLimited(kUploadUiSlotRoot, isUploadInProgress(), kUploadUiMinIntervalMs)) {
-        sendUploadRateLimitResponse(server, "text/plain", "Upload active; dashboard refresh rate limited");
-        return;
-    }
-
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server->sendHeader("Pragma", "no-cache");
     server->sendHeader("Connection", "close");
-    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-
-    auto sendChunk = [this](const String& s) {
-        server->sendContent(s);
-    };
-
-    String html = "<!DOCTYPE html><html><head>";
-    html += "<title>CPAP Data Uploader</title>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<style>";
-    html += "*{box-sizing:border-box;margin:0;padding:0}";
-    html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
-    html += "background:#0f1923;color:#c7d5e0;min-height:100vh;padding:20px}";
-    html += ".wrap{max-width:900px;margin:0 auto}";
-    html += "h1{font-size:1.6em;color:#fff;margin-bottom:4px}";
-    html += ".subtitle{color:#66c0f4;font-size:0.9em;margin-bottom:20px}";
-    html += ".cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:20px}";
-    html += ".card{background:#1b2838;border:1px solid #2a475e;border-radius:10px;padding:18px}";
-    html += ".card h2{font-size:0.85em;text-transform:uppercase;letter-spacing:1px;color:#66c0f4;margin-bottom:12px;border-bottom:1px solid #2a475e;padding-bottom:8px}";
-    html += ".row{display:flex;justify-content:space-between;padding:5px 0;font-size:0.88em}";
-    html += ".row .k{color:#8f98a0}.row .v{color:#c7d5e0;font-weight:500;text-align:right}";
-    // FSM state badge
-    html += ".fsm{display:inline-block;padding:4px 12px;border-radius:20px;font-weight:700;font-size:0.8em;letter-spacing:0.5px}";
-    html += ".fsm-idle{background:#2a475e;color:#8f98a0}";
-    html += ".fsm-listening{background:#1a3a1a;color:#44ff44;animation:pulse 2s infinite}";
-    html += ".fsm-acquiring,.fsm-uploading{background:#1a2a4a;color:#66c0f4}";
-    html += ".fsm-cooldown{background:#3a2a1a;color:#ffaa44}";
-    html += ".fsm-complete{background:#1a3a1a;color:#44ff44}";
-    html += ".fsm-monitoring{background:#2a1a3a;color:#cc66ff}";
-    html += ".fsm-releasing{background:#3a2a1a;color:#ffaa44}";
-    html += "@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.6}}";
-    // Progress bar
-    html += ".prog-bar{background:#2a475e;border-radius:6px;height:10px;margin-top:6px;overflow:hidden}";
-    html += ".prog-fill{background:linear-gradient(90deg,#66c0f4,#44aaff);height:100%;border-radius:6px;transition:width 0.5s}";
-    // Buttons
-    html += ".actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}";
-    html += ".btn{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:6px;font-size:0.85em;font-weight:600;text-decoration:none;border:none;cursor:pointer;transition:all 0.2s}";
-    html += ".btn-primary{background:#66c0f4;color:#0f1923}.btn-primary:hover{background:#88d0ff}";
-    html += ".btn-secondary{background:#2a475e;color:#c7d5e0}.btn-secondary:hover{background:#3a5a7e}";
-    html += ".btn-accent{background:#9b59b6;color:#fff}.btn-accent:hover{background:#b06ed0}";
-    html += ".btn-danger{background:#c0392b;color:#fff}.btn-danger:hover{background:#e04030}";
-    html += ".btn-loading{background:#3f6d88;color:#dbe7ef;cursor:progress;opacity:0.92}";
-    // WiFi signal colors
-    html += ".sig-exc{color:#44ff44}.sig-good{color:#88dd44}.sig-fair{color:#ddcc44}.sig-weak{color:#dd8844}.sig-vweak{color:#dd4444}";
-    // Alert
-    html += ".alert{background:#3a2a1a;border:1px solid #aa6622;border-radius:8px;padding:14px;margin-bottom:16px}";
-    html += ".alert h3{color:#ffaa44;font-size:0.9em;margin-bottom:6px}";
-    html += ".alert p{font-size:0.85em;color:#c7d5e0;margin:3px 0}";
-    // Toast notification (for inline actions without navigation)
-    html += ".toast{position:fixed;right:16px;bottom:16px;max-width:340px;background:#1b2838;border:1px solid #2a475e;color:#c7d5e0;padding:10px 12px;border-radius:8px;font-size:0.85em;box-shadow:0 6px 24px rgba(0,0,0,0.35);opacity:0;transform:translateY(8px);transition:opacity 0.2s,transform 0.2s;pointer-events:none;z-index:9999}";
-    html += ".toast.show{opacity:1;transform:translateY(0)}";
-    html += ".toast.ok{border-color:#2f8f57}";
-    html += ".toast.err{border-color:#c0392b}";
-    html += "</style></head><body><div class='wrap'>";
-    
-    // Send initial chunk with headers
-    server->send(200, "text/html; charset=utf-8", html);
-
-    // ── Header ──
-    html = "<h1>CPAP Data Uploader</h1>";
-    html += "<p class='subtitle'>Firmware " + String(FIRMWARE_VERSION) + " &middot; " + getUptimeString() + " uptime</p>";
-    html += "<p style='font-size:0.82em;color:#8f98a0;margin:4px 0 14px 0'>Auto-refresh is disabled during upload runs to reduce heap churn. Use browser refresh when needed.</p>";
-    sendChunk(html);
-
-    // ── FSM State + System card (side by side) ──
-    html = "<div class='cards'>";
-    
-    // FSM State card
-    html += "<div class='card'>";
-    html += "<h2>Upload Engine</h2>";
-    String stName = String(getStateName(currentState));
-    stName.toLowerCase();
-    html += "<div class='row'><span class='k'>State</span><span class='fsm fsm-" + stName + "'>" + String(getStateName(currentState)) + "</span></div>";
-    
-    // State duration
-    unsigned long inStateSec = (millis() - stateEnteredAt) / 1000;
-    String inStateStr;
-    if (inStateSec >= 3600) inStateStr = String(inStateSec / 3600) + "h " + String((inStateSec % 3600) / 60) + "m";
-    else if (inStateSec >= 60) inStateStr = String(inStateSec / 60) + "m " + String(inStateSec % 60) + "s";
-    else inStateStr = String(inStateSec) + "s";
-    html += "<div class='row'><span class='k'>In state for</span><span class='v'>" + inStateStr + "</span></div>";
-    
-    // Mode and window from ScheduleManager
-    if (scheduleManager) {
-        String mode = scheduleManager->isSmartMode() ? "Smart" : "Scheduled";
-        html += "<div class='row'><span class='k'>Mode</span><span class='v'>" + mode + "</span></div>";
-        html += "<div class='row'><span class='k'>Time synced</span><span class='v'>" + String(scheduleManager->isTimeSynced() ? "Yes" : "No") + "</span></div>";
-    }
-    if (config) {
-        html += "<div class='row'><span class='k'>Upload window</span><span class='v'>" + String(config->getUploadStartHour()) + ":00 - " + String(config->getUploadEndHour()) + ":00</span></div>";
-        html += "<div class='row'><span class='k'>Inactivity threshold</span><span class='v'>" + String(config->getInactivitySeconds()) + "s</span></div>";
-        html += "<div class='row'><span class='k'>Exclusive access</span><span class='v'>" + String(config->getExclusiveAccessMinutes()) + " min</span></div>";
-        html += "<div class='row'><span class='k'>Cooldown</span><span class='v'>" + String(config->getCooldownMinutes()) + " min</span></div>";
-    }
-    html += "</div>";
-    sendChunk(html);
-
-    // System card
-    html = "<div class='card'>";
-    html += "<h2>System</h2>";
-    html += "<div class='row'><span class='k'>Time</span><span class='v'>" + getCurrentTimeString() + "</span></div>";
-    html += "<div class='row'><span class='k'>Free heap</span><span class='v'>" + String(ESP.getFreeHeap() / 1024) + " KB</span></div>";
-    
-    if (wifiManager && wifiManager->isConnected()) {
-        int rssi = wifiManager->getSignalStrength();
-        String quality = wifiManager->getSignalQuality();
-        String sigClass = "sig-fair";
-        if (quality == "Excellent") sigClass = "sig-exc";
-        else if (quality == "Good") sigClass = "sig-good";
-        else if (quality == "Fair") sigClass = "sig-fair";
-        else if (quality == "Weak") sigClass = "sig-weak";
-        else sigClass = "sig-vweak";
-        html += "<div class='row'><span class='k'>WiFi</span><span class='v " + sigClass + "'>" + quality + " (" + String(rssi) + " dBm)</span></div>";
-        html += "<div class='row'><span class='k'>IP</span><span class='v'>" + wifiManager->getIPAddress() + "</span></div>";
-    }
-    
-    if (config) {
-        html += "<div class='row'><span class='k'>Endpoint</span><span class='v'>" + config->getEndpointType() + "</span></div>";
-        html += "<div class='row'><span class='k'>GMT offset</span><span class='v'>+" + String(config->getGmtOffsetHours()) + "</span></div>";
-    }
-    html += "</div>";
-    html += "</div>"; // end .cards row 1
-    sendChunk(html);
-
-    // ── Upload Progress card (full width) ──
-    html = "<div class='cards'>";
-    html += "<div class='card' style='grid-column:1/-1'>";
-    html += "<h2>Upload Progress</h2>";
-    
-    if (stateManager) {
-        int completed = stateManager->getCompletedFoldersCount();
-        int incomplete = stateManager->getIncompleteFoldersCount();
-        int pending = stateManager->getPendingFoldersCount();
-        int dataTotal = completed + incomplete;
-        
-        if (dataTotal == 0 && pending == 0) {
-            html += "<div class='row'><span class='k'>Status</span><span class='v'>Waiting for first scan</span></div>";
-        } else {
-            if (scheduleManager && config && config->getMaxDays() > 0 && !scheduleManager->isTimeSynced()) {
-                html += "<div class='row' style='margin-top:6px'><span class='k'>Warning</span><span class='v' style='color:#ffaa44'>Time not synced: MAX_DAYS cutoff is inactive, so all DATALOG folders may be processed this cycle</span></div>";
-            }
-
-            if (dataTotal > 0) {
-                int pct = (completed * 100 / dataTotal);
-                html += "<div class='row'><span class='k'>Data folders</span><span class='v'>" + String(completed) + " / " + String(dataTotal) + " uploaded</span></div>";
-                html += "<div class='prog-bar'><div class='prog-fill' style='width:" + String(pct) + "%'></div></div>";
-
-                if (incomplete > 0) {
-                    html += "<div class='row' style='margin-top:6px'><span class='k'>Pending data folders</span><span class='v' style='color:#ffaa44'>" + String(incomplete) + " (will continue in next cycle)</span></div>";
-                } else {
-                    html += "<div class='row' style='margin-top:6px'><span class='k'>Data upload status</span><span class='v' style='color:#66dd88'>Complete</span></div>";
-                }
-            }
-
-            if (pending > 0) {
-                html += "<div class='row' style='margin-top:6px'><span class='k'>Empty folders</span><span class='v'>" + String(pending) + " pending (auto-complete after 7 days)</span></div>";
-                if (incomplete == 0) {
-                    html += "<div class='row'><span class='k'>Status</span><span class='v'>Waiting on empty-folder aging</span></div>";
-                }
-            }
-        }
-    }
-    html += "</div></div>"; // end progress card + cards
-    sendChunk(html);
-
-    // ── Actions ──
-    html = "<div class='card' style='margin-bottom:20px'>";
-    html += "<h2>Actions</h2>";
-    html += "<div class='actions'>";
-    html += "<button id='trigger-upload-btn' class='btn btn-primary' onclick='triggerUpload()'>&#9650; Trigger Upload</button>";
-    html += "<span id='trigger-upload-status' style='font-size:0.82em;color:#8f98a0;align-self:center'></span>";
-    html += "<a href='/monitor' class='btn btn-accent'>&#128200; SD Activity Monitor</a>";
-    html += "</div>";
-    
-    html += "<div class='actions' style='margin-top:10px'>";
-    html += "<a href='/status' class='btn btn-secondary'>Status</a>";
-    html += "<a href='/config' class='btn btn-secondary'>Config</a>";
-    html += "<a href='/logs' class='btn btn-secondary'>Logs</a>";
-#ifdef ENABLE_OTA_UPDATES
-    html += "<a href='/ota' class='btn btn-secondary'>&#128190; Firmware Update</a>";
-#endif
-    html += "<button id='reset-state-btn' class='btn btn-danger' onclick='resetState()'>Reset State</button>";
-    html += "<span id='reset-state-status' style='font-size:0.82em;color:#8f98a0;align-self:center;margin-left:10px'></span>";
-    html += "</div></div>";
-
-    html += "<div id='toast' class='toast'></div>";
-    html += "<script>";
-    html += "function showToast(msg,ok){var t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.className='toast '+(ok?'ok':'err')+' show';setTimeout(function(){t.className='toast';},2800);}";
-    html += "function setTriggerStatus(msg){var s=document.getElementById('trigger-upload-status');if(s){s.textContent=msg||'';}}";
-    html += "function setResetStatus(msg){var s=document.getElementById('reset-state-status');if(s){s.textContent=msg||'';}}";
-    html += "function triggerUpload(){var b=document.getElementById('trigger-upload-btn');if(!b)return;if(b.dataset.loading==='1')return;var label=b.innerHTML;b.dataset.loading='1';b.classList.add('btn-loading');b.innerHTML='&#8987; Triggering...';setTriggerStatus('Sending upload request...');showToast('Sending upload request...',true);fetch('/trigger-upload',{method:'GET',cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text();}).then(function(raw){var d={};try{d=JSON.parse(raw);}catch(e){}var m=(d&&d.message)?d.message:'Upload triggered.';showToast(m,true);setTriggerStatus('Request accepted.');}).catch(function(){showToast('Failed to trigger upload.',false);setTriggerStatus('Request failed. Try again.');}).finally(function(){setTimeout(function(){b.dataset.loading='0';b.classList.remove('btn-loading');b.innerHTML=label;},700);});}";
-    html += "function resetState(){if(!confirm('Reset all upload state? This cannot be undone.'))return;var b=document.getElementById('reset-state-btn');if(!b)return;if(b.dataset.loading==='1')return;var label=b.innerHTML;b.dataset.loading='1';b.classList.add('btn-loading');b.innerHTML='&#8987; Resetting...';setResetStatus('Sending reset request...');showToast('Resetting upload state...',true);fetch('/reset-state',{method:'GET',cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text();}).then(function(raw){var d={};try{d=JSON.parse(raw);}catch(e){}var m=(d&&d.message)?d.message:'State reset. Device rebooting...';showToast(m,true);setResetStatus('Device rebooting...');}).catch(function(){showToast('Failed to reset state.',false);setResetStatus('Reset failed. Try again.');b.dataset.loading='0';b.classList.remove('btn-loading');b.innerHTML=label;});}";
-    html += "</script>";
-    html += "</div></body></html>";
-    sendChunk(html);
-    
-    // Terminate chunked transmission
-    server->sendContent("");
+    server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }
 
 // GET /trigger-upload - Force immediate upload
@@ -497,71 +297,10 @@ void TestWebServer::handleResetState() {
     server->send(200, "application/json", response);
 }
 
-// GET /api/config - Display current configuration
+// GET /api/config - serve pre-built static config snapshot. Zero heap allocation.
 void TestWebServer::handleApiConfig() {
-    // Add CORS headers
     addCorsHeaders(server);
-    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    // Send headers with whitespace payload to avoid noisy zero-length warning in WebServer::send()
-    server->send(200, "application/json", " ");
-    
-    auto sendChunk = [this](const String& s) { server->sendContent(s); };
-    
-    String json = "{";
-    
-    if (config) {
-        // Check if credentials are stored in secure mode
-        bool credentialsSecured = config->areCredentialsInFlash();
-        
-        json += "\"wifi_ssid\":\"" + escapeJson(config->getWifiSSID()) + "\",";
-        json += "\"wifi_password\":\"***HIDDEN***\",";
-        json += "\"hostname\":\"" + escapeJson(config->getHostname()) + "\",";
-        
-        sendChunk(json);
-        
-        json = "";
-        json += "\"endpoint\":\"" + escapeJson(config->getEndpoint()) + "\",";
-        json += "\"endpoint_type\":\"" + escapeJson(config->getEndpointType()) + "\",";
-        json += "\"endpoint_user\":\"" + escapeJson(config->getEndpointUser()) + "\",";
-        json += "\"endpoint_password\":\"***HIDDEN***\",";
-        sendChunk(json);
-        
-        json = "";
-        json += "\"gmt_offset_hours\":" + String(config->getGmtOffsetHours()) + ",";
-        json += "\"upload_mode\":\"" + escapeJson(config->getUploadMode()) + "\",";
-        json += "\"upload_start_hour\":" + String(config->getUploadStartHour()) + ",";
-        json += "\"upload_end_hour\":" + String(config->getUploadEndHour()) + ",";
-        json += "\"inactivity_seconds\":" + String(config->getInactivitySeconds()) + ",";
-        json += "\"exclusive_access_minutes\":" + String(config->getExclusiveAccessMinutes()) + ",";
-        json += "\"cooldown_minutes\":" + String(config->getCooldownMinutes());
-        sendChunk(json);
-        
-        // Cloud upload config
-        json = ",";
-        if (config->hasCloudEndpoint()) {
-            json += "\"cloud_client_id\":\"" + escapeJson(config->getCloudClientId()) + "\",";
-            json += "\"cloud_client_secret\":\"***HIDDEN***\",";
-            json += "\"cloud_device_id\":" + String(config->getCloudDeviceId()) + ",";
-            json += "\"cloud_base_url\":\"" + escapeJson(config->getCloudBaseUrl()) + "\",";
-            if (!config->getCloudTeamId().isEmpty()) {
-                json += "\"cloud_team_id\":\"" + escapeJson(config->getCloudTeamId()) + "\",";
-            }
-            json += "\"cloud_insecure_tls\":" + String(config->getCloudInsecureTls() ? "true" : "false") + ",";
-        }
-        if (config->getMaxDays() > 0) {
-            json += "\"max_days\":" + String(config->getMaxDays()) + ",";
-        }
-        // Add credentials_secured field to indicate storage mode
-        json += "\"credentials_secured\":" + String(credentialsSecured ? "true" : "false");
-        sendChunk(json);
-    } else {
-        // If config is null, send minimal JSON
-        sendChunk(json);
-    }
-    
-    json = "}";
-    sendChunk(json);
-    server->sendContent("");
+    server->send(200, "application/json", g_webConfigBuf);
 }
 
 // Handle 404 errors
@@ -696,75 +435,12 @@ public:
     }
 };
 
-// GET /logs - Retrieve system logs from circular buffer
+// GET /logs - serve SPA (client-side rendering handles logs tab)
 void TestWebServer::handleLogs() {
-    if (isUploadUiRateLimited(kUploadUiSlotLogs, isUploadInProgress(), kUploadUiMinIntervalMs)) {
-        sendUploadRateLimitResponse(server, "text/plain", "Upload active; logs page refresh rate limited");
-        return;
-    }
-
-    // Add CORS headers for cross-origin access
-    addCorsHeaders(server);
-    
-    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    
-    auto sendChunk = [this](const String& s) {
-        server->sendContent(s);
-    };
-
-    String html = "<!DOCTYPE html><html><head>";
-    html += "<meta charset='utf-8'>";
-    html += "<title>System Logs - CPAP Data Uploader</title>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<style>";
-    html += "*{box-sizing:border-box;margin:0;padding:0}";
-    html += "body{font-family:Consolas,Monaco,'Andale Mono','Ubuntu Mono',monospace;background:#0f1923;color:#c7d5e0;padding:20px;font-size:13px;line-height:1.4;height:100vh;display:flex;flex-direction:column}";
-    html += ".header{display:flex;align-items:center;gap:20px;margin-bottom:15px;flex-shrink:0}";
-    html += "h1{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#fff;font-size:1.4em;margin:0}";
-    html += ".log-container{background:#1b2838;border:1px solid #2a475e;border-radius:6px;padding:15px;white-space:pre-wrap;word-wrap:break-word;overflow-x:hidden;overflow-y:auto;flex-grow:1;font-size:13px}";
-    html += ".btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:6px;background:#2a475e;color:#c7d5e0;text-decoration:none;font-family:-apple-system,sans-serif;font-size:0.9em;border:none;cursor:pointer;transition:background 0.2s}";
-    html += ".btn:hover{background:#3a5a7e}";
-    html += ".status{margin-left:auto;font-family:-apple-system,sans-serif;color:#8f98a0;font-size:0.9em}";
-    html += "</style></head><body>";
-    
-    html += "<div class='header'>";
-    html += "<a href='/' class='btn'>&larr; Dashboard</a>";
-    html += "<h1>System Logs</h1>";
-    html += "<span id='status' class='status'>Connecting...</span>";
-    html += "</div>";
-    
-    html += "<div id='logs' class='log-container'>Loading...</div>";
-    
-    html += "<script>";
-    html += "const logDiv = document.getElementById('logs');";
-    html += "const statusSpan = document.getElementById('status');";
-    html += "let isScrolledToBottom = true;";
-    html += "logDiv.addEventListener('scroll', () => {";
-    html += "  isScrolledToBottom = (logDiv.scrollHeight - logDiv.scrollTop - logDiv.clientHeight) < 50;";
-    html += "});";
-    html += "function fetchLogs() {";
-    html += "  fetch('/api/logs').then(r => r.text()).then(text => {";
-    html += "    if (logDiv.innerText !== text) {";
-    html += "      logDiv.innerText = text;";
-    html += "      if (isScrolledToBottom) logDiv.scrollTop = logDiv.scrollHeight;";
-    html += "      statusSpan.textContent = 'Live';";
-    html += "      statusSpan.style.color = '#44ff44';";
-    html += "    }";
-    html += "  }).catch(e => {";
-    html += "    statusSpan.textContent = 'Disconnected';";
-    html += "    statusSpan.style.color = '#ff4444';";
-    html += "  });";
-    html += "}";
-    html += "fetchLogs();";
-    html += "setInterval(fetchLogs, 4000);"; // Refresh every 4s to reduce network churn
-    html += "</script>";
-    
-    html += "</body></html>";
-    
-    server->send(200, "text/html; charset=utf-8", html);
-    server->sendContent("");
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Connection", "close");
+    server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }
-
 // GET /api/logs - Raw logs for AJAX
 void TestWebServer::handleApiLogs() {
     // Add CORS headers
@@ -791,159 +467,120 @@ void TestWebServer::handleApiLogs() {
     server->sendContent("");
 }
 
-// GET /config - Display current configuration (HTML View)
+// GET /config - serve SPA
 void TestWebServer::handleConfigPage() {
-    if (isUploadUiRateLimited(kUploadUiSlotConfig, isUploadInProgress(), kUploadUiMinIntervalMs)) {
-        sendUploadRateLimitResponse(server, "text/plain", "Upload active; config page refresh rate limited");
-        return;
-    }
-
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-    server->sendHeader("Pragma", "no-cache");
     server->sendHeader("Connection", "close");
-    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    auto sendChunk = [this](const String& s) { server->sendContent(s); };
-
-    String html = "<!DOCTYPE html><html><head>";
-    html += "<title>Configuration - CPAP Data Uploader</title>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<style>";
-    html += "*{box-sizing:border-box;margin:0;padding:0}";
-    html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
-    html += "background:#0f1923;color:#c7d5e0;min-height:100vh;padding:20px}";
-    html += ".wrap{max-width:800px;margin:0 auto}";
-    html += "h1{font-size:1.6em;color:#fff;margin-bottom:20px}";
-    html += ".json-box{background:#1b2838;border:1px solid #2a475e;border-radius:10px;padding:20px;font-family:monospace;white-space:pre-wrap;color:#aaddff;overflow-x:auto}";
-    html += ".btn{display:inline-flex;align-items:center;padding:10px 18px;border-radius:6px;background:#2a475e;color:#c7d5e0;text-decoration:none;font-weight:600;border:none;cursor:pointer;transition:background 0.2s}";
-    html += ".btn:hover{background:#3a5a7e}";
-    html += "</style></head><body><div class='wrap'>";
-    
-    server->send(200, "text/html; charset=utf-8", html);
-    
-    html = "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:20px'>";
-    html += "<h1>Configuration (JSON)</h1>";
-    html += "<a href='/' class='btn'>&larr; Dashboard</a>";
-    html += "</div>";
-    
-    html += "<div id='json' class='json-box'>Loading...</div>";
-    
-    html += "<script>";
-    html += "fetch('/api/config').then(r=>r.json()).then(d=>{";
-    html += "document.getElementById('json').textContent = JSON.stringify(d, null, 2);";
-    html += "});";
-    html += "</script>";
-
-    html += "</div></body></html>";
-    sendChunk(html);
-    server->sendContent("");
+    server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }
-
-// GET /status - Display system status (HTML View)
+// GET /status - serve SPA
 void TestWebServer::handleStatusPage() {
-    if (isUploadUiRateLimited(kUploadUiSlotStatus, isUploadInProgress(), kUploadUiMinIntervalMs)) {
-        sendUploadRateLimitResponse(server, "text/plain", "Upload active; status page refresh rate limited");
-        return;
-    }
-
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-    server->sendHeader("Pragma", "no-cache");
     server->sendHeader("Connection", "close");
-    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    auto sendChunk = [this](const String& s) { server->sendContent(s); };
-
-    String html = "<!DOCTYPE html><html><head>";
-    html += "<title>System Status - CPAP Data Uploader</title>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<style>";
-    html += "*{box-sizing:border-box;margin:0;padding:0}";
-    html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
-    html += "background:#0f1923;color:#c7d5e0;min-height:100vh;padding:20px}";
-    html += ".wrap{max-width:800px;margin:0 auto}";
-    html += "h1{font-size:1.6em;color:#fff;margin-bottom:20px}";
-    html += ".json-box{background:#1b2838;border:1px solid #2a475e;border-radius:10px;padding:20px;font-family:monospace;white-space:pre-wrap;color:#aaddff;overflow-x:auto}";
-    html += ".btn{display:inline-flex;align-items:center;padding:10px 18px;border-radius:6px;background:#2a475e;color:#c7d5e0;text-decoration:none;font-weight:600;border:none;cursor:pointer;transition:background 0.2s}";
-    html += ".btn:hover{background:#3a5a7e}";
-    html += "</style></head><body><div class='wrap'>";
-
-    server->send(200, "text/html; charset=utf-8", html);
-
-    html = "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:20px'>";
-    html += "<h1>System Status (JSON)</h1>";
-    html += "<a href='/' class='btn'>&larr; Dashboard</a>";
-    html += "</div>";
-
-    html += "<div id='json' class='json-box'>Loading...</div>";
-
-    html += "<script>";
-    html += "fetch('/api/status').then(r=>r.json()).then(d=>{";
-    html += "document.getElementById('json').textContent = JSON.stringify(d, null, 2);";
-    html += "});";
-    html += "</script>";
-
-    html += "</div></body></html>";
-    sendChunk(html);
-    server->sendContent("");
+    server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
+}
+// GET /api/status - serve pre-built static status snapshot. Zero heap allocation.
+void TestWebServer::handleApiStatus() {
+    addCorsHeaders(server);
+    server->send(200, "application/json", g_webStatusBuf);
 }
 
-// GET /api/status - JSON status information
-void TestWebServer::handleApiStatus() {
-    // Add CORS headers
-    addCorsHeaders(server);
-    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    // Send headers with correct content type
-    server->send(200, "application/json", " ");
-    
-    auto sendChunk = [this](const String& s) { server->sendContent(s); };
-    
-    String json = "{";
-    json += "\"uptime_seconds\":" + String(millis() / 1000) + ",";
-    json += "\"current_time\":\"" + getCurrentTimeString() + "\",";
-    json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
-    sendChunk(json);
-    
-    json = "";
+// ---------------------------------------------------------------------------
+// updateStatusSnapshot() — called every ~3 s from main loop.
+// Assembles status JSON into g_webStatusBuf using snprintf only (no heap).
+// ---------------------------------------------------------------------------
+void TestWebServer::updateStatusSnapshot() {
+    char timeBuf[32] = "Not synchronized";
+    time_t now; time(&now);
+    if (now >= 1000000000) {
+        struct tm tm; localtime_r(&now, &tm);
+        strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tm);
+    }
+    unsigned long upSec = millis() / 1000;
+    unsigned long inStateSec = (millis() - stateEnteredAt) / 1000;
+    const char* st = getStateName(currentState);
+    int rssi = 0; bool wifiConn = false;
+    char wifiIp[20] = "";
     if (wifiManager && wifiManager->isConnected()) {
-        json += "\"wifi_connected\":true,";
-        json += "\"wifi_rssi\":" + String(wifiManager->getSignalStrength()) + ",";
-        json += "\"wifi_quality\":\"" + wifiManager->getSignalQuality() + "\",";
-    } else {
-        json += "\"wifi_connected\":false,";
+        wifiConn = true;
+        rssi = wifiManager->getSignalStrength();
+        strncpy(wifiIp, wifiManager->getIPAddress().c_str(), sizeof(wifiIp) - 1);
     }
-    
-    if (scheduleManager) {
-        json += "\"next_upload_seconds\":" + String(scheduleManager->getSecondsUntilNextUpload()) + ",";
-        json += "\"time_synced\":" + String(scheduleManager->isTimeSynced() ? "true" : "false") + ",";
-    }
-    sendChunk(json);
-    
-    json = "";
+    int comp = 0, inc = 0, pend = 0;
     if (stateManager) {
-        int completed = stateManager->getCompletedFoldersCount();
-        int incomplete = stateManager->getIncompleteFoldersCount();
-        int pending = stateManager->getPendingFoldersCount();
-        json += "\"completed_folders\":" + String(completed) + ",";
-        json += "\"incomplete_folders\":" + String(incomplete) + ",";
-        json += "\"pending_data_folders\":" + String(incomplete) + ",";
-        json += "\"pending_folders\":" + String(pending) + ",";
-        json += "\"total_folders\":" + String(completed + incomplete) + ",";
-        json += "\"upload_state_initialized\":" + String((completed + incomplete + pending) > 0 ? "true" : "false");
-    } else {
-        json += "\"completed_folders\":0,\"incomplete_folders\":0,\"total_folders\":0,\"upload_state_initialized\":false";
+        comp = stateManager->getCompletedFoldersCount();
+        inc  = stateManager->getIncompleteFoldersCount();
+        pend = stateManager->getPendingFoldersCount();
     }
-    sendChunk(json);
-
-    json = "";
-    if (config) {
-        json += ",\"endpoint_type\":\"" + config->getEndpointType() + "\"";
-        json += ",\"boot_delay_seconds\":" + String(config->getBootDelaySeconds());
-        json += ",\"upload_mode\":\"" + config->getUploadMode() + "\"";
-        json += ",\"cloud_configured\":" + String(config->hasCloudEndpoint() ? "true" : "false");
+    long nextUp = -1; bool timeSynced = false;
+    if (scheduleManager) {
+        nextUp = scheduleManager->getSecondsUntilNextUpload();
+        timeSynced = scheduleManager->isTimeSynced();
     }
-    sendChunk(json);
+    char curFolder[33] = "";
+    strncpy(curFolder, (const char*)g_uploadSessionStatus.currentFolder, sizeof(curFolder) - 1);
+    int filesUp    = g_uploadSessionStatus.filesUploaded;
+    int filesTotal = g_uploadSessionStatus.filesTotal;
+    bool uploadActive = g_uploadSessionStatus.uploadActive;
 
-    json = "}";
-    sendChunk(json);
-    server->sendContent("");
+    char buf[WEB_STATUS_BUF_SIZE];
+    int n = snprintf(buf, sizeof(buf),
+        "{\"state\":\"%s\",\"in_state_sec\":%lu,\"uptime\":%lu"
+        ",\"time\":\"%s\",\"time_synced\":%s"
+        ",\"free_heap\":%u,\"max_alloc\":%u"
+        ",\"wifi\":%s,\"rssi\":%d,\"wifi_ip\":\"%s\""
+        ",\"completed\":%d,\"incomplete\":%d,\"pending\":%d"
+        ",\"next_upload\":%ld"
+        ",\"upload_active\":%s,\"cur_folder\":\"%s\""
+        ",\"files_up\":%d,\"files_total\":%d"
+        ",\"firmware\":\"%s\"}",
+        st, inStateSec, upSec,
+        timeBuf, timeSynced ? "true" : "false",
+        (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
+        wifiConn ? "true" : "false", rssi, wifiIp,
+        comp, inc, pend,
+        nextUp,
+        uploadActive ? "true" : "false", curFolder,
+        filesUp, filesTotal,
+        FIRMWARE_VERSION);
+    if (n > 0 && n < (int)sizeof(buf)) {
+        memcpy(g_webStatusBuf, buf, n + 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// initConfigSnapshot() — called once at boot after Config is loaded.
+// ---------------------------------------------------------------------------
+void TestWebServer::initConfigSnapshot() {
+    if (!config) return;
+    char buf[WEB_CONFIG_BUF_SIZE];
+    bool hasCloud = config->hasCloudEndpoint();
+    int n = snprintf(buf, sizeof(buf),
+        "{\"wifi_ssid\":\"%s\",\"hostname\":\"%s\""
+        ",\"endpoint_type\":\"%s\",\"endpoint_user\":\"%s\""
+        ",\"upload_mode\":\"%s\""
+        ",\"upload_start_hour\":%d,\"upload_end_hour\":%d"
+        ",\"inactivity_seconds\":%d"
+        ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
+        ",\"gmt_offset_hours\":%d,\"max_days\":%d"
+        ",\"cloud_configured\":%s"
+        ",\"boot_delay_seconds\":%d"
+        ",\"firmware\":\"%s\"}",
+        config->getWifiSSID().c_str(),
+        config->getHostname().c_str(),
+        config->getEndpointType().c_str(),
+        config->getEndpointUser().c_str(),
+        config->getUploadMode().c_str(),
+        config->getUploadStartHour(), config->getUploadEndHour(),
+        config->getInactivitySeconds(),
+        config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),
+        config->getGmtOffsetHours(), config->getMaxDays(),
+        hasCloud ? "true" : "false",
+        config->getBootDelaySeconds(),
+        FIRMWARE_VERSION);
+    if (n > 0 && n < (int)sizeof(buf)) {
+        memcpy(g_webConfigBuf, buf, n + 1);
+    }
 }
 
 // Update manager references (needed after uploader recreation)
@@ -1462,139 +1099,7 @@ void TestWebServer::handleSdActivity() {
 }
 
 void TestWebServer::handleMonitorPage() {
-    if (isUploadUiRateLimited(kUploadUiSlotMonitor, isUploadInProgress(), kUploadUiMinIntervalMs)) {
-        sendUploadRateLimitResponse(server, "text/plain", "Upload active; monitor page refresh rate limited");
-        return;
-    }
-
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-    server->sendHeader("Pragma", "no-cache");
     server->sendHeader("Connection", "close");
-    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    
-    auto sendChunk = [this](const String& s) {
-        server->sendContent(s);
-    };
-
-    String html = "<!DOCTYPE html><html><head>";
-    html += "<title>SD Activity Monitor - CPAP Auto-Uploader</title>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<style>";
-    html += "*{box-sizing:border-box;margin:0;padding:0}";
-    html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
-    html += "background:#0f1923;color:#c7d5e0;min-height:100vh;padding:20px}";
-    html += ".wrap{max-width:900px;margin:0 auto}";
-    html += "h1{font-size:1.6em;color:#fff;margin-bottom:4px}";
-    html += ".subtitle{color:#66c0f4;font-size:0.9em;margin-bottom:20px}";
-    html += ".card{background:#1b2838;border:1px solid #2a475e;border-radius:10px;padding:18px;margin-bottom:16px}";
-    html += ".card h2{font-size:0.85em;text-transform:uppercase;letter-spacing:1px;color:#66c0f4;margin-bottom:12px;border-bottom:1px solid #2a475e;padding-bottom:8px}";
-    html += ".btn{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:6px;font-size:0.85em;font-weight:600;text-decoration:none;border:none;cursor:pointer;transition:all 0.2s}";
-    html += ".btn-primary{background:#66c0f4;color:#0f1923}.btn-primary:hover{background:#88d0ff}";
-    html += ".btn-danger{background:#c0392b;color:#fff}.btn-danger:hover{background:#e04030}";
-    html += ".btn-secondary{background:#2a475e;color:#c7d5e0}.btn-secondary:hover{background:#3a5a7e}";
-    
-    // Monitor specific styles
-    html += ".stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}";
-    html += ".stat-box{background:#16213e;padding:15px;border-radius:8px;text-align:center;border:1px solid #2a475e}";
-    html += ".stat-val{font-size:1.8em;color:#66c0f4;display:block;margin:5px 0;font-family:monospace}";
-    html += ".stat-lbl{color:#8f98a0;font-size:0.85em}";
-    
-    html += ".chart-container{background:#16213e;padding:15px;border-radius:8px;border:1px solid #2a475e;overflow-x:auto;min-height:200px}";
-    html += ".bar-row{display:flex;align-items:center;height:18px;margin:2px 0;font-family:monospace;font-size:0.8em}";
-    html += ".bar-lbl{width:50px;color:#8f98a0;text-align:right;padding-right:8px}";
-    html += ".bar-track{flex-grow:1;background:#0f1923;height:100%;border-radius:2px;overflow:hidden}";
-    html += ".bar-fill{height:100%;transition:width 0.3s}";
-    html += ".bar-fill.active{background:#ff4444}";
-    html += ".bar-fill.idle{background:#2a475e}";
-    html += ".indicator{display:inline-block;width:12px;height:12px;border-radius:50%;margin-left:10px}";
-    html += ".indicator.busy{background:#ff4444;box-shadow:0 0 8px #ff4444}";
-    html += ".indicator.idle{background:#44ff44;box-shadow:0 0 8px #44ff44}";
-    html += "</style></head><body><div class='wrap'>";
-    
-    server->send(200, "text/html; charset=utf-8", html);
-    
-    // Header
-    html = "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:20px'>";
-    html += "<div><h1>SD Activity Monitor <span id='indicator' class='indicator idle'></span></h1>";
-    html += "<p class='subtitle'>Real-time Bus Traffic Analysis</p></div>";
-    html += "<button onclick='stopAndExit()' class='btn btn-secondary'>&larr; Back to Status</button>";
-    html += "</div>";
-    sendChunk(html);
-    
-    // Explanation Card
-    html = "<div class='card'>";
-    html += "<h2>About This Tool</h2>";
-    html += "<p style='font-size:0.9em;color:#c7d5e0;line-height:1.5'>This tool monitors electrical signals on the SD card bus to detect when the CPAP machine is writing data. <strong>Use this when the CPAP is turned on and the SD card is inserted.</strong></p>";
-    html += "<p style='font-size:0.9em;color:#c7d5e0;margin-top:8px'>It helps identify the best 'Idle' times to configure for safe uploads. When the bus is 'Busy' (Red), the CPAP is writing. When 'Idle' (Green), it is safe to take control.</p>";
-    html += "</div>";
-    sendChunk(html);
-    
-    // Controls
-    html = "<div class='card'>";
-    html += "<h2>Controls</h2>";
-    html += "<div style='display:flex;gap:10px'>";
-    html += "<button id='btn-start' onclick='startMonitor()' class='btn btn-primary'>Start Monitoring</button>";
-    html += "<button id='btn-stop' onclick='stopMonitor()' class='btn btn-danger' style='display:none'>Stop Monitoring</button>";
-    html += "</div></div>";
-    sendChunk(html);
-    
-    // Stats Grid
-    html = "<div class='stats-grid'>";
-    html += "<div class='stat-box'><span class='stat-lbl'>Pulse Count (1s)</span><span class='stat-val' id='pulses'>--</span></div>";
-    html += "<div class='stat-box'><span class='stat-lbl'>Consecutive Idle</span><span class='stat-val' id='idle'>--</span></div>";
-    html += "<div class='stat-box'><span class='stat-lbl'>Longest Idle</span><span class='stat-val' id='longest'>--</span></div>";
-    html += "<div class='stat-box'><span class='stat-lbl'>Active/Idle Ratio</span><span class='stat-val' id='ratio'>--</span></div>";
-    html += "</div>";
-    sendChunk(html);
-    
-    // Chart
-    html = "<div class='card'>";
-    html += "<h2>Activity Timeline (Last 60s)</h2>";
-    html += "<div class='chart-container' id='chart'><em>Waiting for data...</em></div>";
-    html += "</div>";
-    sendChunk(html);
-    
-    // Scripts
-    html = "<script>";
-    html += "let polling=null;";
-    html += "function stopAndExit(){stopMonitor(); setTimeout(()=>{window.location.href='/';}, 500);}";
-    html += "function startMonitor(){fetch('/api/monitor-start').then(()=>{";
-    html += "  document.getElementById('btn-start').style.display='none';";
-    html += "  document.getElementById('btn-stop').style.display='inline-flex';";
-    html += "  if(!polling) polling=setInterval(fetchData,2000);";
-    html += "});}";
-    html += "function stopMonitor(){fetch('/api/monitor-stop');";
-    html += "  document.getElementById('btn-start').style.display='inline-flex';";
-    html += "  document.getElementById('btn-stop').style.display='none';";
-    html += "  if(polling){clearInterval(polling);polling=null;}";
-    html += "}";
-    html += "function fetchData(){fetch('/api/sd-activity').then(r=>r.json()).then(d=>{";
-    html += "  document.getElementById('pulses').textContent=d.last_pulse_count;";
-    html += "  document.getElementById('idle').textContent=(d.consecutive_idle_ms/1000).toFixed(1)+'s';";
-    html += "  document.getElementById('longest').textContent=(d.longest_idle_ms/1000).toFixed(1)+'s';";
-    html += "  document.getElementById('ratio').textContent=d.total_active_samples+' / '+d.total_idle_samples;";
-    html += "  let ind=document.getElementById('indicator');";
-    html += "  ind.className='indicator '+(d.is_busy?'busy':'idle');";
-    html += "  let chart=document.getElementById('chart');";
-    html += "  if(d.samples&&d.samples.length>0){";
-    html += "    let html='';";
-    html += "    d.samples.forEach(s=>{";
-    html += "      let w=Math.min(Math.max(s.p/10,1),100);";
-    html += "      let cls=s.a?'active':'idle';";
-    html += "      let sec=s.t%3600;let m=Math.floor(sec/60);let ss=sec%60;";
-    html += "      let lbl=String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');";
-    html += "      html+='<div class=\"bar-row\"><span class=\"bar-lbl\">'+lbl+'</span>';";
-    html += "      html+='<div class=\"bar-track\"><div class=\"bar-fill '+cls+'\" style=\"width:'+w+'%\"></div></div>';";
-    html += "      html+='</div>';";
-    html += "    });";
-    html += "    chart.innerHTML=html;";
-    html += "  }";
-    html += "}).catch(e=>console.error('Fetch error:',e));}";
-    html += "startMonitor();"; // Auto-start
-    html += "</script>";
-    
-    html += "</div></body></html>";
-    sendChunk(html);
-    
-    server->sendContent("");
+    server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }

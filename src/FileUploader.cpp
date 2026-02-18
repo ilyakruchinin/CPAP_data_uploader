@@ -1,5 +1,6 @@
 #include "FileUploader.h"
 #include "Logger.h"
+#include "WebStatus.h"
 #include <SD_MMC.h>
 
 #ifdef ENABLE_TEST_WEBSERVER
@@ -312,7 +313,13 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     if (!stateManager->save(sd)) {
         LOG_ERROR("[FileUploader] Failed to save upload state");
     }
-    
+
+    // Clear upload session status
+    g_uploadSessionStatus.uploadActive = false;
+    g_uploadSessionStatus.filesUploaded = 0;
+    g_uploadSessionStatus.filesTotal = 0;
+    g_uploadSessionStatus.currentFolder[0] = '\0';
+
     // Determine result
     unsigned long elapsed = millis() - sessionStart;
     LOGF("[FileUploader] Exclusive access session ended: %lu seconds elapsed", elapsed / 1000);
@@ -732,102 +739,168 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
     bool isRecent = isRecentFolder(folderName);
     bool isRecentRescan = stateManager->isFolderCompleted(folderName) && isRecent;
     
+    // Update web status: session started for this folder
+    g_uploadSessionStatus.uploadActive = true;
+    strncpy((char*)g_uploadSessionStatus.currentFolder, folderName.c_str(), sizeof(g_uploadSessionStatus.currentFolder) - 1);
+    ((char*)g_uploadSessionStatus.currentFolder)[sizeof(g_uploadSessionStatus.currentFolder) - 1] = '\0';
+    g_uploadSessionStatus.filesTotal    = (int)files.size();
+    g_uploadSessionStatus.filesUploaded = 0;
+
     // Upload each file
     int uploadedCount = 0;
     int skippedUnchanged = 0;
-    for (const String& fileName : files) {
-        String localPath = folderPath + "/" + fileName;
-        
-        // For recent folder re-scans, check if file has changed via checksum
-        if (isRecentRescan) {
-            if (!stateManager->hasFileChanged(sd, localPath)) {
-                skippedUnchanged++;
-                continue;  // File unchanged since last upload
-            }
-            LOG_DEBUGF("[FileUploader] File changed in recent folder: %s", fileName.c_str());
-        }
-        
-        // Get file size
-        File file = sd.open(localPath);
-        if (!file) {
-            LOG_ERRORF("[FileUploader] Cannot open file for reading: %s", localPath.c_str());
-            LOG_ERROR("[FileUploader] File may be corrupted or SD card has read errors");
-            LOG_WARN("[FileUploader] Skipping this file and continuing with next file");
-            continue;  // Skip this file but continue with others
-        }
-        
-        unsigned long fileSize = file.size();
-        
-        // Sanity check file size
-        if (fileSize == 0) {
-            LOG_WARNF("[FileUploader] File is empty: %s", localPath.c_str());
-            file.close();
-            stateManager->markFileUploaded(localPath, "empty_file", 0);
-            continue;  // Skip empty files
-        }
-        
-        file.close();
-        
-        // Lazily create cloud import on first actual upload (avoids empty imports)
-        if (!ensureCloudImport()) {
-            LOG_WARN("[FileUploader] Cloud import not available, skipping cloud uploads this session");
-        }
-        
-        // Upload the file
-        String remotePath = folderPath + "/" + fileName;
-        unsigned long bytesTransferred = 0;
-        unsigned long uploadStartTime = millis();
-        
-        LOGF("[FileUploader] Uploading file: %s (%lu bytes)", fileName.c_str(), fileSize);
-        
-        bool uploadSuccess = true;
-        bool anyBackendConfigured = false;
-        
-        // Upload to all active backends
+    // Determine which backend groups are active. SMB/WebDAV run in Phase 1
+    // (heap fresh) and SleepHQ in Phase 2 (after SMB disconnect). This ensures
+    // ensureCloudImport()'s TLS/OAuth handshake — which drops maxAlloc from
+    // ~90 KB to ~39 KB — never runs before libsmb2, preventing signing buffer
+    // allocation failures and subsequent heap corruption.
+    const bool hasSmbLike = false
 #ifdef ENABLE_SMB_UPLOAD
-        if (smbUploader && config->hasSmbEndpoint()) {
-            anyBackendConfigured = true;
-            if (!smbUploader->isConnected()) {
-                LOG_DEBUG("[FileUploader] SMB not connected, attempting to connect...");
-                if (!smbUploader->begin()) {
-                    LOG_ERROR("[FileUploader] Failed to connect to SMB share");
-                    return false;
-                }
-            }
-            unsigned long smbBytes = 0;
-            if (!smbUploader->upload(localPath, remotePath, sd, smbBytes)) {
-                LOG_ERRORF("[FileUploader] SMB upload failed for: %s", localPath.c_str());
-                uploadSuccess = false;
-            } else {
-                bytesTransferred = smbBytes;
-            }
-        }
+        || (smbUploader && config->hasSmbEndpoint())
 #endif
 #ifdef ENABLE_WEBDAV_UPLOAD
-        if (webdavUploader && config->hasWebdavEndpoint()) {
-            anyBackendConfigured = true;
-            if (!webdavUploader->isConnected()) {
-                LOG_DEBUG("[FileUploader] WebDAV not connected, attempting to connect...");
-                if (!webdavUploader->begin()) {
-                    LOG_ERROR("[FileUploader] Failed to connect to WebDAV server");
-                    return false;
+        || (webdavUploader && config->hasWebdavEndpoint())
+#endif
+        ;
+    const bool hasCloud = false
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+        || (sleephqUploader && config->hasCloudEndpoint() && !cloudImportFailed)
+#endif
+        ;
+    if (!hasSmbLike && !hasCloud) {
+        LOG_ERROR("[FileUploader] No uploader available for configured endpoint type");
+        return false;
+    }
+
+    // -------------------------------------------------------
+    // Phase 1: SMB / WebDAV  (must run while heap is fresh)
+    // -------------------------------------------------------
+    if (hasSmbLike) {
+        for (const String& fileName : files) {
+            String localPath = folderPath + "/" + fileName;
+            if (isRecentRescan) {
+                if (!stateManager->hasFileChanged(sd, localPath)) { skippedUnchanged++; continue; }
+                LOG_DEBUGF("[FileUploader] File changed in recent folder: %s", fileName.c_str());
+            }
+            File file = sd.open(localPath);
+            if (!file) {
+                LOG_ERRORF("[FileUploader] Cannot open file for reading: %s", localPath.c_str());
+                LOG_ERROR("[FileUploader] File may be corrupted or SD card has read errors");
+                LOG_WARN("[FileUploader] Skipping this file and continuing with next file");
+                continue;
+            }
+            unsigned long fileSize = file.size();
+            if (fileSize == 0) {
+                LOG_WARNF("[FileUploader] File is empty: %s", localPath.c_str());
+                file.close();
+                stateManager->markFileUploaded(localPath, "empty_file", 0);
+                continue;
+            }
+            file.close();
+            String remotePath = folderPath + "/" + fileName;
+            unsigned long bytesTransferred = 0;
+            LOGF("[FileUploader] Uploading file: %s (%lu bytes)", fileName.c_str(), fileSize);
+            bool fileSuccess = true;
+#ifdef ENABLE_SMB_UPLOAD
+            if (smbUploader && config->hasSmbEndpoint()) {
+                if (!smbUploader->isConnected()) {
+                    LOG_DEBUG("[FileUploader] SMB not connected, attempting to connect...");
+                    if (!smbUploader->begin()) {
+                        LOG_ERROR("[FileUploader] Failed to connect to SMB share");
+                        return false;
+                    }
                 }
+                unsigned long smbBytes = 0;
+                if (!smbUploader->upload(localPath, remotePath, sd, smbBytes)) {
+                    LOG_ERRORF("[FileUploader] SMB upload failed for: %s", localPath.c_str());
+                    fileSuccess = false;
+                } else { bytesTransferred = smbBytes; }
             }
-            unsigned long davBytes = 0;
-            if (!webdavUploader->upload(localPath, remotePath, sd, davBytes)) {
-                LOG_ERRORF("[FileUploader] WebDAV upload failed for: %s", localPath.c_str());
-                uploadSuccess = false;
-            } else if (bytesTransferred == 0) {
-                bytesTransferred = davBytes;
+#endif
+#ifdef ENABLE_WEBDAV_UPLOAD
+            if (webdavUploader && config->hasWebdavEndpoint()) {
+                if (!webdavUploader->isConnected()) {
+                    LOG_DEBUG("[FileUploader] WebDAV not connected, attempting to connect...");
+                    if (!webdavUploader->begin()) {
+                        LOG_ERROR("[FileUploader] Failed to connect to WebDAV server");
+                        return false;
+                    }
+                }
+                unsigned long davBytes = 0;
+                if (!webdavUploader->upload(localPath, remotePath, sd, davBytes)) {
+                    LOG_ERRORF("[FileUploader] WebDAV upload failed for: %s", localPath.c_str());
+                    fileSuccess = false;
+                } else if (bytesTransferred == 0) { bytesTransferred = davBytes; }
             }
+#endif
+            if (!fileSuccess) {
+                LOG_ERRORF("[FileUploader] Failed to upload file: %s", localPath.c_str());
+                LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
+                stateManager->save(sd);
+                return false;
+            }
+            if (!hasCloud && isRecent) {
+                stateManager->markFileUploaded(localPath, "", fileSize);
+            }
+            uploadedCount++;
+            g_uploadSessionStatus.filesUploaded = uploadedCount;
+            LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), bytesTransferred);
+#ifdef ENABLE_TEST_WEBSERVER
+            if (webServer) webServer->handleClient();
+#endif
+        }
+        // Disconnect SMB before cloud phase — frees libsmb2 context and TCP socket
+        // so ensureCloudImport()'s TLS/OAuth fragmentation is contained to Phase 2.
+#ifdef ENABLE_SMB_UPLOAD
+        if (smbUploader && smbUploader->isConnected()) {
+            LOG_DEBUG("[FileUploader] SMB phase complete — disconnecting before cloud phase");
+            smbUploader->end();
         }
 #endif
+    }
+    // -------------------------------------------------------
+    // Phase 2: SleepHQ cloud uploads
+    // ensureCloudImport() (TLS/OAuth) is intentionally deferred
+    // to here so heap fragmentation only affects this phase.
+    // ensureCloudImport() is also lazy: called only when there is
+    // actually a file to upload, avoiding TLS init for all-unchanged folders.
+    // -------------------------------------------------------
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-        // Variable to capture checksum if calculated during upload
-        String fileChecksum = "";
-        
-        if (sleephqUploader && config->hasCloudEndpoint() && !cloudImportFailed) {
-            anyBackendConfigured = true;
+    if (hasCloud) {
+        bool cloudImportAttempted = false;
+        for (const String& fileName : files) {
+            String localPath = folderPath + "/" + fileName;
+            if (isRecentRescan) {
+                if (!stateManager->hasFileChanged(sd, localPath)) {
+                    if (!hasSmbLike) skippedUnchanged++;
+                    continue;
+                }
+                if (!hasSmbLike) LOG_DEBUGF("[FileUploader] File changed in recent folder: %s", fileName.c_str());
+            }
+            File file = sd.open(localPath);
+            if (!file) {
+                if (!hasSmbLike) {
+                    LOG_ERRORF("[FileUploader] Cannot open file for reading: %s", localPath.c_str());
+                    LOG_WARN("[FileUploader] Skipping this file and continuing with next file");
+                }
+                continue;
+            }
+            unsigned long fileSize = file.size();
+            file.close();
+            if (fileSize == 0) {
+                if (!hasSmbLike) stateManager->markFileUploaded(localPath, "empty_file", 0);
+                continue;
+            }
+            // Lazily ensure cloud import — only on first file that actually needs uploading
+            if (!cloudImportAttempted) {
+                if (!ensureCloudImport()) {
+                    LOG_WARN("[FileUploader] Cloud import not available, skipping cloud uploads this session");
+                    break;
+                }
+                cloudImportAttempted = true;
+            }
+            String remotePath = folderPath + "/" + fileName;
+            if (!hasSmbLike) LOGF("[FileUploader] Uploading file: %s (%lu bytes)", fileName.c_str(), fileSize);
             if (!sleephqUploader->isConnected()) {
                 LOG_DEBUG("[FileUploader] Cloud not connected, attempting to connect...");
                 if (!sleephqUploader->begin()) {
@@ -839,42 +912,23 @@ bool FileUploader::uploadDatalogFolder(SDCardManager* sdManager, const String& f
             String cloudChecksum = "";
             if (!sleephqUploader->upload(localPath, remotePath, sd, cloudBytes, cloudChecksum)) {
                 LOG_ERRORF("[FileUploader] Cloud upload failed for: %s", localPath.c_str());
-                uploadSuccess = false;
-            } else if (bytesTransferred == 0) {
-                bytesTransferred = cloudBytes;
+                if (!hasSmbLike) LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
+                stateManager->save(sd);
+                return false;
             }
-            if (!cloudChecksum.isEmpty()) {
-                fileChecksum = cloudChecksum;
+            if (isRecent) stateManager->markFileUploaded(localPath, "", fileSize);
+            if (!hasSmbLike) {
+                uploadedCount++;
+                g_uploadSessionStatus.filesUploaded = uploadedCount;
+                LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), cloudBytes);
             }
-        }
-#endif
-        
-        if (!anyBackendConfigured) {
-            LOG_ERROR("[FileUploader] No uploader available for configured endpoint type");
-            return false;
-        }
-        
-        if (!uploadSuccess) {
-            LOG_ERRORF("[FileUploader] Failed to upload file: %s", localPath.c_str());
-            LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
-            stateManager->save(sd);
-            return false;  // Stop processing this folder
-        }
-        
-        // For DATALOG files, only recent folders need change tracking for re-scans.
-        // Track size only (no per-file MD5) to minimize heap churn/fragmentation.
-        if (isRecent) {
-            stateManager->markFileUploaded(localPath, "", fileSize);
-        }
-        
-        uploadedCount++;
-        LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), bytesTransferred);
-        
 #ifdef ENABLE_TEST_WEBSERVER
-        if (webServer) webServer->handleClient();
+            if (webServer) webServer->handleClient();
 #endif
+        }
     }
-    
+#endif
+
     // All files processed successfully
     if (isRecentRescan) {
         LOGF("[FileUploader] Re-scan complete: %d uploaded, %d unchanged in folder", uploadedCount, skippedUnchanged);
@@ -942,19 +996,13 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
         LOG_DEBUG("[FileUploader] Forcing upload (mandatory file)");
     }
     
-    // Lazily create cloud import on first actual upload (avoids empty imports)
-    if (!ensureCloudImport()) {
-        LOG_WARN("[FileUploader] Cloud import not available, skipping cloud uploads this session");
-    }
-    
-    // Upload the file
+    // Upload the file — SMB/WebDAV first (heap fresh), SleepHQ second (TLS alloc after)
     unsigned long bytesTransferred = 0;
     unsigned long uploadStartTime = millis();
-    
     bool uploadSuccess = true;
     bool anyBackendConfigured = false;
-    
-    // Upload to all active backends
+
+    // Phase 1: SMB / WebDAV
 #ifdef ENABLE_SMB_UPLOAD
     if (smbUploader && config->hasSmbEndpoint()) {
         anyBackendConfigured = true;
@@ -991,29 +1039,34 @@ bool FileUploader::uploadSingleFile(SDCardManager* sdManager, const String& file
         }
     }
 #endif
+
+    // Phase 2: SleepHQ (TLS/OAuth after SMB is done)
+    // ensureCloudImport() is called lazily here — only if this file needs uploading
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-    // Variable to capture checksum if calculated during upload
     String fileChecksum = "";
-    
     if (sleephqUploader && config->hasCloudEndpoint() && !cloudImportFailed) {
         anyBackendConfigured = true;
-        if (!sleephqUploader->isConnected()) {
-            LOG_DEBUG("[FileUploader] Cloud not connected, attempting to connect...");
-            if (!sleephqUploader->begin()) {
-                LOG_ERROR("[FileUploader] Failed to connect to cloud service");
-                return false;
+        if (!ensureCloudImport()) {
+            LOG_WARN("[FileUploader] Cloud import not available, skipping cloud upload for this file");
+        } else {
+            if (!sleephqUploader->isConnected()) {
+                LOG_DEBUG("[FileUploader] Cloud not connected, attempting to connect...");
+                if (!sleephqUploader->begin()) {
+                    LOG_ERROR("[FileUploader] Failed to connect to cloud service");
+                    return false;
+                }
             }
-        }
-        unsigned long cloudBytes = 0;
-        String cloudChecksum = "";
-        if (!sleephqUploader->upload(filePath, filePath, sd, cloudBytes, cloudChecksum)) {
-            LOG_ERRORF("[FileUploader] Cloud upload failed for: %s", filePath.c_str());
-            uploadSuccess = false;
-        } else if (bytesTransferred == 0) {
-            bytesTransferred = cloudBytes;
-        }
-        if (!cloudChecksum.isEmpty()) {
-            fileChecksum = cloudChecksum;
+            unsigned long cloudBytes = 0;
+            String cloudChecksum = "";
+            if (!sleephqUploader->upload(filePath, filePath, sd, cloudBytes, cloudChecksum)) {
+                LOG_ERRORF("[FileUploader] Cloud upload failed for: %s", filePath.c_str());
+                uploadSuccess = false;
+            } else if (bytesTransferred == 0) {
+                bytesTransferred = cloudBytes;
+            }
+            if (!cloudChecksum.isEmpty()) {
+                fileChecksum = cloudChecksum;
+            }
         }
     }
 #endif
