@@ -77,6 +77,11 @@ static inline bool parseDayToken(const char* token, uint32_t& day) {
 }
 }
 
+void UploadStateManager::setPaths(const String& snapshotPath, const String& journalPath) {
+    stateSnapshotPath = snapshotPath;
+    stateJournalPath  = journalPath;
+}
+
 UploadStateManager::UploadStateManager() 
     : stateSnapshotPath("/.upload_state.v2"),
       stateJournalPath("/.upload_state.v2.log"),

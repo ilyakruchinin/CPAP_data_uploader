@@ -93,7 +93,8 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=card style="grid-column:1/-1"><h2>Upload Progress</h2>
 <div class=row><span class=k>Data folders</span><span id=d-fold class=v></span></div>
 <div class=prog><div id=d-pf class=pf style=width:0%></div></div>
-<div class=row style="margin-top:7px"><span class=k>Session</span><span id=d-sess class=v></span></div>
+<div class=row style="margin-top:7px"><span class=k>SMB</span><span id=d-smb class=v>—</span></div>
+<div class=row><span class=k>Cloud</span><span id=d-cloud class=v>—</span></div>
 <div class=row><span class=k>Status</span><span id=d-fst class=v></span></div>
 </div>
 </div>
@@ -220,9 +221,10 @@ function renderStatus(d){
   set('d-fold',comp+' / '+tot);
   var pct=tot>0?Math.round(comp*100/tot):0;
   document.getElementById('d-pf').style.width=pct+'%';
-  var sess='—';
-  if(d.upload_active){sess=d.files_up+' / '+d.files_total+(d.cur_folder?' ('+d.cur_folder+')':'');}
-  set('d-sess',sess);
+  var smbS='—',clS='—';
+  if(d.smb_active){smbS=d.smb_up+' / '+d.smb_total+(d.smb_folder?' ('+d.smb_folder+')':'');}
+  if(d.cloud_active){clS=d.cloud_up+' / '+d.cloud_total+(d.cloud_folder?' ('+d.cloud_folder+')':'');}
+  set('d-smb',smbS); set('d-cloud',clS);
   var fst=inc>0?'&#9888; '+inc+' folder(s) pending':comp>0?'&#10003; Complete':'Waiting for first scan';
   seti('d-fst',fst);
   set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
