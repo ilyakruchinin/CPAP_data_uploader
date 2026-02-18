@@ -18,6 +18,14 @@ extern unsigned long stateEnteredAt;
 extern unsigned long cooldownStartedAt;
 extern volatile bool uploadTaskRunning;
 
+namespace {
+static constexpr unsigned long kUploadWebWindowMs = 1000;
+static constexpr uint8_t kUploadWebMaxRequestsPerWindow = 8;
+static constexpr unsigned long kUploadWebMinServiceGapMs = 100;
+static constexpr unsigned long kUploadLogsMinRefreshMs = 3000;
+static constexpr size_t kUploadLogsTailBytes = 2048;
+}
+
 // Constructor
 TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
                              ScheduleManager* schedule, 
@@ -56,7 +64,6 @@ bool TestWebServer::begin() {
     // Register request handlers
     server->on("/", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
-        if (this->rejectHeavyRequestDuringUpload("/")) return;
         this->handleRoot();
     });
     server->on("/trigger-upload", [this]() {
@@ -67,39 +74,32 @@ bool TestWebServer::begin() {
     // HTML Views
     server->on("/status", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
-        if (this->rejectHeavyRequestDuringUpload("/status")) return;
         this->handleStatusPage();
     });
     server->on("/config", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
-        if (this->rejectHeavyRequestDuringUpload("/config")) return;
         this->handleConfigPage();
     });
     server->on("/logs", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
-        if (this->rejectHeavyRequestDuringUpload("/logs")) return;
         this->handleLogs();
     });
     server->on("/monitor", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
-        if (this->rejectHeavyRequestDuringUpload("/monitor")) return;
         this->handleMonitorPage();
     });
     
     // APIs
     server->on("/api/status", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
-        if (this->rejectHeavyRequestDuringUpload("/api/status")) return;
         this->handleApiStatus();
     });
     server->on("/api/config", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
-        if (this->rejectHeavyRequestDuringUpload("/api/config")) return;
         this->handleApiConfig();
     });
     server->on("/api/logs", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
-        if (this->rejectHeavyRequestDuringUpload("/api/logs")) return;
         this->handleApiLogs();
     });
     server->on("/api/monitor-start", [this]() {
@@ -112,7 +112,6 @@ bool TestWebServer::begin() {
     });
     server->on("/api/sd-activity", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
-        if (this->rejectHeavyRequestDuringUpload("/api/sd-activity")) return;
         this->handleSdActivity();
     });
     server->on("/reset-state", [this]() {
@@ -135,8 +134,8 @@ bool TestWebServer::begin() {
     // Handle common browser requests silently
     server->on("/favicon.ico", [this]() { 
         if (this->redirectToIpIfMdnsRequest()) return;
-        // Return empty 204 No Content with proper content type
-        server->send(204, "text/plain", ""); 
+        // Avoid empty-content WebServer warnings and keep this path cheap.
+        server->send(404, "text/plain", "Not found");
     });
     
     server->onNotFound([this]() { this->handleNotFound(); });
@@ -159,33 +158,52 @@ bool TestWebServer::begin() {
 
 // Process incoming HTTP requests
 void TestWebServer::handleClient() {
-    if (server) {
-        server->handleClient();
+    if (!server) {
+        return;
     }
+
+    const bool uploadInProgress = isUploadInProgress();
+    const unsigned long now = millis();
+
+    static unsigned long lastServiceMs = 0;
+    static unsigned long windowStartMs = 0;
+    static uint8_t servedInWindow = 0;
+    static unsigned long lastThrottleLogMs = 0;
+
+    if (uploadInProgress) {
+        if (windowStartMs == 0 || now - windowStartMs >= kUploadWebWindowMs) {
+            windowStartMs = now;
+            servedInWindow = 0;
+        }
+
+        const bool tooSoon = (lastServiceMs != 0) && (now - lastServiceMs < kUploadWebMinServiceGapMs);
+        const bool budgetExceeded = servedInWindow >= kUploadWebMaxRequestsPerWindow;
+        if (tooSoon || budgetExceeded) {
+            if (lastThrottleLogMs == 0 || now - lastThrottleLogMs >= 5000) {
+                LOG_WARNF("[TestWebServer] Upload-time web throttle active (served=%u/%u in %lums)",
+                          servedInWindow,
+                          (unsigned)kUploadWebMaxRequestsPerWindow,
+                          (unsigned long)kUploadWebWindowMs);
+                lastThrottleLogMs = now;
+            }
+            return;
+        }
+    } else {
+        // Reset upload-time throttling state between sessions.
+        windowStartMs = now;
+        servedInWindow = 0;
+    }
+
+    lastServiceMs = now;
+    if (uploadInProgress && servedInWindow < 255) {
+        servedInWindow++;
+    }
+
+    server->handleClient();
 }
 
 bool TestWebServer::isUploadInProgress() const {
     return uploadTaskRunning;
-}
-
-bool TestWebServer::rejectHeavyRequestDuringUpload(const char* endpoint) {
-    if (!server || !isUploadInProgress()) {
-        return false;
-    }
-
-    static unsigned long lastWarnMs = 0;
-    const unsigned long now = millis();
-    if (now - lastWarnMs >= 5000) {
-        LOG_WARNF("[TestWebServer] Rejecting heavy endpoint during upload: %s", endpoint ? endpoint : "(unknown)");
-        lastWarnMs = now;
-    }
-
-    addCorsHeaders(server);
-    server->sendHeader("Retry-After", "5");
-    server->send(503,
-                 "application/json",
-                 "{\"status\":\"busy\",\"message\":\"Upload in progress. Retry shortly.\"}");
-    return true;
 }
 
 bool TestWebServer::redirectToIpIfMdnsRequest() {
@@ -705,7 +723,7 @@ void TestWebServer::handleLogs() {
     html += "  });";
     html += "}";
     html += "fetchLogs();";
-    html += "setInterval(fetchLogs, 2000);"; // Refresh every 2s
+    html += "setInterval(fetchLogs, 4000);"; // Refresh every 4s to reduce network churn
     html += "</script>";
     
     html += "</body></html>";
@@ -723,7 +741,20 @@ void TestWebServer::handleApiLogs() {
     server->send(200, "text/plain; charset=utf-8", " ");
     // Stream logs directly
     ChunkedPrint chunkedOutput(server);
-    Logger::getInstance().printLogs(chunkedOutput);
+
+    if (isUploadInProgress()) {
+        static unsigned long lastLogDumpMs = 0;
+        const unsigned long now = millis();
+        if (lastLogDumpMs == 0 || now - lastLogDumpMs >= kUploadLogsMinRefreshMs) {
+            Logger::getInstance().printLogsTail(chunkedOutput, kUploadLogsTailBytes);
+            lastLogDumpMs = now;
+        } else {
+            chunkedOutput.print("[INFO] Log stream throttled during active upload. Retry shortly.\n");
+        }
+    } else {
+        Logger::getInstance().printLogs(chunkedOutput);
+    }
+
     server->sendContent("");
 }
 
@@ -1318,6 +1349,30 @@ void TestWebServer::handleSdActivity() {
         server->send(500, "application/json", "{\"error\":\"TrafficMonitor not available\"}");
         return;
     }
+
+    // During uploads return a compact payload with no sample history.
+    // This keeps the endpoint alive for UI health checks while avoiding heavy String churn.
+    if (isUploadInProgress()) {
+        static unsigned long lastCompactRefreshMs = 0;
+        static char compactJson[256] = {0};
+        const unsigned long now = millis();
+        if (compactJson[0] == '\0' || now - lastCompactRefreshMs >= 1000) {
+            snprintf(compactJson,
+                     sizeof(compactJson),
+                     "{\"last_pulse_count\":%d,\"consecutive_idle_ms\":%lu,\"longest_idle_ms\":%lu,\"total_active_samples\":%lu,\"total_idle_samples\":%lu,\"is_busy\":%s,\"sample_count\":%d,\"samples\":[],\"degraded\":true}",
+                     trafficMonitor->getLastPulseCount(),
+                     (unsigned long)trafficMonitor->getConsecutiveIdleMs(),
+                     (unsigned long)trafficMonitor->getLongestIdleMs(),
+                     (unsigned long)trafficMonitor->getTotalActiveSamples(),
+                     (unsigned long)trafficMonitor->getTotalIdleSamples(),
+                     trafficMonitor->isBusy() ? "true" : "false",
+                     trafficMonitor->getSampleCount());
+            lastCompactRefreshMs = now;
+        }
+
+        server->send(200, "application/json", compactJson);
+        return;
+    }
     
     // Build JSON with current stats and recent samples
     String json = "{";
@@ -1449,7 +1504,7 @@ void TestWebServer::handleMonitorPage() {
     html += "function startMonitor(){fetch('/api/monitor-start').then(()=>{";
     html += "  document.getElementById('btn-start').style.display='none';";
     html += "  document.getElementById('btn-stop').style.display='inline-flex';";
-    html += "  if(!polling) polling=setInterval(fetchData,1000);";
+    html += "  if(!polling) polling=setInterval(fetchData,2000);";
     html += "});}";
     html += "function stopMonitor(){fetch('/api/monitor-stop');";
     html += "  document.getElementById('btn-start').style.display='inline-flex';";
