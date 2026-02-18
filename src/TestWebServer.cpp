@@ -19,11 +19,50 @@ extern unsigned long cooldownStartedAt;
 extern volatile bool uploadTaskRunning;
 
 namespace {
-static constexpr unsigned long kUploadWebWindowMs = 1000;
-static constexpr uint8_t kUploadWebMaxRequestsPerWindow = 8;
-static constexpr unsigned long kUploadWebMinServiceGapMs = 100;
 static constexpr unsigned long kUploadLogsMinRefreshMs = 3000;
 static constexpr size_t kUploadLogsTailBytes = 2048;
+static constexpr unsigned long kUploadUiMinIntervalMs = 400;
+static constexpr unsigned long kUploadNotFoundMinIntervalMs = 250;
+
+enum UploadUiSlot : uint8_t {
+    kUploadUiSlotRoot = 0,
+    kUploadUiSlotLogs,
+    kUploadUiSlotConfig,
+    kUploadUiSlotStatus,
+    kUploadUiSlotMonitor,
+    kUploadUiSlotNotFound,
+    kUploadUiSlotCount
+};
+
+bool isUploadUiRateLimited(UploadUiSlot slot, bool uploadInProgress, unsigned long minIntervalMs) {
+    static unsigned long lastServedMs[kUploadUiSlotCount] = {0};
+
+    if (!uploadInProgress) {
+        lastServedMs[slot] = 0;
+        return false;
+    }
+
+    const unsigned long now = millis();
+    if (lastServedMs[slot] != 0 && (now - lastServedMs[slot]) < minIntervalMs) {
+        return true;
+    }
+
+    lastServedMs[slot] = now;
+    return false;
+}
+
+void sendUploadRateLimitResponse(WebServer* server,
+                                 const char* contentType = "text/plain",
+                                 const char* body = "Busy during upload; slow down refresh") {
+    if (!server) {
+        return;
+    }
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Pragma", "no-cache");
+    server->sendHeader("Connection", "close");
+    server->sendHeader("Retry-After", "1");
+    server->send(429, contentType, body);
+}
 }
 
 // Constructor
@@ -135,6 +174,7 @@ bool TestWebServer::begin() {
     server->on("/favicon.ico", [this]() { 
         if (this->redirectToIpIfMdnsRequest()) return;
         // Avoid empty-content WebServer warnings and keep this path cheap.
+        server->sendHeader("Connection", "close");
         server->send(404, "text/plain", "Not found");
     });
     
@@ -158,48 +198,10 @@ bool TestWebServer::begin() {
 
 // Process incoming HTTP requests
 void TestWebServer::handleClient() {
-    if (!server) {
-        return;
+    if (server) {
+        // Always service sockets to avoid stale descriptors and connection backlog.
+        server->handleClient();
     }
-
-    const bool uploadInProgress = isUploadInProgress();
-    const unsigned long now = millis();
-
-    static unsigned long lastServiceMs = 0;
-    static unsigned long windowStartMs = 0;
-    static uint8_t servedInWindow = 0;
-    static unsigned long lastThrottleLogMs = 0;
-
-    if (uploadInProgress) {
-        if (windowStartMs == 0 || now - windowStartMs >= kUploadWebWindowMs) {
-            windowStartMs = now;
-            servedInWindow = 0;
-        }
-
-        const bool tooSoon = (lastServiceMs != 0) && (now - lastServiceMs < kUploadWebMinServiceGapMs);
-        const bool budgetExceeded = servedInWindow >= kUploadWebMaxRequestsPerWindow;
-        if (tooSoon || budgetExceeded) {
-            if (lastThrottleLogMs == 0 || now - lastThrottleLogMs >= 5000) {
-                LOG_WARNF("[TestWebServer] Upload-time web throttle active (served=%u/%u in %lums)",
-                          servedInWindow,
-                          (unsigned)kUploadWebMaxRequestsPerWindow,
-                          (unsigned long)kUploadWebWindowMs);
-                lastThrottleLogMs = now;
-            }
-            return;
-        }
-    } else {
-        // Reset upload-time throttling state between sessions.
-        windowStartMs = now;
-        servedInWindow = 0;
-    }
-
-    lastServiceMs = now;
-    if (uploadInProgress && servedInWindow < 255) {
-        servedInWindow++;
-    }
-
-    server->handleClient();
 }
 
 bool TestWebServer::isUploadInProgress() const {
@@ -254,6 +256,11 @@ bool TestWebServer::redirectToIpIfMdnsRequest() {
 
 // GET / - HTML status page (modern dark dashboard)
 void TestWebServer::handleRoot() {
+    if (isUploadUiRateLimited(kUploadUiSlotRoot, isUploadInProgress(), kUploadUiMinIntervalMs)) {
+        sendUploadRateLimitResponse(server, "text/plain", "Upload active; dashboard refresh rate limited");
+        return;
+    }
+
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server->sendHeader("Pragma", "no-cache");
     server->sendHeader("Connection", "close");
@@ -558,10 +565,24 @@ void TestWebServer::handleApiConfig() {
 // Handle 404 errors
 void TestWebServer::handleNotFound() {
     String uri = server->uri();
+
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Pragma", "no-cache");
+    server->sendHeader("Connection", "close");
     
     // Silently handle common browser requests that we don't care about
     if (uri == "/favicon.ico" || uri == "/apple-touch-icon.png" || 
         uri == "/apple-touch-icon-precomposed.png" || uri == "/robots.txt") {
+        server->send(404, "text/plain", "Not found");
+        return;
+    }
+
+    // During uploads keep 404 handling allocation-free and rate-limited.
+    if (isUploadUiRateLimited(kUploadUiSlotNotFound, isUploadInProgress(), kUploadNotFoundMinIntervalMs)) {
+        server->send(404, "text/plain", "Not found");
+        return;
+    }
+    if (isUploadInProgress()) {
         server->send(404, "text/plain", "Not found");
         return;
     }
@@ -670,6 +691,11 @@ public:
 
 // GET /logs - Retrieve system logs from circular buffer
 void TestWebServer::handleLogs() {
+    if (isUploadUiRateLimited(kUploadUiSlotLogs, isUploadInProgress(), kUploadUiMinIntervalMs)) {
+        sendUploadRateLimitResponse(server, "text/plain", "Upload active; logs page refresh rate limited");
+        return;
+    }
+
     // Add CORS headers for cross-origin access
     addCorsHeaders(server);
     
@@ -760,6 +786,14 @@ void TestWebServer::handleApiLogs() {
 
 // GET /config - Display current configuration (HTML View)
 void TestWebServer::handleConfigPage() {
+    if (isUploadUiRateLimited(kUploadUiSlotConfig, isUploadInProgress(), kUploadUiMinIntervalMs)) {
+        sendUploadRateLimitResponse(server, "text/plain", "Upload active; config page refresh rate limited");
+        return;
+    }
+
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Pragma", "no-cache");
+    server->sendHeader("Connection", "close");
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     auto sendChunk = [this](const String& s) { server->sendContent(s); };
 
@@ -799,6 +833,14 @@ void TestWebServer::handleConfigPage() {
 
 // GET /status - Display system status (HTML View)
 void TestWebServer::handleStatusPage() {
+    if (isUploadUiRateLimited(kUploadUiSlotStatus, isUploadInProgress(), kUploadUiMinIntervalMs)) {
+        sendUploadRateLimitResponse(server, "text/plain", "Upload active; status page refresh rate limited");
+        return;
+    }
+
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Pragma", "no-cache");
+    server->sendHeader("Connection", "close");
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     auto sendChunk = [this](const String& s) { server->sendContent(s); };
 
@@ -1413,6 +1455,14 @@ void TestWebServer::handleSdActivity() {
 }
 
 void TestWebServer::handleMonitorPage() {
+    if (isUploadUiRateLimited(kUploadUiSlotMonitor, isUploadInProgress(), kUploadUiMinIntervalMs)) {
+        sendUploadRateLimitResponse(server, "text/plain", "Upload active; monitor page refresh rate limited");
+        return;
+    }
+
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Pragma", "no-cache");
+    server->sendHeader("Connection", "close");
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     
     auto sendChunk = [this](const String& s) {
