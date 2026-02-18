@@ -112,6 +112,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=card style="margin-bottom:14px"><h2>Actions</h2>
 <div class=actions>
 <button id=btn-up class="btn bp" onclick=triggerUpload()>&#9650; Trigger Upload</button>
+<button id=btn-srb class="btn bs" onclick=softReboot()>&#8635; Soft Reboot</button>
 <button id=btn-rst class="btn bd" onclick=resetState()>Reset State</button>
 </div>
 </div>
@@ -320,6 +321,14 @@ function triggerUpload(){
     toast(d.message||'Upload triggered.',true);
   }).catch(function(){toast('Failed to trigger upload.',false);
   }).finally(function(){setTimeout(function(){b._busy=0;b.textContent='\u25b2 Trigger Upload';},700);});
+}
+function softReboot(){
+  var b=document.getElementById('btn-srb');
+  if(b._busy)return;b._busy=1;b.textContent='Rebooting...';
+  fetch('/soft-reboot',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    toast(d.message||'Rebooting...',true);
+  }).catch(function(){toast('Failed to reboot.',false);
+  }).finally(function(){setTimeout(function(){b._busy=0;b.innerHTML='&#8635; Soft Reboot';},4000);});
 }
 function resetState(){
   if(!confirm('Reset all upload state? This cannot be undone.'))return;
