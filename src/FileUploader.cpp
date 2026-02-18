@@ -160,12 +160,8 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     if (smbUploader && smbStateManager) {
         LOG("[FileUploader] === SMB Pass ===");
 
-        // Mandatory root files first (Identification.*, STR.edf, SETTINGS/)
-        if (!isTimerExpired()) {
-            uploadMandatoryFilesSmb(sdManager, sd);
-        }
-
-        // Scan for folders that still need SMB work
+        // Pre-flight scan — SD-only, no network.
+        // 1. DATALOG folders with changed files (size check per file).
         std::vector<String> smbFreshFolders, smbOldFolders;
         if (needFresh || needOld) {
             std::vector<String> all = scanDatalogFolders(sd, smbStateManager);
@@ -175,6 +171,42 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             }
             LOGF("[FileUploader] SMB scan: %d fresh, %d old folders",
                  (int)smbFreshFolders.size(), (int)smbOldFolders.size());
+        }
+
+        // 2. Mandatory root files + SETTINGS: any size or checksum change?
+        bool smbMandatoryChanged = false;
+        {
+            static const char* rootPaths[] = {
+                "/Identification.json", "/Identification.crc",
+                "/Identification.tgt",  "/STR.edf"
+            };
+            for (const char* p : rootPaths) {
+                if (sd.exists(p) && smbStateManager->hasFileChanged(sd, String(p))) {
+                    smbMandatoryChanged = true;
+                    break;
+                }
+            }
+            if (!smbMandatoryChanged) {
+                for (const String& fp : scanSettingsFiles(sd)) {
+                    if (smbStateManager->hasFileChanged(sd, fp)) {
+                        smbMandatoryChanged = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        bool smbHasWork = !smbFreshFolders.empty() ||
+                          (!smbOldFolders.empty() &&
+                           scheduleManager && scheduleManager->canUploadOldData()) ||
+                          smbMandatoryChanged;
+
+        if (!smbHasWork) {
+            LOG("[FileUploader] SMB: nothing to upload — skipping");
+        } else {
+        // Mandatory root files first (Identification.*, STR.edf, SETTINGS/)
+        if (!isTimerExpired()) {
+            uploadMandatoryFilesSmb(sdManager, sd);
         }
 
         if (!timerExpired && needFresh) {
@@ -200,6 +232,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         }
 
         if (smbUploader->isConnected()) smbUploader->end();
+        } // smbHasWork
         smbStateManager->save(sd);
 
         // Destroy the SMB uploader entirely to reclaim its 8 KB upload buffer
@@ -424,10 +457,24 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, UploadStateMana
                     folders.push_back(folderName);
                     LOG_INFOF("[FileUploader] Found completed DATALOG folder: %s", folderName.c_str());
                 } else if (isRecentFolder(folderName)) {
-                    // Recent completed folders are re-scanned to detect files
-                    // that changed (e.g. CPAP still writing to today's data)
-                    folders.push_back(folderName);
-                    LOG_DEBUGF("[FileUploader] Re-checking recent completed folder: %s", folderName.c_str());
+                    // Recent completed folders: only re-scan if at least one file
+                    // has changed size (CPAP may still be writing to today's data).
+                    // Avoids triggering backend auth+connect when nothing is new.
+                    String rfolderPath = "/DATALOG/" + folderName;
+                    std::vector<String> rfiles = scanFolderFiles(sd, rfolderPath);
+                    bool anyChanged = false;
+                    for (const String& fn : rfiles) {
+                        if (sm->hasFileChanged(sd, rfolderPath + "/" + fn)) {
+                            anyChanged = true;
+                            break;
+                        }
+                    }
+                    if (anyChanged) {
+                        folders.push_back(folderName);
+                        LOG_DEBUGF("[FileUploader] Recent folder has new/changed files: %s", folderName.c_str());
+                    } else {
+                        LOG_DEBUGF("[FileUploader] Recent completed folder unchanged, skipping: %s", folderName.c_str());
+                    }
                 } else {
                     LOG_DEBUGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
                 }
