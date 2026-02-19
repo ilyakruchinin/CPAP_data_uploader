@@ -3,6 +3,7 @@
 #include "WebStatus.h"
 #include <SD_MMC.h>
 #include <functional>
+#include <time.h>
 
 #ifdef ENABLE_TEST_WEBSERVER
 #include "TestWebServer.h"
@@ -15,6 +16,7 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
       cloudStateManager(nullptr),
       scheduleManager(nullptr),
       wifiManager(wifi),
+      activeBackend(UploadBackend::NONE),
 #ifdef ENABLE_TEST_WEBSERVER
       webServer(nullptr),
 #endif
@@ -104,9 +106,31 @@ bool FileUploader::begin(fs::FS &sd) {
         return false;
     }
 
-    LOGF("[FileUploader] Backends active this run: SMB=%s CLOUD=%s",
-         smbStateManager   ? "YES" : "NO",
-         cloudStateManager ? "YES" : "NO");
+    // ── Backend cycling: select which backend runs this session ───────────────
+    activeBackend = selectActiveBackend(sd);
+    const char* abName = (activeBackend == UploadBackend::SMB)   ? "SMB"  :
+                         (activeBackend == UploadBackend::CLOUD) ? "CLOUD" : "NONE";
+    LOGF("[FileUploader] Active backend this session: %s", abName);
+
+    // Populate active backend global for GUI
+    strncpy(g_activeBackendStatus.name, abName, sizeof(g_activeBackendStatus.name) - 1);
+    g_activeBackendStatus.valid = (activeBackend != UploadBackend::NONE);
+
+    // Populate inactive backend global with stale stats from last run
+    UploadBackend inactiveBackend =
+        (activeBackend == UploadBackend::SMB   && cloudStateManager) ? UploadBackend::CLOUD :
+        (activeBackend == UploadBackend::CLOUD && smbStateManager)   ? UploadBackend::SMB   :
+        UploadBackend::NONE;
+    if (inactiveBackend != UploadBackend::NONE) {
+        BackendSummary ibSum = readBackendSummary(sd, inactiveBackend);
+        const char* ibName  = (inactiveBackend == UploadBackend::SMB) ? "SMB" : "CLOUD";
+        strncpy(g_inactiveBackendStatus.name, ibName, sizeof(g_inactiveBackendStatus.name) - 1);
+        g_inactiveBackendStatus.sessionStartTs = ibSum.sessionStartTs;
+        g_inactiveBackendStatus.foldersDone    = ibSum.foldersDone;
+        g_inactiveBackendStatus.foldersTotal   = ibSum.foldersTotal;
+        g_inactiveBackendStatus.foldersEmpty   = ibSum.foldersEmpty;
+        g_inactiveBackendStatus.valid          = ibSum.valid;
+    }
 
     // ── Schedule manager ─────────────────────────────────────────────────────
     scheduleManager = new ScheduleManager();
@@ -118,10 +142,92 @@ bool FileUploader::begin(fs::FS &sd) {
         LOG("[FileUploader] ERROR: Failed to initialize ScheduleManager");
         return false;
     }
-    scheduleManager->setLastUploadTimestamp(primaryStateManager()->getLastUploadTimestamp());
+    UploadStateManager* activeSm = activeStateManager();
+    if (activeSm) scheduleManager->setLastUploadTimestamp(activeSm->getLastUploadTimestamp());
 
     LOG("[FileUploader] Initialization complete");
     return true;
+}
+
+// ============================================================================
+// Backend cycling helpers
+// ============================================================================
+
+const char* FileUploader::getBackendSummaryPath(UploadBackend backend) {
+    if (backend == UploadBackend::SMB)   return "/.backend_summary.smb";
+    if (backend == UploadBackend::CLOUD) return "/.backend_summary.cloud";
+    return nullptr;
+}
+
+BackendSummary FileUploader::readBackendSummary(fs::FS& sd, UploadBackend backend) const {
+    BackendSummary s = {0, 0, 0, 0, false};
+    const char* path = getBackendSummaryPath(backend);
+    if (!path) return s;
+    File f = sd.open(path, FILE_READ);
+    if (!f) return s;
+    char buf[80] = {0};
+    f.readBytesUntil('\n', buf, sizeof(buf) - 1);
+    f.close();
+    unsigned long ts = 0;
+    int done = 0, total = 0, empty = 0;
+    if (sscanf(buf, "ts=%lu,done=%d,total=%d,empty=%d", &ts, &done, &total, &empty) >= 1) {
+        s.sessionStartTs = (uint32_t)ts;
+        s.foldersDone    = done;
+        s.foldersTotal   = total;
+        s.foldersEmpty   = empty;
+        s.valid          = true;
+    }
+    return s;
+}
+
+void FileUploader::writeBackendSummaryStart(fs::FS& sd, UploadBackend backend, uint32_t sessionTs) {
+    const char* path = getBackendSummaryPath(backend);
+    if (!path) return;
+    File f = sd.open(path, FILE_WRITE);
+    if (!f) { LOGF("[FileUploader] Cannot write backend summary: %s", path); return; }
+    char buf[64];
+    snprintf(buf, sizeof(buf), "ts=%lu,done=0,total=0,empty=0", (unsigned long)sessionTs);
+    f.println(buf);
+    f.close();
+}
+
+void FileUploader::writeBackendSummaryFull(fs::FS& sd, UploadBackend backend, uint32_t sessionTs,
+                                            int done, int total, int empty) {
+    const char* path = getBackendSummaryPath(backend);
+    if (!path) return;
+    File f = sd.open(path, FILE_WRITE);
+    if (!f) { LOGF("[FileUploader] Cannot write backend summary: %s", path); return; }
+    char buf[80];
+    snprintf(buf, sizeof(buf), "ts=%lu,done=%d,total=%d,empty=%d",
+             (unsigned long)sessionTs, done, total, empty);
+    f.println(buf);
+    f.close();
+    LOGF("[FileUploader] Summary: backend=%s ts=%lu done=%d/%d empty=%d",
+         path, (unsigned long)sessionTs, done, total, empty);
+}
+
+UploadBackend FileUploader::selectActiveBackend(fs::FS& sd) const {
+    bool hasSMB   = (smbStateManager   != nullptr);
+    bool hasCloud = (cloudStateManager != nullptr);
+    if (!hasSMB && !hasCloud) return UploadBackend::NONE;
+    if (hasSMB  && !hasCloud) return UploadBackend::SMB;
+    if (!hasSMB &&  hasCloud) return UploadBackend::CLOUD;
+
+    // Both configured: pick the backend with the OLDEST session start timestamp.
+    // A backend that has never run (no summary file) has ts=0, so it runs first.
+    BackendSummary smbSum   = readBackendSummary(sd, UploadBackend::SMB);
+    BackendSummary cloudSum = readBackendSummary(sd, UploadBackend::CLOUD);
+    uint32_t smbTs   = smbSum.valid   ? smbSum.sessionStartTs   : 0;
+    uint32_t cloudTs = cloudSum.valid ? cloudSum.sessionStartTs : 0;
+    if (smbTs <= cloudTs) {
+        LOGF("[FileUploader] Backend cycling: SMB ts=%lu <= Cloud ts=%lu → SMB",
+             (unsigned long)smbTs, (unsigned long)cloudTs);
+        return UploadBackend::SMB;
+    } else {
+        LOGF("[FileUploader] Backend cycling: Cloud ts=%lu < SMB ts=%lu → Cloud",
+             (unsigned long)cloudTs, (unsigned long)smbTs);
+        return UploadBackend::CLOUD;
+    }
 }
 
 
@@ -134,11 +240,144 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     unsigned long sessionStart = millis();
     unsigned long maxMs = (unsigned long)maxMinutes * 60UL * 1000UL;
 
-    LOGF("[FileUploader] Exclusive access upload: maxMinutes=%d, filter=%d", maxMinutes, (int)filter);
+    const char* abName = (activeBackend == UploadBackend::SMB)   ? "SMB"  :
+                         (activeBackend == UploadBackend::CLOUD) ? "CLOUD" : "NONE";
+    LOGF("[FileUploader] Session start: backend=%s maxMinutes=%d filter=%d", abName, maxMinutes, (int)filter);
 
     if (!wifiManager || !wifiManager->isConnected()) {
         LOG_ERROR("[FileUploader] WiFi not connected - cannot upload");
         return UploadResult::ERROR;
+    }
+    if (activeBackend == UploadBackend::NONE) {
+        LOG_ERROR("[FileUploader] No backend configured");
+        return UploadResult::ERROR;
+    }
+
+    // Track originalBackend before any pre-flight redirect so we can advance
+    // both backend timestamps when a redirect occurs (prevents cycling freeze).
+    UploadBackend originalBackend = activeBackend;
+
+    // ── Pre-flight: check every configured backend for pending work ──────────
+    // Do this BEFORE writing the session-start summary so we don't advance the
+    // cycling pointer when there is genuinely nothing to upload.  The scan is
+    // SD-only (no network) and must NOT call scanDatalogFolders() because that
+    // function always includes recently-completed folders (for rescan), which
+    // would cause a false positive every boot and trigger endless reboots.
+    {
+        static const char* rootPaths[] = {
+            "/Identification.json", "/Identification.crc",
+            "/Identification.tgt",  "/STR.edf"
+        };
+
+        // Dedicated pre-flight folder check:
+        //  - Genuinely incomplete folder (not completed, not pending) → work
+        //  - Recently-completed folder → only work if ≥1 file has changed
+        //  - Old completed or pending (empty) folder → no work
+        auto preflightFolderHasWork = [&](UploadStateManager* sm) -> bool {
+            File root = sd.open("/DATALOG");
+            if (!root || !root.isDirectory()) return false;
+            File entry = root.openNextFile();
+            while (entry) {
+                if (entry.isDirectory()) {
+                    String name = String(entry.name());
+                    int sl = name.lastIndexOf('/');
+                    if (sl >= 0) name = name.substring(sl + 1);
+
+                    bool completed = sm->isFolderCompleted(name);
+                    bool pending   = sm->isPendingFolder(name);
+                    bool recent    = isRecentFolder(name);
+                    LOGF("[FileUploader] Pre-flight scan: folder=%s completed=%d pending=%d recent=%d",
+                         name.c_str(), completed, pending, recent);
+
+                    if (!completed && !pending) {
+                        // Genuinely incomplete — but old folders are gated by canUploadOldData()
+                        // (same gate used in Phase 2).  Outside the upload window old folders
+                        // cannot be processed, so must not count as "work" here either.
+                        bool isOld = !recent;
+                        bool canDoOld = !isOld || !scheduleManager || scheduleManager->canUploadOldData();
+                        if (canDoOld) {
+                            LOGF("[FileUploader] Pre-flight: WORK — folder %s not completed/pending",
+                                 name.c_str());
+                            entry.close(); root.close(); return true;
+                        }
+                    }
+                    if (completed && recent) {
+                        // Recently completed but CPAP may have extended files.
+                        // Check each file for changes (size comparison only).
+                        String folderPath = "/DATALOG/" + name;
+                        auto files = scanFolderFiles(sd, folderPath);
+                        for (const String& fp : files) {
+                            if (sm->hasFileChanged(sd, fp)) {
+                                LOGF("[FileUploader] Pre-flight: WORK — file changed: %s",
+                                     fp.c_str());
+                                entry.close(); root.close(); return true;
+                            }
+                        }
+                    }
+                }
+                entry.close();
+                entry = root.openNextFile();
+            }
+            root.close();
+            return false;
+        };
+
+        auto checkHasWork = [&](UploadStateManager* sm) -> bool {
+            if (!sm) return false;
+            // Pre-flight only checks DATALOG — mandatory root/settings files
+            // (e.g. STR.edf) are uploaded as a bonus during DATALOG sessions but
+            // must NOT independently trigger sessions.  The CPAP machine updates
+            // STR.edf after every SD card release, so including it here causes an
+            // endless reboot loop when DATALOG has no new work.
+            return preflightFolderHasWork(sm);
+        };
+
+        bool smbWork   = false;
+        bool cloudWork = false;
+#ifdef ENABLE_SMB_UPLOAD
+        if (config->hasSmbEndpoint())   smbWork   = checkHasWork(smbStateManager);
+#endif
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+        if (config->hasCloudEndpoint()) cloudWork = checkHasWork(cloudStateManager);
+#endif
+        if (!smbWork && !cloudWork) {
+            LOG("[FileUploader] Pre-flight: no work for any backend — skipping session");
+            return UploadResult::NOTHING_TO_DO;
+        }
+
+        // If the selected backend has no work but the other one does, redirect to
+        // the backend with actual work.  Running the no-work backend would:
+        //  (a) write a session-start summary (advancing the cycling pointer), and
+        //  (b) still reboot after doing nothing — causing an endless reboot loop.
+        bool activeHasWork = (activeBackend == UploadBackend::SMB)   ? smbWork :
+                             (activeBackend == UploadBackend::CLOUD) ? cloudWork : false;
+        if (!activeHasWork) {
+            if (smbWork && activeBackend != UploadBackend::SMB) {
+                LOG("[FileUploader] Pre-flight: active backend has no work — redirecting to SMB");
+                activeBackend = UploadBackend::SMB;
+                abName = "SMB";
+            } else if (cloudWork && activeBackend != UploadBackend::CLOUD) {
+                LOG("[FileUploader] Pre-flight: active backend has no work — redirecting to CLOUD");
+                activeBackend = UploadBackend::CLOUD;
+                abName = "CLOUD";
+            }
+        }
+
+        LOGF("[FileUploader] Pre-flight: smb_work=%d cloud_work=%d — proceeding with %s",
+             smbWork, cloudWork, abName);
+    }
+
+    // Record session start timestamp immediately — written before any work so
+    // the backend pointer advances even if the session is interrupted.
+    time_t nowTs; time(&nowTs);
+    uint32_t sessionTs = (uint32_t)nowTs;
+    writeBackendSummaryStart(sd, activeBackend, sessionTs);
+    // If we redirected away from originalBackend, advance its timestamp too so
+    // cycling doesn't permanently select the no-work backend every boot.
+    if (originalBackend != activeBackend) {
+        LOGF("[FileUploader] Pre-flight: also advancing %s timestamp to keep cycling balanced",
+             (originalBackend == UploadBackend::SMB) ? "SMB" : "CLOUD");
+        writeBackendSummaryStart(sd, originalBackend, sessionTs);
     }
 
     cloudImportCreated = false;
@@ -153,28 +392,24 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     bool needOld   = (filter == DataFilter::OLD_ONLY   || filter == DataFilter::ALL_DATA);
 
     // ═══════════════════════════════════════════════════════════════════════
-    // SMB PASS — heap is fresh (max_alloc ~73 KB), no TLS in scope yet.
-    // All DATALOG folders + mandatory root files go here before cloud starts.
+    // SMB SESSION — single backend, heap is fresh for the whole session.
     // ═══════════════════════════════════════════════════════════════════════
 #ifdef ENABLE_SMB_UPLOAD
-    if (smbUploader && smbStateManager) {
-        LOG("[FileUploader] === SMB Pass ===");
+    if (activeBackend == UploadBackend::SMB && smbUploader && smbStateManager) {
+        LOG("[FileUploader] === SMB Session ===");
 
-        // Pre-flight scan — SD-only, no network.
-        // 1. DATALOG folders with changed files (size check per file).
-        std::vector<String> smbFreshFolders, smbOldFolders;
+        std::vector<String> freshFolders, oldFolders;
         if (needFresh || needOld) {
             std::vector<String> all = scanDatalogFolders(sd, smbStateManager);
             for (const String& f : all) {
-                if (isRecentFolder(f)) smbFreshFolders.push_back(f);
-                else                   smbOldFolders.push_back(f);
+                if (isRecentFolder(f)) freshFolders.push_back(f);
+                else                   oldFolders.push_back(f);
             }
             LOGF("[FileUploader] SMB scan: %d fresh, %d old folders",
-                 (int)smbFreshFolders.size(), (int)smbOldFolders.size());
+                 (int)freshFolders.size(), (int)oldFolders.size());
         }
 
-        // 2. Mandatory root files + SETTINGS: any size or checksum change?
-        bool smbMandatoryChanged = false;
+        bool mandatoryChanged = false;
         {
             static const char* rootPaths[] = {
                 "/Identification.json", "/Identification.crc",
@@ -182,207 +417,164 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             };
             for (const char* p : rootPaths) {
                 if (sd.exists(p) && smbStateManager->hasFileChanged(sd, String(p))) {
-                    smbMandatoryChanged = true;
-                    break;
+                    mandatoryChanged = true; break;
                 }
             }
-            if (!smbMandatoryChanged) {
+            if (!mandatoryChanged) {
                 for (const String& fp : scanSettingsFiles(sd)) {
                     if (smbStateManager->hasFileChanged(sd, fp)) {
-                        smbMandatoryChanged = true;
-                        break;
+                        mandatoryChanged = true; break;
                     }
                 }
             }
         }
 
-        bool smbHasWork = !smbFreshFolders.empty() ||
-                          (!smbOldFolders.empty() &&
-                           scheduleManager && scheduleManager->canUploadOldData()) ||
-                          smbMandatoryChanged;
+        bool hasWork = !freshFolders.empty() ||
+                       (!oldFolders.empty() && scheduleManager && scheduleManager->canUploadOldData()) ||
+                       mandatoryChanged;
 
-        if (!smbHasWork) {
+        if (!hasWork) {
             LOG("[FileUploader] SMB: nothing to upload — skipping");
         } else {
-        // Mandatory root files first (Identification.*, STR.edf, SETTINGS/)
-        if (!isTimerExpired()) {
-            uploadMandatoryFilesSmb(sdManager, sd);
-        }
+            if (!isTimerExpired()) uploadMandatoryFilesSmb(sdManager, sd);
 
-        if (!timerExpired && needFresh) {
-            LOG("[FileUploader] Phase 1: Fresh DATALOG folders");
-            for (const String& folder : smbFreshFolders) {
-                if (isTimerExpired()) { timerExpired = true; break; }
-                uploadDatalogFolderSmb(sdManager, folder);
+            if (!timerExpired && needFresh) {
+                LOG("[FileUploader] Phase 1: Fresh DATALOG folders (SMB)");
+                for (const String& folder : freshFolders) {
+                    if (isTimerExpired()) { timerExpired = true; break; }
+                    uploadDatalogFolderSmb(sdManager, folder);
 #ifdef ENABLE_TEST_WEBSERVER
-                if (webServer) webServer->handleClient();
+                    if (webServer) webServer->handleClient();
 #endif
+                }
             }
-        }
-
-        if (!timerExpired && needOld && scheduleManager && scheduleManager->canUploadOldData()) {
-            LOG("[FileUploader] Phase 2: Old DATALOG folders");
-            for (const String& folder : smbOldFolders) {
-                if (isTimerExpired()) { timerExpired = true; break; }
-                uploadDatalogFolderSmb(sdManager, folder);
+            if (!timerExpired && needOld && scheduleManager && scheduleManager->canUploadOldData()) {
+                LOG("[FileUploader] Phase 2: Old DATALOG folders (SMB)");
+                for (const String& folder : oldFolders) {
+                    if (isTimerExpired()) { timerExpired = true; break; }
+                    uploadDatalogFolderSmb(sdManager, folder);
 #ifdef ENABLE_TEST_WEBSERVER
-                if (webServer) webServer->handleClient();
+                    if (webServer) webServer->handleClient();
 #endif
+                }
             }
+            if (smbUploader->isConnected()) smbUploader->end();
         }
-
-        if (smbUploader->isConnected()) smbUploader->end();
-        } // smbHasWork
         smbStateManager->save(sd);
 
-        // Destroy the SMB uploader entirely to reclaim its 8 KB upload buffer
-        // before the cloud TLS pass.  After the SMB pass the uploader is no
-        // longer needed; freeing the buffer here can raise max_alloc by ~8 KB
-        // (from ~47 KB → ~55 KB), which is often the margin that lets both
-        // the OAuth and the import-creation TLS sessions succeed.
-        LOGF("[FileUploader] SMB pass done — heap before SMB teardown: fh=%u ma=%u",
-             (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-        delete smbUploader;
-        smbUploader = nullptr;
-        LOGF("[FileUploader] SMB uploader freed — heap after teardown:  fh=%u ma=%u",
-             (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-
-        // Clear SMB status bar
-        g_smbSessionStatus.uploadActive  = false;
-        g_smbSessionStatus.filesUploaded  = 0;
-        g_smbSessionStatus.filesTotal     = 0;
+        g_smbSessionStatus.uploadActive     = false;
+        g_smbSessionStatus.filesUploaded    = 0;
+        g_smbSessionStatus.filesTotal       = 0;
         g_smbSessionStatus.currentFolder[0] = '\0';
     }
 #endif
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Cloud PASS — single TLS session: begin() does OAuth + team-discovery +
-    // createImport() while heap is fresh (post-SMB-teardown). All DATALOG
-    // folders are uploaded into that one import; mandatory root/SETTINGS
-    // files and processImport() are called once at the very end.
+    // CLOUD SESSION — single backend, full heap available (no SMB buffer).
     // ═══════════════════════════════════════════════════════════════════════
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (!timerExpired && sleephqUploader && cloudStateManager) {
-        LOG("[FileUploader] === Cloud Pass ===");
+    if (activeBackend == UploadBackend::CLOUD && sleephqUploader && cloudStateManager) {
+        LOG("[FileUploader] === Cloud Session ===");
         cloudDatalogFilesUploaded = 0;
 
-        // Pre-flight scan — SD-only, no network. Determines whether any cloud
-        // work exists before spending heap on OAuth + team-discovery + createImport.
-        std::vector<String> cloudFreshFolders, cloudOldFolders;
+        std::vector<String> freshFolders, oldFolders;
         if (needFresh || needOld) {
             std::vector<String> all = scanDatalogFolders(sd, cloudStateManager);
             for (const String& f : all) {
-                if (isRecentFolder(f)) cloudFreshFolders.push_back(f);
-                else                   cloudOldFolders.push_back(f);
+                if (isRecentFolder(f)) freshFolders.push_back(f);
+                else                   oldFolders.push_back(f);
             }
             LOGF("[FileUploader] Cloud scan: %d fresh, %d old folders",
-                 (int)cloudFreshFolders.size(), (int)cloudOldFolders.size());
+                 (int)freshFolders.size(), (int)oldFolders.size());
         }
 
-        bool cloudHasWork = !cloudFreshFolders.empty() ||
-                            (!cloudOldFolders.empty() &&
-                             scheduleManager && scheduleManager->canUploadOldData());
+        bool hasWork = !freshFolders.empty() ||
+                       (!oldFolders.empty() && scheduleManager && scheduleManager->canUploadOldData());
 
-        if (!cloudHasWork) {
+        if (!hasWork) {
             LOG("[FileUploader] Cloud: nothing to upload — skipping auth + import");
         } else {
-        // Connect + create import NOW, while max_alloc is at its peak after
-        // SMB teardown. begin() reuses the same TLS session for all three steps
-        // (OAuth, team-discovery, createImport) — no second handshake required.
-        if (!sleephqUploader->isConnected()) {
-            LOG("[FileUploader] Initializing cloud session (OAuth + import)...");
             LOGF("[FileUploader] Heap before cloud begin: fh=%u ma=%u",
                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-            if (!sleephqUploader->begin()) {
-                LOG_ERROR("[FileUploader] Cloud init failed — skipping cloud pass");
-                cloudImportFailed = true;
-            } else {
-                cloudImportCreated = true;
-                LOGF("[FileUploader] Cloud session ready — heap: fh=%u ma=%u",
-                     (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-            }
-        } else {
-            // Already connected from a previous attempt; ensure import exists
-            if (!cloudImportCreated && !cloudImportFailed) {
-                if (!sleephqUploader->createImport()) {
+            if (!sleephqUploader->isConnected()) {
+                if (!sleephqUploader->begin()) {
+                    LOG_ERROR("[FileUploader] Cloud init failed — skipping cloud session");
                     cloudImportFailed = true;
                 } else {
                     cloudImportCreated = true;
+                    LOGF("[FileUploader] Cloud session ready — heap: fh=%u ma=%u",
+                         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+                }
+            } else {
+                if (!cloudImportCreated && !cloudImportFailed) {
+                    if (!sleephqUploader->createImport()) cloudImportFailed = true;
+                    else                                  cloudImportCreated = true;
                 }
             }
-        }
 
-        if (!cloudImportFailed) {
-
-            auto runCloudFolder = [&](const String& folder) -> bool {
-                if (isTimerExpired()) { timerExpired = true; return false; }
-                uploadDatalogFolderCloud(sdManager, folder);
+            if (!cloudImportFailed) {
+                auto runCloudFolder = [&](const String& folder) -> bool {
+                    if (isTimerExpired()) { timerExpired = true; return false; }
+                    uploadDatalogFolderCloud(sdManager, folder);
 #ifdef ENABLE_TEST_WEBSERVER
-                if (webServer) webServer->handleClient();
+                    if (webServer) webServer->handleClient();
 #endif
-                return true;
-            };
-
-            if (!timerExpired && needFresh) {
-                LOG("[FileUploader] Phase 1: Fresh DATALOG folders (cloud)");
-                for (const String& folder : cloudFreshFolders) {
-                    if (!runCloudFolder(folder)) break;
+                    return true;
+                };
+                if (!timerExpired && needFresh) {
+                    LOG("[FileUploader] Phase 1: Fresh DATALOG folders (Cloud)");
+                    for (const String& folder : freshFolders) {
+                        if (!runCloudFolder(folder)) break;
+                    }
                 }
-            }
-            if (!timerExpired && needOld && scheduleManager && scheduleManager->canUploadOldData()) {
-                LOG("[FileUploader] Phase 2: Old DATALOG folders (cloud)");
-                for (const String& folder : cloudOldFolders) {
-                    if (!runCloudFolder(folder)) break;
+                if (!timerExpired && needOld && scheduleManager && scheduleManager->canUploadOldData()) {
+                    LOG("[FileUploader] Phase 2: Old DATALOG folders (Cloud)");
+                    for (const String& folder : oldFolders) {
+                        if (!runCloudFolder(folder)) break;
+                    }
                 }
-            }
-
-            // Finalize once: upload mandatory root/SETTINGS files then processImport.
-            // Skip if no DATALOG files were actually uploaded — an import with only
-            // mandatory/SETTINGS files violates requirements and wastes an import slot.
-            if (cloudImportCreated && cloudDatalogFilesUploaded > 0) {
-                LOGF("[FileUploader] Finalizing import: %d DATALOG files uploaded", cloudDatalogFilesUploaded);
-                finalizeCloudImport(sdManager, sd);
-            } else if (cloudImportCreated && cloudDatalogFilesUploaded == 0) {
-                LOG("[FileUploader] No new DATALOG files — skipping import finalize");
+                if (cloudImportCreated && cloudDatalogFilesUploaded > 0) {
+                    LOGF("[FileUploader] Finalizing import: %d DATALOG files", cloudDatalogFilesUploaded);
+                    finalizeCloudImport(sdManager, sd);
+                } else if (cloudImportCreated && cloudDatalogFilesUploaded == 0) {
+                    LOG("[FileUploader] No new DATALOG files — skipping import finalize");
+                }
             }
         }
-        } // cloudHasWork
-
         cloudStateManager->save(sd);
 
-        // Clear cloud status bar
-        g_cloudSessionStatus.uploadActive   = false;
-        g_cloudSessionStatus.filesUploaded  = 0;
-        g_cloudSessionStatus.filesTotal     = 0;
+        g_cloudSessionStatus.uploadActive     = false;
+        g_cloudSessionStatus.filesUploaded    = 0;
+        g_cloudSessionStatus.filesTotal       = 0;
         g_cloudSessionStatus.currentFolder[0] = '\0';
     }
 #endif
 
-    // ── Determine result ─────────────────────────────────────────────────────
-    unsigned long elapsed = millis() - sessionStart;
-    LOGF("[FileUploader] Exclusive access session ended: %lu seconds elapsed", elapsed / 1000);
+    // ── Write full session summary ────────────────────────────────────────────
+    UploadStateManager* sm = activeStateManager();
+    int sessionDone  = sm ? sm->getCompletedFoldersCount() : 0;
+    int sessionEmpty = sm ? sm->getPendingFoldersCount()   : 0;
+    int sessionTotal = sessionDone + (sm ? sm->getIncompleteFoldersCount() : 0) + sessionEmpty;
+    writeBackendSummaryFull(sd, activeBackend, sessionTs, sessionDone, sessionTotal, sessionEmpty);
 
-    if (timerExpired) {
-        bool hasIncomplete = hasIncompleteFolders();
-        if (hasIncomplete) {
-            LOG("[FileUploader] Timer expired with incomplete folders remaining (TIMEOUT)");
-            return UploadResult::TIMEOUT;
-        }
-        LOG("[FileUploader] Timer expired but all files uploaded (COMPLETE)");
+    // ── Determine result ──────────────────────────────────────────────────────
+    unsigned long elapsed = millis() - sessionStart;
+    LOGF("[FileUploader] Session ended: %lu seconds elapsed, done=%d/%d",
+         elapsed / 1000, sessionDone, sessionTotal);
+
+    if (timerExpired && hasIncompleteFolders()) {
+        LOG("[FileUploader] Timer expired with incomplete folders (TIMEOUT)");
+        return UploadResult::TIMEOUT;
     }
 
-    // Mark day completed if all folders done (for scheduled mode)
     if (!hasIncompleteFolders()) {
-        time_t now;
-        time(&now);
-        primaryStateManager()->setLastUploadTimestamp((unsigned long)now);
-        if (scheduleManager) {
-            scheduleManager->markDayCompleted();
-        }
-        LOG("[FileUploader] All folders completed - upload session marked as done");
+        time_t endNow; time(&endNow);
+        if (sm) sm->setLastUploadTimestamp((unsigned long)endNow);
+        if (scheduleManager) scheduleManager->markDayCompleted();
+        LOG("[FileUploader] All folders complete — session done");
         return UploadResult::COMPLETE;
     }
-    
+
     return UploadResult::TIMEOUT;
 }
 
@@ -457,24 +649,11 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, UploadStateMana
                     folders.push_back(folderName);
                     LOG_INFOF("[FileUploader] Found completed DATALOG folder: %s", folderName.c_str());
                 } else if (isRecentFolder(folderName)) {
-                    // Recent completed folders: only re-scan if at least one file
-                    // has changed size (CPAP may still be writing to today's data).
-                    // Avoids triggering backend auth+connect when nothing is new.
-                    String rfolderPath = "/DATALOG/" + folderName;
-                    std::vector<String> rfiles = scanFolderFiles(sd, rfolderPath);
-                    bool anyChanged = false;
-                    for (const String& fn : rfiles) {
-                        if (sm->hasFileChanged(sd, rfolderPath + "/" + fn)) {
-                            anyChanged = true;
-                            break;
-                        }
-                    }
-                    if (anyChanged) {
-                        folders.push_back(folderName);
-                        LOG_DEBUGF("[FileUploader] Recent folder has new/changed files: %s", folderName.c_str());
-                    } else {
-                        LOG_DEBUGF("[FileUploader] Recent completed folder unchanged, skipping: %s", folderName.c_str());
-                    }
+                    // Recent completed folders are always rescanned — CPAP may have added
+                    // or extended files. Per-file size tracking (hasFileChanged) skips
+                    // unchanged files so only new/modified data is re-uploaded.
+                    folders.push_back(folderName);
+                    LOG_DEBUGF("[FileUploader] Recent completed folder — rescanning: %s", folderName.c_str());
                 } else {
                     LOG_DEBUGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
                 }
@@ -523,7 +702,7 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, UploadStateMana
         LOG_DEBUGF("[FileUploader] Found %d incomplete DATALOG folders", folders.size());
     }
 
-    if (sm) sm->setTotalFoldersCount(eligibleFolderCount);
+    if (sm) sm->setTotalFoldersCount(folders.size());
     
     return folders;
 }
@@ -815,9 +994,24 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
     // Per-folder disconnect (not per-file — avoids socket exhaustion)
     if (smbUploader->isConnected()) smbUploader->end();
 
-    smbStateManager->markFolderCompleted(folderName);
+    bool uploadSuccess = (uploadedCount == (int)files.size() - skippedUnchanged);
+    LOGF("[FileUploader] [SMB] Folder %s: %d/%d files, %d unchanged — success=%s",
+         folderName.c_str(), uploadedCount, (int)files.size(), skippedUnchanged,
+         uploadSuccess ? "yes" : "no");
+
+    // Mark-complete strategy:
+    //   Recent folders — always mark complete so the next scan uses the isRescan path
+    //   (per-file size entries track which files need re-upload).
+    //   Old folders — only mark complete when every file was uploaded (enables full retry
+    //   of partially-uploaded old folders on the next session).
+    if (isRecent) {
+        smbStateManager->markFolderCompleted(folderName);
+    } else if (uploadSuccess) {
+        smbStateManager->markFolderCompleted(folderName);
+    }
+
     smbStateManager->save(sd);
-    return true;
+    return uploadSuccess;
 #endif
 }
 
@@ -968,9 +1162,20 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         LOGF("[FileUploader] [Cloud] Folder complete: %d files", uploadedCount);
     }
 
-    cloudStateManager->markFolderCompleted(folderName);
+    bool uploadSuccess = (uploadedCount == (int)files.size() - skippedUnchanged);
+    LOGF("[FileUploader] [Cloud] Folder %s: %d/%d files, %d unchanged — success=%s",
+         folderName.c_str(), uploadedCount, (int)files.size(), skippedUnchanged,
+         uploadSuccess ? "yes" : "no");
+
+    // Mark-complete strategy: same as SMB — recent always, old only on full success.
+    if (isRecent) {
+        cloudStateManager->markFolderCompleted(folderName);
+    } else if (uploadSuccess) {
+        cloudStateManager->markFolderCompleted(folderName);
+    }
+
     cloudStateManager->save(sd);
-    return true;
+    return uploadSuccess;
 #endif
 }
 

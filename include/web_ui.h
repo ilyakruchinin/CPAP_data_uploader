@@ -97,14 +97,14 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=cards>
 <div class=card style="grid-column:1/-1"><h2>Upload Progress</h2>
 <div class=be>
-<div class=bh><span class=bt-s>SMB</span><span id=d-smb-st class=v>—</span></div>
-<div class=prog><div id=d-pf-smb class=pf style=width:0%></div></div>
-<div id=d-smb-det class=bd-i></div>
+<div class=bh><span id=d-ab-name class=bt-s>—</span><span id=d-ab-st class=v>—</span></div>
+<div class=prog><div id=d-pf-active class=pf style=width:0%></div></div>
+<div id=d-ab-det class=bd-i></div>
 </div>
-<div class=be>
-<div class=bh><span class=bt-c>Cloud</span><span id=d-cloud-st class=v>—</span></div>
-<div class=prog><div id=d-pf-cloud class="pf pfc" style=width:0%></div></div>
-<div id=d-cloud-det class=bd-i></div>
+<div class=be id=d-next-be style=display:none>
+<div class=bh><span id=d-nb-name class="bt-s" style=color:#8f98a0>Next: —</span><span id=d-nb-st class=v style="font-size:.78em;color:#8f98a0">—</span></div>
+<div class=prog><div id=d-pf-next class=pf style="width:0%;background:linear-gradient(90deg,#556070,#6a7a8a)"></div></div>
+<div id=d-nb-det class=bd-i style=color:#8f98a0></div>
 </div>
 <div class=row style="border-top:1px solid #2a475e;padding-top:8px;margin-top:2px"><span class=k>Status</span><span id=d-fst class=v></span></div>
 </div>
@@ -112,7 +112,6 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=card style="margin-bottom:14px"><h2>Actions</h2>
 <div class=actions>
 <button id=btn-up class="btn bp" onclick=triggerUpload()>&#9650; Trigger Upload</button>
-<button id=btn-srb class="btn bs" onclick=softReboot()>&#8635; Soft Reboot</button>
 <button id=btn-rst class="btn bd" onclick=resetState()>Reset State</button>
 </div>
 </div>
@@ -120,15 +119,44 @@ nav button:hover:not(.act){background:#3a5a7e}
 
 <!-- LOGS -->
 <div id=logs class=page>
-<div class=card style="margin-bottom:10px"><h2>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
+<div class=card style="margin-bottom:10px">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+<h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
+<div style="display:flex;gap:6px">
+<button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
+<button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
+</div>
+</div>
 <div id=log-box>Loading...</div>
 </div>
 </div>
 
 <!-- CONFIG -->
 <div id=cfg class=page>
+<div id=cfg-lock-banner style="display:none;background:#2a4a2a;border:1px solid #4a8a4a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#a0e0a0">
+&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume uploads without saving, or <em>Save &amp; Reboot</em> to apply changes.
+</div>
 <div class=card><h2>Configuration</h2>
-<pre id=cfg-box>Loading...</pre>
+<pre id=cfg-box style="font-size:.8em;max-height:300px;overflow-y:auto">Loading...</pre>
+</div>
+<div class=card>
+<h2>Edit config.txt
+<span id=cfg-lock-badge style="display:none;margin-left:8px;background:#4a8a4a;color:#fff;font-size:.65em;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle">LOCKED</span>
+</h2>
+<p style="font-size:.82em;color:#8f98a0;margin-bottom:8px">Direct editor for the SD card config file. Passwords stored securely in flash appear as <code>***STORED_IN_FLASH***</code> &mdash; leave them unchanged to keep existing credentials. Max 4096 bytes. <strong>Changes take effect after reboot.</strong></p>
+<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> first to pause uploads and enable editing. Uploads resume automatically on Save, Cancel, or after 30&nbsp;min.</p>
+<textarea id=cfg-raw style="width:100%;box-sizing:border-box;height:320px;background:#111820;color:#6a7a8a;border:1px solid #2d3440;border-radius:4px;padding:8px;font-family:monospace;font-size:.8em;resize:vertical" maxlength=4096 oninput=cfgRawCount() placeholder="Click Edit to begin..." readonly></textarea>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+<span id=cfg-raw-cnt style="font-size:.8em;color:#8f98a0">0 / 4096 bytes</span>
+<div class=actions style=margin:0>
+<button id=btn-cfg-edit class="btn bp" onclick=acquireCfgLock() style="padding:6px 14px">&#9998; Edit</button>
+<button id=btn-cfg-reload class="btn bs" onclick=loadRawCfg() style="padding:6px 14px;display:none">&#8635; Reload</button>
+<button id=btn-cfg-save class="btn bp" onclick=saveRawCfg() style="padding:6px 14px;display:none">&#128190; Save</button>
+<button id=btn-cfg-savereboot class="btn bd" onclick=saveAndReboot() style="padding:6px 14px;display:none">Save &amp; Reboot</button>
+<button id=btn-cfg-cancel class="btn bs" onclick=releaseCfgLock() style="padding:6px 14px;display:none">&#10005; Cancel</button>
+</div>
+</div>
+<div id=cfg-raw-msg style="margin-top:6px;font-size:.83em"></div>
 </div>
 </div>
 
@@ -173,6 +201,11 @@ nav button:hover:not(.act){background:#3a5a7e}
 <input type=url id=f-u name=url placeholder="https://github.com/.../firmware.bin" required></div>
 <button type=submit class="btn bp" style=width:100%>Download &amp; Install</button>
 <div id=s-url class=sm></div></form>
+</div>
+<div class=card><h2>System Actions</h2>
+<div class=actions>
+<button id=btn-srb class="btn bs" onclick=softReboot()>&#8635; Soft Reboot</button>
+</div>
 </div>
 </div>
 </div>
@@ -228,20 +261,30 @@ function renderStatus(d){
   set('d-ip',d.wifi_ip||'—');
   set('d-ep',cfg.endpoint_type||d.endpoint_type||'—');
   set('d-up',fmtUp(d.uptime||0));
-  var sc=d.smb_comp||0,si=d.smb_inc||0,st2=sc+si;
-  var cc=d.cloud_comp||0,ci=d.cloud_inc||0,ct=cc+ci;
-  document.getElementById('d-pf-smb').style.width=(st2>0?Math.round(sc*100/st2):0)+'%';
-  document.getElementById('d-pf-cloud').style.width=(ct>0?Math.round(cc*100/ct):0)+'%';
-  var sR=si>0?'<span style=color:#ffaa44>'+si+' left</span>':'<span style=color:#44ff44>&#10003; done</span>';
-  var cR=ci>0?'<span style=color:#ffaa44>'+ci+' left</span>':'<span style=color:#44ff44>&#10003; done</span>';
-  document.getElementById('d-smb-st').innerHTML=st2>0?sc+' / '+st2+' &nbsp;'+sR:'—';
-  document.getElementById('d-cloud-st').innerHTML=ct>0?cc+' / '+ct+' &nbsp;'+cR:'—';
-  var smbDet=d.smb_active?'Uploading '+d.smb_up+' / '+d.smb_total+' files'+(d.smb_folder?' &middot; '+d.smb_folder:''):'';
-  var clDet=d.cloud_active?'Uploading '+d.cloud_up+' / '+d.cloud_total+' files'+(d.cloud_folder?' &middot; '+d.cloud_folder:''):'';
-  document.getElementById('d-smb-det').innerHTML=smbDet;
-  document.getElementById('d-cloud-det').innerHTML=clDet;
-  var pend=(si||0)+(ci||0);
-  var fst=pend>0?'&#9888; '+pend+' folder(s) pending':(sc+cc>0?'&#10003; All synced':'Waiting for first scan');
+  var ab=d.active_backend||'NONE';
+  var abColor=ab==='SMB'?'#66c0f4':ab==='CLOUD'?'#aa66ff':'#8f98a0';
+  var abEl=document.getElementById('d-ab-name');abEl.textContent=ab;abEl.style.color=abColor;
+  var done=d.folders_done||0,total=d.folders_total||0,pend=d.folders_pending||0;
+  var pct=total>0?Math.round(done*100/total):0;
+  document.getElementById('d-pf-active').style.width=pct+'%';
+  var inc=Math.max(0,total-done);
+  var abSt=total>0?(done+' / '+total+(pend>0?' ('+pend+' empty)':'')):'\u2014';
+  if(total>0&&inc>0)abSt+=' &nbsp;<span style=color:#ffaa44>'+inc+' left</span>';
+  else if(total>0&&inc===0&&done>0)abSt+=' &nbsp;<span style=color:#44ff44>&#10003;</span>';
+  document.getElementById('d-ab-st').innerHTML=abSt;
+  var liveDet=d.live_active?'File '+d.live_up+'/'+d.live_total+(d.live_folder?' &middot; '+d.live_folder:''):'';
+  document.getElementById('d-ab-det').innerHTML=liveDet;
+  var nb=d.next_backend||'NONE';
+  var nbEl=document.getElementById('d-next-be');
+  if(nb&&nb!=='NONE'){nbEl.style.display='';
+    var nbDone=d.next_done||0,nbTotal=d.next_total||0,nbPct=nbTotal>0?Math.round(nbDone*100/nbTotal):0;
+    document.getElementById('d-nb-name').textContent='Next: '+nb;
+    document.getElementById('d-pf-next').style.width=nbPct+'%';
+    var tsStr=d.next_ts>0?new Date(d.next_ts*1000).toLocaleDateString():'never';
+    document.getElementById('d-nb-st').innerHTML=nbDone+'/'+nbTotal+' \u00b7 last '+tsStr+' <em style="color:#666">(stale)</em>';
+    document.getElementById('d-nb-det').textContent=d.next_empty>0?d.next_empty+' empty folder(s)':'';
+  }else{nbEl.style.display='none';}
+  var fst=inc>0?'&#9888; '+inc+' folder(s) pending':(done>0?'&#10003; All synced':'Waiting for first scan');
   seti('d-fst',fst);
   set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
 }
@@ -254,24 +297,171 @@ function pollStatus(){
 }
 function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
 
+var cfgLocked=false;
+function _setCfgLockUI(locked){
+  cfgLocked=locked;
+  document.getElementById('cfg-lock-banner').style.display=locked?'':'none';
+  document.getElementById('cfg-lock-badge').style.display=locked?'':'none';
+  var ta=document.getElementById('cfg-raw');
+  ta.readOnly=!locked;
+  ta.style.background=locked?'#1b2838':'#111820';
+  ta.style.color=locked?'#c7d5e0':'#6a7a8a';
+  ta.style.borderColor=locked?'#3d4450':'#2d3440';
+  document.getElementById('btn-cfg-edit').style.display=locked?'none':'';
+  document.getElementById('btn-cfg-reload').style.display=locked?'':'none';
+  document.getElementById('btn-cfg-save').style.display=locked?'':'none';
+  document.getElementById('btn-cfg-savereboot').style.display=locked?'':'none';
+  document.getElementById('btn-cfg-cancel').style.display=locked?'':'none';
+}
+function acquireCfgLock(){
+  var msg=document.getElementById('cfg-raw-msg');
+  msg.style.color='#8f98a0';msg.textContent='Pausing uploads...';
+  fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":true}',cache:'no-store'})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(d.ok){
+      _setCfgLockUI(true);
+      loadRawCfg();
+      msg.textContent='';
+    }else{msg.style.color='#ff6060';msg.textContent='Cannot lock: '+(d.error||'?');}
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Lock failed: '+e.message;});
+}
+function releaseCfgLock(){
+  fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});
+  _setCfgLockUI(false);
+  document.getElementById('cfg-raw-msg').textContent='';
+}
 function loadCfg(){
   fetch('/api/config',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     cfg=d;
     document.getElementById('cfg-box').textContent=JSON.stringify(d,null,2);
     renderStatus._cfgLoaded=true;
   }).catch(function(){document.getElementById('cfg-box').textContent='Failed to load config.';});
+  if(!cfgLocked)_setCfgLockUI(false);
+}
+function cfgRawCount(){
+  var t=document.getElementById('cfg-raw');
+  document.getElementById('cfg-raw-cnt').textContent=t.value.length+' / 4096 bytes';
+}
+function loadRawCfg(){
+  var msg=document.getElementById('cfg-raw-msg');
+  msg.textContent='Loading...';
+  fetch('/api/config-raw',{cache:'no-store'}).then(function(r){
+    if(!r.ok)return r.text().then(function(t){throw new Error(t);});
+    return r.text();
+  }).then(function(t){
+    document.getElementById('cfg-raw').value=t;
+    cfgRawCount();
+    msg.textContent='';
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Load failed: '+e.message;});
+}
+function saveRawCfg(){
+  var body=document.getElementById('cfg-raw').value;
+  var msg=document.getElementById('cfg-raw-msg');
+  msg.style.color='#8f98a0';msg.textContent='Saving...';
+  fetch('/api/config-raw',{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store'})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(d.ok){
+      msg.style.color='#57cbde';msg.textContent='\u2713 '+d.message;
+      releaseCfgLock();
+    }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
+}
+function saveAndReboot(){
+  var body=document.getElementById('cfg-raw').value;
+  var msg=document.getElementById('cfg-raw-msg');
+  msg.style.color='#8f98a0';msg.textContent='Saving...';
+  fetch('/api/config-raw',{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store'})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(d.ok){
+      msg.style.color='#57cbde';msg.textContent='Saved. Rebooting...';
+      fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});
+      setTimeout(function(){fetch('/soft-reboot',{cache:'no-store'});},800);
+    }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
 }
 
-var logAtBottom=true;
+// Client-side log buffer — persists across soft-reboots in browser memory
+var logAtBottom=true,clientLogBuf=[],lastSeenLine='',LOG_BUF_MAX=2000;
+function _appendLogs(text){
+  if(!text)return;
+  var lines=text.split('\n');
+  // Detect reboot: scan ALL lines for the boot banner (not just line 0,
+  // because the server prepends a space byte before streaming the buffer).
+  var bootIdx=-1;
+  for(var i=0;i<lines.length;i++){
+    if(lines[i].indexOf('=== CPAP Data Auto-Uploader ===')>=0){bootIdx=i;break;}
+  }
+  var newLines;
+  if(bootIdx>=0){
+    // Boot banner found. Determine if this is genuinely a NEW reboot or the
+    // same boot we already buffered (banner is present in every server response).
+    // A new reboot means lastSeenLine doesn't exist in this response at all, OR
+    // it appears before/at the boot banner (i.e. it belongs to a prior boot).
+    var lastSeenPos=-1;
+    if(lastSeenLine){
+      for(var i=lines.length-1;i>=0;i--){
+        if(lines[i]===lastSeenLine){lastSeenPos=i;break;}
+      }
+    }
+    if(lastSeenPos>bootIdx){
+      // Same boot continuing — treat as normal poll, append only new tail
+      newLines=lines.slice(lastSeenPos+1);
+    } else {
+      // Genuinely new reboot — insert separator and start from boot banner
+      if(clientLogBuf.length>0)clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
+      newLines=lines.slice(bootIdx);
+    }
+  } else {
+    // Normal poll — find the last line we already buffered (search from end)
+    // and only append what comes after it.
+    var startFrom=0;
+    if(lastSeenLine){
+      for(var i=lines.length-1;i>=0;i--){
+        if(lines[i]===lastSeenLine){startFrom=i+1;break;}
+      }
+    }
+    newLines=lines.slice(startFrom);
+  }
+  // Strip trailing empty lines — server responses end with blank lines that
+  // would otherwise be appended as "new" on every poll.
+  while(newLines.length>0&&!newLines[newLines.length-1].trim())newLines.pop();
+  for(var i=0;i<newLines.length;i++){
+    if(newLines[i]!==undefined)clientLogBuf.push(newLines[i]);
+  }
+  // Track the last non-empty line we put into the buffer for next dedup pass
+  for(var i=clientLogBuf.length-1;i>=0;i--){
+    if(clientLogBuf[i]){lastSeenLine=clientLogBuf[i];break;}
+  }
+  if(clientLogBuf.length>LOG_BUF_MAX)clientLogBuf=clientLogBuf.slice(clientLogBuf.length-LOG_BUF_MAX);
+}
+function _renderLogBuf(){
+  var b=document.getElementById('log-box');
+  logAtBottom=(b.scrollHeight-b.scrollTop-b.clientHeight)<60;
+  b.textContent=clientLogBuf.join('\n');
+  if(logAtBottom)b.scrollTop=b.scrollHeight;
+}
 function fetchLogs(){
   if(curTab!=='logs')return;
   fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
-    var b=document.getElementById('log-box');
-    logAtBottom=(b.scrollHeight-b.scrollTop-b.clientHeight)<60;
-    b.textContent=t;
-    if(logAtBottom)b.scrollTop=b.scrollHeight;
-    set('log-st','Live');
+    _appendLogs(t);
+    _renderLogBuf();
+    set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');
   }).catch(function(){set('log-st','Disconnected');});
+}
+function clearLogBuf(){clientLogBuf=[];lastSeenLine='';document.getElementById('log-box').textContent='';}
+function copyLogBuf(){
+  var txt=clientLogBuf.join('\n');
+  if(!txt){return;}
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(function(){set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');},2000);});
+  } else {
+    var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');},2000);
+  }
 }
 document.getElementById('log-box').addEventListener('scroll',function(){
   var b=this;logAtBottom=(b.scrollHeight-b.scrollTop-b.clientHeight)<60;

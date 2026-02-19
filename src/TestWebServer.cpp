@@ -81,7 +81,8 @@ TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
       scheduleManager(schedule),
       wifiManager(wifi),
       cpapMonitor(monitor),
-      trafficMonitor(nullptr)
+      trafficMonitor(nullptr),
+      sdManager(nullptr)
 #ifdef ENABLE_OTA_UPDATES
       , otaManager(nullptr)
 #endif
@@ -167,6 +168,9 @@ bool TestWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleSoftReboot();
     });
+    server->on("/api/config-raw",  HTTP_GET,  [this]() { this->handleApiConfigRawGet(); });
+    server->on("/api/config-raw",  HTTP_POST, [this]() { this->handleApiConfigRawPost(); });
+    server->on("/api/config-lock", HTTP_POST, [this]() { this->handleApiConfigLock(); });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -525,30 +529,38 @@ void TestWebServer::updateStatusSnapshot() {
         rssi = wifiManager->getSignalStrength();
         strncpy(wifiIp, wifiManager->getIPAddress().c_str(), sizeof(wifiIp) - 1);
     }
-    // Read each backend's folder counts independently for the two-bar UI.
-    // In SMB-only mode stateManager == smbStateManager (same pointer), so
-    // guard against double-counting by skipping the cloud read in that case.
-    int smbComp = 0, smbInc = 0, clComp = 0, clInc = 0;
-    if (smbStateManager) {
-        smbComp = smbStateManager->getCompletedFoldersCount();
-        smbInc  = smbStateManager->getIncompleteFoldersCount();
-    }
-    if (stateManager && stateManager != smbStateManager) {
-        clComp = stateManager->getCompletedFoldersCount();
-        clInc  = stateManager->getIncompleteFoldersCount();
+    // Active backend folder counts from the current session's state manager.
+    // Pending (empty) folders are excluded from the total so the progress bar
+    // only measures real data folders.  They are reported separately as a note.
+    int foldersDone    = 0;
+    int foldersTotal   = 0;
+    int foldersPending = 0;
+    if (stateManager) {
+        foldersDone    = stateManager->getCompletedFoldersCount();
+        foldersPending = stateManager->getPendingFoldersCount();
+        foldersTotal   = foldersDone + stateManager->getIncompleteFoldersCount();
     }
     long nextUp = -1; bool timeSynced = false;
     if (scheduleManager) {
         nextUp = scheduleManager->getSecondsUntilNextUpload();
         timeSynced = scheduleManager->isTimeSynced();
     }
-    char smbFolder[33]   = ""; int smbUp = 0, smbTotal = 0; bool smbActive = false;
-    char cloudFolder[33] = ""; int clUp  = 0, clTotal  = 0; bool clActive  = false;
-    strncpy(smbFolder,   (const char*)g_smbSessionStatus.currentFolder,   sizeof(smbFolder)   - 1);
-    strncpy(cloudFolder, (const char*)g_cloudSessionStatus.currentFolder, sizeof(cloudFolder) - 1);
-    smbUp    = g_smbSessionStatus.filesUploaded;   smbTotal = g_smbSessionStatus.filesTotal;
-    clUp     = g_cloudSessionStatus.filesUploaded; clTotal  = g_cloudSessionStatus.filesTotal;
-    smbActive = g_smbSessionStatus.uploadActive;   clActive  = g_cloudSessionStatus.uploadActive;
+    // Live per-file progress from the upload task
+    char liveFolder[33] = "";
+    int  liveUp = 0, liveTotal = 0; bool liveActive = false;
+    if (g_activeBackendStatus.valid &&
+        strncmp(g_activeBackendStatus.name, "SMB", 3) == 0 &&
+        g_smbSessionStatus.uploadActive) {
+        strncpy(liveFolder, (const char*)g_smbSessionStatus.currentFolder, sizeof(liveFolder) - 1);
+        liveUp = g_smbSessionStatus.filesUploaded; liveTotal = g_smbSessionStatus.filesTotal;
+        liveActive = true;
+    } else if (g_activeBackendStatus.valid &&
+               strncmp(g_activeBackendStatus.name, "CLOUD", 5) == 0 &&
+               g_cloudSessionStatus.uploadActive) {
+        strncpy(liveFolder, (const char*)g_cloudSessionStatus.currentFolder, sizeof(liveFolder) - 1);
+        liveUp = g_cloudSessionStatus.filesUploaded; liveTotal = g_cloudSessionStatus.filesTotal;
+        liveActive = true;
+    }
 
     char buf[WEB_STATUS_BUF_SIZE];
     int n = snprintf(buf, sizeof(buf),
@@ -556,19 +568,21 @@ void TestWebServer::updateStatusSnapshot() {
         ",\"time\":\"%s\",\"time_synced\":%s"
         ",\"free_heap\":%u,\"max_alloc\":%u"
         ",\"wifi\":%s,\"rssi\":%d,\"wifi_ip\":\"%s\""
-        ",\"smb_comp\":%d,\"smb_inc\":%d,\"cloud_comp\":%d,\"cloud_inc\":%d"
+        ",\"active_backend\":\"%s\",\"folders_done\":%d,\"folders_total\":%d,\"folders_pending\":%d"
+        ",\"next_backend\":\"%s\",\"next_done\":%d,\"next_total\":%d,\"next_empty\":%d,\"next_ts\":%lu"
         ",\"next_upload\":%ld"
-        ",\"smb_active\":%s,\"smb_folder\":\"%s\",\"smb_up\":%d,\"smb_total\":%d"
-        ",\"cloud_active\":%s,\"cloud_folder\":\"%s\",\"cloud_up\":%d,\"cloud_total\":%d"
+        ",\"live_active\":%s,\"live_folder\":\"%s\",\"live_up\":%d,\"live_total\":%d"
         ",\"firmware\":\"%s\"}",
         st, inStateSec, upSec,
         timeBuf, timeSynced ? "true" : "false",
         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
         wifiConn ? "true" : "false", rssi, wifiIp,
-        smbComp, smbInc, clComp, clInc,
+        g_activeBackendStatus.name,   foldersDone, foldersTotal, foldersPending,
+        g_inactiveBackendStatus.name, g_inactiveBackendStatus.foldersDone,
+        g_inactiveBackendStatus.foldersTotal, g_inactiveBackendStatus.foldersEmpty,
+        (unsigned long)g_inactiveBackendStatus.sessionStartTs,
         nextUp,
-        smbActive ? "true" : "false", smbFolder, smbUp, smbTotal,
-        clActive  ? "true" : "false", cloudFolder, clUp,  clTotal,
+        liveActive ? "true" : "false", liveFolder, liveUp, liveTotal,
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webStatusBuf, buf, n + 1);
@@ -617,6 +631,164 @@ void TestWebServer::updateManagers(UploadStateManager* state, ScheduleManager* s
 }
 
 void TestWebServer::setSmbStateManager(UploadStateManager* sm) { smbStateManager = sm; }
+
+void TestWebServer::setSdManager(SDCardManager* sd) { sdManager = sd; }
+
+// ---------------------------------------------------------------------------
+// GET /api/config-raw — return raw contents of /config.txt as text/plain
+// ---------------------------------------------------------------------------
+void TestWebServer::handleApiConfigRawGet() {
+    addCorsHeaders(server);
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    server->sendHeader("Connection", "close");
+
+    if (!sdManager) {
+        server->send(503, "application/json", "{\"error\":\"SD manager unavailable\"}");
+        return;
+    }
+
+    // Borrow SD control if not already held (e.g. CPAP has card, no upload running)
+    bool tookControl = false;
+    if (!sdManager->hasControl()) {
+        if (!sdManager->takeControl()) {
+            server->send(503, "application/json", "{\"error\":\"SD unavailable — CPAP may be using it\"}");
+            return;
+        }
+        tookControl = true;
+    }
+
+    fs::FS& sd = sdManager->getFS();
+    File f = sd.open("/config.txt", FILE_READ);
+    if (!f) {
+        if (tookControl) sdManager->releaseControl();
+        server->send(404, "application/json", "{\"error\":\"config.txt not found\"}");
+        return;
+    }
+    size_t sz = f.size();
+    server->setContentLength(sz);
+    server->send(200, "text/plain", "");
+    // Stream in small chunks — no large heap allocation
+    static char chunk[256];
+    while (f.available()) {
+        int n = f.readBytes(chunk, sizeof(chunk));
+        if (n > 0) server->sendContent(chunk, n);
+    }
+    f.close();
+    if (tookControl) sdManager->releaseControl();
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/config-raw — write new config.txt content (max 4096 bytes)
+// Body: raw text/plain  |  Returns: {"ok":true} or {"error":"..."}
+// ---------------------------------------------------------------------------
+static constexpr size_t CONFIG_RAW_MAX_BYTES = 4096;
+
+void TestWebServer::handleApiConfigRawPost() {
+    addCorsHeaders(server);
+    server->sendHeader("Cache-Control", "no-store");
+    server->sendHeader("Connection", "close");
+
+    if (!sdManager) {
+        server->send(503, "application/json", "{\"error\":\"SD manager unavailable\"}");
+        return;
+    }
+    if (isUploadInProgress()) {
+        server->send(409, "application/json", "{\"error\":\"Upload in progress — cannot edit config now\"}");
+        return;
+    }
+
+    size_t bodyLen = server->arg("plain").length();
+    if (bodyLen == 0) {
+        server->send(400, "application/json", "{\"error\":\"Empty body\"}");
+        return;
+    }
+    if (bodyLen > CONFIG_RAW_MAX_BYTES) {
+        server->send(413, "application/json", "{\"error\":\"Content too large (max 4096 bytes)\"}");
+        return;
+    }
+
+    // Borrow SD control
+    bool tookControl = false;
+    if (!sdManager->hasControl()) {
+        if (!sdManager->takeControl()) {
+            server->send(503, "application/json", "{\"error\":\"SD unavailable — CPAP may be using it\"}");
+            return;
+        }
+        tookControl = true;
+    }
+
+    const String& body = server->arg("plain");
+    fs::FS& sd = sdManager->getFS();
+
+    // Write atomically: write to temp file, then rename
+    sd.remove("/config.txt.tmp");
+    File f = sd.open("/config.txt.tmp", FILE_WRITE);
+    if (!f) {
+        if (tookControl) sdManager->releaseControl();
+        server->send(500, "application/json", "{\"error\":\"Failed to open temp file for writing\"}");
+        return;
+    }
+    size_t written = f.print(body);
+    f.close();
+
+    if (written != bodyLen) {
+        sd.remove("/config.txt.tmp");
+        if (tookControl) sdManager->releaseControl();
+        server->send(500, "application/json", "{\"error\":\"Write incomplete\"}");
+        return;
+    }
+
+    sd.remove("/config.txt");
+    if (!sd.rename("/config.txt.tmp", "/config.txt")) {
+        if (tookControl) sdManager->releaseControl();
+        server->send(500, "application/json", "{\"error\":\"Rename failed\"}");
+        return;
+    }
+
+    if (tookControl) sdManager->releaseControl();
+    LOG("[TestWebServer] config.txt updated via web UI");
+    server->send(200, "application/json", "{\"ok\":true,\"message\":\"Saved. Reboot to apply.\"}");
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/config-lock — acquire or release the config edit lock
+// Body: {"lock":true} or {"lock":false}
+// While held, the FSM will not start a new upload session.
+// Auto-expires after 30 minutes (CONFIG_EDIT_LOCK_TIMEOUT_MS in main.cpp).
+// ---------------------------------------------------------------------------
+void TestWebServer::handleApiConfigLock() {
+    addCorsHeaders(server);
+    server->sendHeader("Cache-Control", "no-store");
+    server->sendHeader("Connection", "close");
+
+    String body = server->arg("plain");
+    bool lock;
+    if (body.indexOf("true") >= 0) {
+        lock = true;
+    } else if (body.indexOf("false") >= 0) {
+        lock = false;
+    } else {
+        server->send(400, "application/json", "{\"error\":\"Body must contain 'true' or 'false'\"}");
+        return;
+    }
+
+    if (lock && isUploadInProgress()) {
+        server->send(409, "application/json",
+                     "{\"error\":\"Upload in progress — cannot lock config now\",\"locked\":false}");
+        return;
+    }
+
+    g_configEditLock = lock;
+    if (lock) {
+        g_configEditLockAt = millis();
+        LOG("[TestWebServer] Config edit lock ACQUIRED — upload FSM paused");
+        server->send(200, "application/json", "{\"ok\":true,\"locked\":true}");
+    } else {
+        g_configEditLockAt = 0;
+        LOG("[TestWebServer] Config edit lock RELEASED — upload FSM resumed");
+        server->send(200, "application/json", "{\"ok\":true,\"locked\":false}");
+    }
+}
 
 // Set WiFi manager reference
 void TestWebServer::setWiFiManager(WiFiManager* wifi) {

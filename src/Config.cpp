@@ -25,7 +25,7 @@ Config::Config() :
     uploadMode("smart"),
     uploadStartHour(9),
     uploadEndHour(21),
-    inactivitySeconds(125),
+    inactivitySeconds(62),
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
     
@@ -118,6 +118,8 @@ static String trim(String s) {
 }
 
 // Helper to remove comments from a line
+// NOTE: Only call this on complete lines BEFORE the key=value split.
+// It is intentionally NOT called on values — passwords/SSIDs can contain '#'.
 String Config::trimComment(String line) {
     // Handle hash style comments
     int commentPos = line.indexOf('#');
@@ -131,11 +133,15 @@ String Config::trimComment(String line) {
 // Helper to parse a line and set config values
 void Config::parseLine(String& line) {
     line = trim(line); // Trim leading/trailing whitespace
-    line = trimComment(line); // Remove comments
-    line = trim(line); // Trim again after removing comments
 
     if (line.isEmpty()) {
-        return; // Skip empty lines or lines that were just comments
+        return; // Skip empty lines
+    }
+
+    // Skip pure comment lines (start with '#').
+    // Do NOT strip '#' from values — WiFi passwords and SSIDs can contain '#'.
+    if (line.charAt(0) == '#') {
+        return;
     }
 
     int equalsPos = line.indexOf('=');

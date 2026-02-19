@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <FS.h>
 #include <stdint.h>
+#include <vector>
 
 class UploadStateManager {
 private:
@@ -59,7 +60,11 @@ private:
     String stateSnapshotPath;
     String stateJournalPath;
     UnixTs lastUploadTimestamp;
-    DayKey completedFolders[MAX_COMPLETED_FOLDERS];
+    
+    struct CompletedFolderEntry {
+        DayKey day;
+    };
+    CompletedFolderEntry completedFolders[MAX_COMPLETED_FOLDERS];
     uint16_t completedCount;
     PendingFolderEntry pendingFolders[MAX_PENDING_FOLDERS];
     uint16_t pendingCount;
@@ -125,6 +130,7 @@ public:
     bool isFolderCompleted(const String& folderName);
     void markFolderCompleted(const String& folderName);
     void removeFolderFromCompleted(const String& folderName);  // For delta scan re-upload
+    void removeFileEntriesForPaths(const std::vector<String>& filePaths);  // Cleanup after folder complete
     int getCompletedFoldersCount() const;
     int getIncompleteFoldersCount() const;
     void setTotalFoldersCount(int count);

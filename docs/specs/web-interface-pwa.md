@@ -68,7 +68,7 @@ void handleMonitor() {
 
 ### Monitoring Tools
 - **SD activity graph**: Real-time bus activity visualization
-- **Log viewer**: Recent system logs with filtering
+- **Log viewer**: Client-side persistent log buffer with reboot detection, deduplication, and copy-to-clipboard
 - **Status API**: JSON endpoint for external monitoring
 - **OTA updates**: Firmware update interface
 
@@ -116,6 +116,13 @@ const char* getMainPageHtml() {
 - **Progress tracking**: Real-time upload progress bars
 - **Manual controls**: Upload triggers, state reset, soft reboot indication
 
+### Client-side Log Buffering
+The Logs tab maintains a persistent in-browser ring buffer (up to 2000 lines) that survives page soft-reloads:
+- **Deduplication**: Each poll response is diffed against `lastSeenLine` (last non-empty line already in buffer). Only lines after `lastSeenLine` are appended — no duplicates across polls.
+- **Reboot detection**: The boot banner (`=== CPAP Data Auto-Uploader ===`) is always present in server responses (ring buffer starts from boot). A genuinely new reboot is detected only when `lastSeenLine` is absent from the response **or** appears before the boot banner. In that case a `─── DEVICE REBOOTED ───` separator is inserted. Same-boot polls are treated as normal tails.
+- **Copy to clipboard**: A "Copy to clipboard" button exports the entire buffer as plain text.
+- **Clear buffer**: Resets the buffer and `lastSeenLine` state.
+
 ## API Endpoints
 
 ### Status Endpoints
@@ -129,6 +136,17 @@ const char* getMainPageHtml() {
 - `GET /reset-state` - Clear upload history
 - `GET /soft-reboot` - Restart with fast-boot
 - `POST /ota` - Firmware update (OTA builds only)
+- `GET /api/config-raw` - Read raw `config.txt` from SD card
+- `POST /api/config-raw` - Write new `config.txt` content (max 4096 bytes, atomic rename)
+- `POST /api/config-lock` - Acquire or release the config edit lock (body: `{"lock":true/false}`)
+
+### Config Edit Lock (`/api/config-lock`)
+Prevents the FSM from starting new upload sessions while the user edits `config.txt` in the web UI. Automatically expires after **30 minutes** if not released. Rejected (HTTP 409) if an upload is currently in progress.
+
+Flow:
+1. User clicks **Edit** → `POST /api/config-lock {"lock":true}` → FSM paused, textarea unlocked
+2. User edits, then clicks **Save** or **Save & Reboot** → config written atomically → `POST /api/config-lock {"lock":false}` → FSM resumed
+3. **Cancel** → `POST /api/config-lock {"lock":false}` → FSM resumed, no write
 
 ### Monitoring Endpoints
 - `GET /monitor` - SD activity status JSON
