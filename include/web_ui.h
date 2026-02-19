@@ -112,7 +112,6 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=card style="margin-bottom:14px"><h2>Actions</h2>
 <div class=actions>
 <button id=btn-up class="btn bp" onclick=triggerUpload()>&#9650; Trigger Upload</button>
-<button id=btn-srb class="btn bs" onclick=softReboot()>&#8635; Soft Reboot</button>
 <button id=btn-rst class="btn bd" onclick=resetState()>Reset State</button>
 </div>
 </div>
@@ -174,6 +173,11 @@ nav button:hover:not(.act){background:#3a5a7e}
 <button type=submit class="btn bp" style=width:100%>Download &amp; Install</button>
 <div id=s-url class=sm></div></form>
 </div>
+<div class=card><h2>System Actions</h2>
+<div class=actions>
+<button id=btn-srb class="btn bs" onclick=softReboot()>&#8635; Soft Reboot</button>
+</div>
+</div>
 </div>
 </div>
 
@@ -228,8 +232,11 @@ function renderStatus(d){
   set('d-ip',d.wifi_ip||'—');
   set('d-ep',cfg.endpoint_type||d.endpoint_type||'—');
   set('d-up',fmtUp(d.uptime||0));
-  var sc=d.smb_success||0,si=d.smb_inc||0,st2=(d.smb_comp||0);
-  var cc=d.cloud_success||0,ci=d.cloud_inc||0,ct=(d.cloud_comp||0);
+  // Use success counts if available, otherwise fall back to completion counts (for old state migration)
+  var smbSuccess=d.smb_success||0,smbComp=d.smb_comp||0;
+  var sc=smbSuccess||smbComp,si=d.smb_inc||0,st2=smbComp;
+  var cloudSuccess=d.cloud_success||0,cloudComp=d.cloud_comp||0;
+  var cc=cloudSuccess||cloudComp,ci=d.cloud_inc||0,ct=cloudComp;
   document.getElementById('d-pf-smb').style.width=(st2>0?Math.round(sc*100/st2):0)+'%';
   document.getElementById('d-pf-cloud').style.width=(ct>0?Math.round(cc*100/ct):0)+'%';
   var sR=si>0?'<span style=color:#ffaa44>'+si+' left</span>':'<span style=color:#44ff44>&#10003; done</span>';
