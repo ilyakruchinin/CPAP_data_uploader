@@ -425,6 +425,9 @@ function _appendLogs(text){
     }
     newLines=lines.slice(startFrom);
   }
+  // Strip trailing empty lines — server responses end with blank lines that
+  // would otherwise be appended as "new" on every poll.
+  while(newLines.length>0&&!newLines[newLines.length-1].trim())newLines.pop();
   for(var i=0;i<newLines.length;i++){
     if(newLines[i]!==undefined)clientLogBuf.push(newLines[i]);
   }
