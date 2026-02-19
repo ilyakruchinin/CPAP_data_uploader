@@ -18,10 +18,9 @@ The main application controller (`main.cpp`) orchestrates the entire CPAP data u
 - Coordinates between SMB and Cloud upload passes
 
 ### Heap Management & Recovery
-- Monitors contiguous heap (`max_alloc`) for fragmentation
-- Automatic soft-reboot when heap is insufficient for next operation
-- Fast-boot path skips stabilization delays on software resets
-- Staged backend processing (SMB then Cloud) to optimize memory usage
+- **Always-reboot strategy**: `handleReleasing()` unconditionally calls `esp_restart()` after every upload session
+- Fast-boot path (`ESP_RST_SW`) skips cold-boot stabilization delays and Smart Wait
+- Each session runs exactly one backend — single-backend cycling prevents concurrent SMB+TLS memory pressure
 
 ### Web Interface Integration
 - Progressive Web App (PWA) with pre-allocated buffers
@@ -39,11 +38,13 @@ if (fastBoot) {
 }
 ```
 
-### Heap Recovery
+### Always-Reboot After Upload
 ```cpp
-const uint32_t SD_MOUNT_MIN_ALLOC = 45000;
-if (ESP.getMaxAllocHeap() < SD_MOUNT_MIN_ALLOC) {
-    LOG("[FSM] Heap fragmented — fast-reboot to restore heap");
+void handleReleasing() {
+    sdManager.releaseControl();
+    // Always reboot to restore contiguous heap and advance backend cycling
+    LOGF("[FSM] Upload session complete — soft-reboot");
+    delay(200);
     esp_restart();
 }
 ```

@@ -25,7 +25,7 @@ Config::Config() :
     uploadMode("smart"),
     uploadStartHour(9),
     uploadEndHour(21),
-    inactivitySeconds(125),
+    inactivitySeconds(62),
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
     

@@ -28,6 +28,18 @@ class TestWebServer;
 #include "SleepHQUploader.h"
 #endif
 
+// Which upload backend is active this session
+enum class UploadBackend { NONE, SMB, CLOUD };
+
+// Lightweight per-backend session summary (written to SD at session start and end)
+struct BackendSummary {
+    uint32_t sessionStartTs;  // Unix ts recorded at session start
+    int      foldersTotal;
+    int      foldersDone;
+    int      foldersEmpty;
+    bool     valid;
+};
+
 // Result of an exclusive-access upload session
 enum class UploadResult {
     COMPLETE,        // All eligible files uploaded
@@ -49,6 +61,7 @@ private:
     UploadStateManager* cloudStateManager;  // tracks Cloud-only uploads
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
+    UploadBackend activeBackend;
 
 #ifdef ENABLE_TEST_WEBSERVER
     TestWebServer* webServer;
@@ -89,10 +102,20 @@ private:
     bool cloudImportFailed;
     int  cloudDatalogFilesUploaded;  // DATALOG files uploaded this cloud pass; 0 = skip finalize
 
-    // Return the primary state manager (cloud if configured, else smb)
-    UploadStateManager* primaryStateManager() const {
-        if (cloudStateManager) return cloudStateManager;
-        return smbStateManager;
+    // Backend cycling helpers
+    UploadBackend selectActiveBackend(fs::FS& sd) const;
+    BackendSummary readBackendSummary(fs::FS& sd, UploadBackend backend) const;
+    void writeBackendSummaryStart(fs::FS& sd, UploadBackend backend, uint32_t sessionTs);
+    void writeBackendSummaryFull(fs::FS& sd, UploadBackend backend, uint32_t sessionTs,
+                                 int done, int total, int empty);
+    static const char* getBackendSummaryPath(UploadBackend backend);
+
+    // Return the active session's state manager
+    UploadStateManager* activeStateManager() const {
+        if (activeBackend == UploadBackend::SMB)   return smbStateManager;
+        if (activeBackend == UploadBackend::CLOUD) return cloudStateManager;
+        if (smbStateManager)   return smbStateManager;
+        return cloudStateManager;
     }
 
 public:
@@ -106,13 +129,13 @@ public:
                                            DataFilter filter);
 
     // Getters for internal components (for web interface access)
-    UploadStateManager* getStateManager()    { return primaryStateManager(); }
+    UploadStateManager* getStateManager()    { return activeStateManager(); }
     UploadStateManager* getSmbStateManager() { return smbStateManager; }
     ScheduleManager* getScheduleManager() { return scheduleManager; }
+    UploadBackend getActiveBackend() const { return activeBackend; }
     bool hasIncompleteFolders() {
-        bool smb   = smbStateManager   && smbStateManager->getIncompleteFoldersCount()   > 0;
-        bool cloud = cloudStateManager && cloudStateManager->getIncompleteFoldersCount() > 0;
-        return smb || cloud;
+        UploadStateManager* sm = activeStateManager();
+        return sm && sm->getIncompleteFoldersCount() > 0;
     }
 
 #ifdef ENABLE_TEST_WEBSERVER

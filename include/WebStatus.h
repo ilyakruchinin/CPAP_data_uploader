@@ -14,7 +14,7 @@
 // updateStatusSnapshot() in the main task. No mutex needed — torn reads on a
 // status display are harmless.
 
-static const size_t WEB_STATUS_BUF_SIZE = 896;
+static const size_t WEB_STATUS_BUF_SIZE = 1024;
 static const size_t WEB_CONFIG_BUF_SIZE = 1024;
 
 extern char g_webStatusBuf[WEB_STATUS_BUF_SIZE];
@@ -29,3 +29,17 @@ struct SessionStatus {
 
 extern volatile SessionStatus g_smbSessionStatus;
 extern volatile SessionStatus g_cloudSessionStatus;
+
+// Active/inactive backend summary — written by FileUploader, read by TestWebServer.
+// Torn reads on a status display are harmless (no mutex needed).
+struct BackendSummaryStatus {
+    char     name[8];          // "SMB", "CLOUD", or "NONE"
+    uint32_t sessionStartTs;   // Unix timestamp of session start (used for cycling)
+    int      foldersDone;      // Folders successfully uploaded last session
+    int      foldersTotal;     // Total eligible folders last session
+    int      foldersEmpty;     // Pending-empty folders last session
+    bool     valid;            // true = summary file was read successfully
+};
+
+extern BackendSummaryStatus g_activeBackendStatus;
+extern BackendSummaryStatus g_inactiveBackendStatus;

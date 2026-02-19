@@ -31,7 +31,7 @@ ENDPOINT = //192.168.1.100/cpap_backups
 - **SMB**: Network shares (Windows, NAS, Samba)
 - **Cloud**: SleepHQ direct upload
 - **WebDAV**: Planned support (placeholder only)
-- **Dual Upload**: Multiple backends simultaneously
+- **Single-backend sessions**: Each upload session uses one backend (cycling via oldest timestamp)
 
 ## Configuration Parameters
 

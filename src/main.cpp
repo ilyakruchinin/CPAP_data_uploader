@@ -673,21 +673,15 @@ void handleReleasing() {
         return;
     }
 
-    // TLS heap fragmentation check: the cloud TLS session permanently fragments heap,
-    // dropping max_alloc from ~47 KB to ~38.9 KB.  SD_MMC mount fails below ~45 KB
-    // contiguous, making all subsequent upload cycles fail.  A clean reboot restores
-    // the full contiguous heap without losing any state (files already saved).
-    const uint32_t SD_MOUNT_MIN_ALLOC = 45000;
-    uint32_t maxAlloc = ESP.getMaxAllocHeap();
-    if (maxAlloc < SD_MOUNT_MIN_ALLOC) {
-        LOGF("[FSM] Heap fragmented post-upload (max_alloc=%u < %u) — fast-reboot to restore heap",
-             maxAlloc, SD_MOUNT_MIN_ALLOC);
-        delay(200);
-        esp_restart();
-    }
-
-    cooldownStartedAt = millis();
-    transitionTo(UploadState::COOLDOWN);
+    // Always soft-reboot after every upload session.
+    // Each session runs only one backend (SMB or Cloud).  A clean reboot restores
+    // the full contiguous heap, advances the backend cycling pointer, and keeps the
+    // FSM simple: every upload session ends with a reboot.  The fast-boot path
+    // (ESP_RST_SW) skips the cold-boot delays so the next session starts quickly.
+    LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
+         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    delay(200);
+    esp_restart();
 }
 
 void handleCooldown() {
