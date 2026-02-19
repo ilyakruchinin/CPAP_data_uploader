@@ -81,7 +81,8 @@ TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
       scheduleManager(schedule),
       wifiManager(wifi),
       cpapMonitor(monitor),
-      trafficMonitor(nullptr)
+      trafficMonitor(nullptr),
+      sdManager(nullptr)
 #ifdef ENABLE_OTA_UPDATES
       , otaManager(nullptr)
 #endif
@@ -167,6 +168,8 @@ bool TestWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleSoftReboot();
     });
+    server->on("/api/config-raw", HTTP_GET,  [this]() { this->handleApiConfigRawGet(); });
+    server->on("/api/config-raw", HTTP_POST, [this]() { this->handleApiConfigRawPost(); });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -526,13 +529,15 @@ void TestWebServer::updateStatusSnapshot() {
         strncpy(wifiIp, wifiManager->getIPAddress().c_str(), sizeof(wifiIp) - 1);
     }
     // Active backend folder counts from the current session's state manager.
+    // Pending (empty) folders are excluded from the total so the progress bar
+    // only measures real data folders.  They are reported separately as a note.
     int foldersDone    = 0;
     int foldersTotal   = 0;
     int foldersPending = 0;
     if (stateManager) {
         foldersDone    = stateManager->getCompletedFoldersCount();
         foldersPending = stateManager->getPendingFoldersCount();
-        foldersTotal   = foldersDone + stateManager->getIncompleteFoldersCount() + foldersPending;
+        foldersTotal   = foldersDone + stateManager->getIncompleteFoldersCount();
     }
     long nextUp = -1; bool timeSynced = false;
     if (scheduleManager) {
@@ -625,6 +630,124 @@ void TestWebServer::updateManagers(UploadStateManager* state, ScheduleManager* s
 }
 
 void TestWebServer::setSmbStateManager(UploadStateManager* sm) { smbStateManager = sm; }
+
+void TestWebServer::setSdManager(SDCardManager* sd) { sdManager = sd; }
+
+// ---------------------------------------------------------------------------
+// GET /api/config-raw — return raw contents of /config.txt as text/plain
+// ---------------------------------------------------------------------------
+void TestWebServer::handleApiConfigRawGet() {
+    addCorsHeaders(server);
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    server->sendHeader("Connection", "close");
+
+    if (!sdManager) {
+        server->send(503, "application/json", "{\"error\":\"SD manager unavailable\"}");
+        return;
+    }
+
+    // Borrow SD control if not already held (e.g. CPAP has card, no upload running)
+    bool tookControl = false;
+    if (!sdManager->hasControl()) {
+        if (!sdManager->takeControl()) {
+            server->send(503, "application/json", "{\"error\":\"SD unavailable — CPAP may be using it\"}");
+            return;
+        }
+        tookControl = true;
+    }
+
+    fs::FS& sd = sdManager->getFS();
+    File f = sd.open("/config.txt", FILE_READ);
+    if (!f) {
+        if (tookControl) sdManager->releaseControl();
+        server->send(404, "application/json", "{\"error\":\"config.txt not found\"}");
+        return;
+    }
+    size_t sz = f.size();
+    server->setContentLength(sz);
+    server->send(200, "text/plain", "");
+    // Stream in small chunks — no large heap allocation
+    static char chunk[256];
+    while (f.available()) {
+        int n = f.readBytes(chunk, sizeof(chunk));
+        if (n > 0) server->sendContent(chunk, n);
+    }
+    f.close();
+    if (tookControl) sdManager->releaseControl();
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/config-raw — write new config.txt content (max 4096 bytes)
+// Body: raw text/plain  |  Returns: {"ok":true} or {"error":"..."}
+// ---------------------------------------------------------------------------
+static constexpr size_t CONFIG_RAW_MAX_BYTES = 4096;
+
+void TestWebServer::handleApiConfigRawPost() {
+    addCorsHeaders(server);
+    server->sendHeader("Cache-Control", "no-store");
+    server->sendHeader("Connection", "close");
+
+    if (!sdManager) {
+        server->send(503, "application/json", "{\"error\":\"SD manager unavailable\"}");
+        return;
+    }
+    if (isUploadInProgress()) {
+        server->send(409, "application/json", "{\"error\":\"Upload in progress — cannot edit config now\"}");
+        return;
+    }
+
+    size_t bodyLen = server->arg("plain").length();
+    if (bodyLen == 0) {
+        server->send(400, "application/json", "{\"error\":\"Empty body\"}");
+        return;
+    }
+    if (bodyLen > CONFIG_RAW_MAX_BYTES) {
+        server->send(413, "application/json", "{\"error\":\"Content too large (max 4096 bytes)\"}");
+        return;
+    }
+
+    // Borrow SD control
+    bool tookControl = false;
+    if (!sdManager->hasControl()) {
+        if (!sdManager->takeControl()) {
+            server->send(503, "application/json", "{\"error\":\"SD unavailable — CPAP may be using it\"}");
+            return;
+        }
+        tookControl = true;
+    }
+
+    const String& body = server->arg("plain");
+    fs::FS& sd = sdManager->getFS();
+
+    // Write atomically: write to temp file, then rename
+    sd.remove("/config.txt.tmp");
+    File f = sd.open("/config.txt.tmp", FILE_WRITE);
+    if (!f) {
+        if (tookControl) sdManager->releaseControl();
+        server->send(500, "application/json", "{\"error\":\"Failed to open temp file for writing\"}");
+        return;
+    }
+    size_t written = f.print(body);
+    f.close();
+
+    if (written != bodyLen) {
+        sd.remove("/config.txt.tmp");
+        if (tookControl) sdManager->releaseControl();
+        server->send(500, "application/json", "{\"error\":\"Write incomplete\"}");
+        return;
+    }
+
+    sd.remove("/config.txt");
+    if (!sd.rename("/config.txt.tmp", "/config.txt")) {
+        if (tookControl) sdManager->releaseControl();
+        server->send(500, "application/json", "{\"error\":\"Rename failed\"}");
+        return;
+    }
+
+    if (tookControl) sdManager->releaseControl();
+    LOG("[TestWebServer] config.txt updated via web UI");
+    server->send(200, "application/json", "{\"ok\":true,\"message\":\"Saved. Reboot to apply.\"}");
+}
 
 // Set WiFi manager reference
 void TestWebServer::setWiFiManager(WiFiManager* wifi) {

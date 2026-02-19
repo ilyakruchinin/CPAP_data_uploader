@@ -10,6 +10,7 @@
 #include "CPAPMonitor.h"
 #include "TrafficMonitor.h"
 #include "WebStatus.h"
+#include "SDCardManager.h"
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -32,6 +33,7 @@ private:
     WiFiManager* wifiManager;
     CPAPMonitor* cpapMonitor;
     TrafficMonitor* trafficMonitor;
+    SDCardManager* sdManager;
     
 #ifdef ENABLE_OTA_UPDATES
     OTAManager* otaManager;
@@ -53,7 +55,9 @@ private:
     void handleMonitorStop();
     void handleSdActivity();
     void handleMonitorPage();
-    
+    void handleApiConfigRawGet();   // GET /api/config-raw
+    void handleApiConfigRawPost();  // POST /api/config-raw
+
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
     void handleOTAPage();
@@ -88,6 +92,7 @@ public:
     void setSmbStateManager(UploadStateManager* sm);
     void setWiFiManager(WiFiManager* wifi);
     void setTrafficMonitor(TrafficMonitor* tm);
+    void setSdManager(SDCardManager* sd);
 
     // Zero-heap status snapshot — call from main loop every ~2-3 s
     void updateStatusSnapshot();

@@ -127,7 +127,21 @@ nav button:hover:not(.act){background:#3a5a7e}
 <!-- CONFIG -->
 <div id=cfg class=page>
 <div class=card><h2>Configuration</h2>
-<pre id=cfg-box>Loading...</pre>
+<pre id=cfg-box style="font-size:.8em;max-height:300px;overflow-y:auto">Loading...</pre>
+</div>
+<div class=card>
+<h2>Edit config.txt</h2>
+<p style="font-size:.82em;color:#8f98a0;margin-bottom:8px">Direct editor for the SD card config file. Passwords stored securely in flash appear as <code>***STORED_IN_FLASH***</code> &mdash; leave them unchanged to keep existing credentials. Max 4096 bytes. <strong>Changes take effect after reboot.</strong></p>
+<textarea id=cfg-raw style="width:100%;box-sizing:border-box;height:320px;background:#1b2838;color:#c7d5e0;border:1px solid #3d4450;border-radius:4px;padding:8px;font-family:monospace;font-size:.8em;resize:vertical" maxlength=4096 oninput=cfgRawCount() placeholder="Loading..."></textarea>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+<span id=cfg-raw-cnt style="font-size:.8em;color:#8f98a0">0 / 4096 bytes</span>
+<div class=actions style=margin:0>
+<button class="btn bs" onclick=loadRawCfg() style="padding:6px 14px">&#8635; Reload</button>
+<button class="btn bp" onclick=saveRawCfg() style="padding:6px 14px">&#128190; Save</button>
+<button class="btn bd" onclick=saveAndReboot() style="padding:6px 14px">Save &amp; Reboot</button>
+</div>
+</div>
+<div id=cfg-raw-msg style="margin-top:6px;font-size:.83em"></div>
 </div>
 </div>
 
@@ -238,7 +252,7 @@ function renderStatus(d){
   var done=d.folders_done||0,total=d.folders_total||0,pend=d.folders_pending||0;
   var pct=total>0?Math.round(done*100/total):0;
   document.getElementById('d-pf-active').style.width=pct+'%';
-  var inc=Math.max(0,total-done-pend);
+  var inc=Math.max(0,total-done);
   var abSt=total>0?(done+' / '+total+(pend>0?' ('+pend+' empty)':'')):'\u2014';
   if(total>0&&inc>0)abSt+=' &nbsp;<span style=color:#ffaa44>'+inc+' left</span>';
   else if(total>0&&inc===0&&done>0)abSt+=' &nbsp;<span style=color:#44ff44>&#10003;</span>';
@@ -274,6 +288,47 @@ function loadCfg(){
     document.getElementById('cfg-box').textContent=JSON.stringify(d,null,2);
     renderStatus._cfgLoaded=true;
   }).catch(function(){document.getElementById('cfg-box').textContent='Failed to load config.';});
+  loadRawCfg();
+}
+function cfgRawCount(){
+  var t=document.getElementById('cfg-raw');
+  document.getElementById('cfg-raw-cnt').textContent=t.value.length+' / 4096 bytes';
+}
+function loadRawCfg(){
+  var msg=document.getElementById('cfg-raw-msg');
+  msg.textContent='Loading...';
+  fetch('/api/config-raw',{cache:'no-store'}).then(function(r){
+    if(!r.ok)return r.text().then(function(t){throw new Error(t);});
+    return r.text();
+  }).then(function(t){
+    document.getElementById('cfg-raw').value=t;
+    cfgRawCount();
+    msg.textContent='';
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Load failed: '+e.message;});
+}
+function saveRawCfg(){
+  var body=document.getElementById('cfg-raw').value;
+  var msg=document.getElementById('cfg-raw-msg');
+  msg.style.color='#8f98a0';msg.textContent='Saving...';
+  fetch('/api/config-raw',{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store'})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(d.ok){msg.style.color='#57cbde';msg.textContent='\u2713 '+d.message;}
+    else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
+}
+function saveAndReboot(){
+  var body=document.getElementById('cfg-raw').value;
+  var msg=document.getElementById('cfg-raw-msg');
+  msg.style.color='#8f98a0';msg.textContent='Saving...';
+  fetch('/api/config-raw',{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store'})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(d.ok){
+      msg.style.color='#57cbde';msg.textContent='Saved. Rebooting...';
+      setTimeout(function(){fetch('/soft-reboot',{cache:'no-store'});},800);
+    }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
 }
 
 var logAtBottom=true;

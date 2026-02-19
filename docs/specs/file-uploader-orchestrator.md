@@ -14,13 +14,17 @@ Each upload session runs **exactly one backend** (SMB or Cloud), selected by cyc
 5. **Soft reboot** — FSM always reboots after releasing the SD card, restoring heap
 
 ### Pre-flight Scans
-Before any network activity, performs SD-only scans:
+Before writing the session-start timestamp (and before any network activity), performs SD-only scans across **all configured backends**:
 ```cpp
-bool smbHasWork = !folders.empty() || mandatoryChanged;
-if (!smbHasWork) {
-    LOG("[FileUploader] SMB: nothing to upload — skipping");
+bool smbWork   = checkHasWork(smbStateManager);
+bool cloudWork = checkHasWork(cloudStateManager);
+if (!smbWork && !cloudWork) {
+    return UploadResult::NOTHING_TO_DO;  // → FSM enters COOLDOWN, no reboot
 }
 ```
+- Returns `UploadResult::NOTHING_TO_DO` when every backend is fully synced
+- The session-start summary is NOT written in this case — cycling pointer does not advance
+- FSM responds by entering `COOLDOWN` directly without an `esp_restart()`, preventing endless reboot cycles
 
 ## Key Features
 
@@ -74,23 +78,26 @@ bool begin(fs::FS &sd) {
 
 ### 2. Upload Execution
 ```cpp
-void uploadWithExclusiveAccess(fs::FS &sd, DataFilter filter) {
-    // SMB Pass
-    if (smbHasWork) {
-        uploadMandatoryFilesSmb(...);
-        for (folder : folders) {
-            uploadDatalogFolderSmb(...);
-        }
-    }
+UploadResult uploadWithExclusiveAccess(fs::FS &sd, DataFilter filter) {
+    // Pre-flight: check ALL backends (SD-only, no network)
+    if (!anyBackendHasWork) return UploadResult::NOTHING_TO_DO;
     
-    // Cloud Pass  
-    if (cloudHasWork) {
-        sleephqUploader->begin(); // OAuth + team + import
-        for (folder : folders) {
-            uploadDatalogFolderCloud(...);
-        }
+    // Write session-start summary (advances cycling pointer)
+    writeBackendSummaryStart(sd, activeBackend, sessionTs);
+    
+    // Run ONLY the active backend (SMB or CLOUD, not both)
+    if (activeBackend == SMB) {
+        uploadMandatoryFilesSmb(...);
+        for (folder : folders) uploadDatalogFolderSmb(...);
+    } else if (activeBackend == CLOUD) {
+        sleephqUploader->begin();  // OAuth + team + import
+        for (folder : folders) uploadDatalogFolderCloud(...);
         finalizeCloudImport();
     }
+    
+    // Write full summary (done/total/empty)
+    writeBackendSummaryFull(...);
+    return UploadResult::COMPLETE;
 }
 ```
 
@@ -131,8 +138,13 @@ void uploadWithExclusiveAccess(fs::FS &sd, DataFilter filter) {
 - **Retry mechanisms**: Built into each backend
 - **Timeout protection**: Per-file and per-session timeouts
 
+### Progress Metric — Excluding Empty Folders
+- `foldersTotal` = `done + incomplete` only — pending (empty) folders are excluded from the total
+- Empty folders are reported separately as `folders_pending` and shown as a note in the GUI `(N empty)` 
+- Progress bar = `done / (done + incomplete)` so empty folders never prevent reaching 100%
+
 ## Performance Optimizations
-- **Pre-flight gating**: No network if nothing to upload
+- **Pre-flight gating**: No network if nothing to upload; no session-start written either
 - **Bulk operations**: Directory creation, batch uploads
 - **Memory awareness**: Buffer sizing based on available heap
 - **Connection reuse**: Persistent sessions where possible
