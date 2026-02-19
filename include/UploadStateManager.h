@@ -64,6 +64,9 @@ private:
         DayKey day;
         UnixTs lastScanTime;
         bool recentScanPassed;
+        uint16_t filesTotal;      // Total files in folder
+        uint16_t filesUploaded;   // Successfully uploaded files
+        bool uploadSuccess;       // true = all files uploaded, false = some failed
     };
     CompletedFolderEntry completedFolders[MAX_COMPLETED_FOLDERS];
     uint16_t completedCount;
@@ -132,9 +135,12 @@ public:
     void markFolderCompleted(const String& folderName);
     void markFolderCompletedWithScan(const String& folderName, bool recentScanPassed);
     void markFolderRecentScanFailed(const String& folderName);
+    void markFolderUploadProgress(const String& folderName, uint16_t filesTotal, uint16_t filesUploaded, bool uploadSuccess);
+    bool isFolderUploadSuccessful(const String& folderName);
     bool shouldRescanRecentFolder(const String& folderName);
     void removeFolderFromCompleted(const String& folderName);  // For delta scan re-upload
     int getCompletedFoldersCount() const;
+    int getSuccessfulFoldersCount() const;  // Only folders with all files uploaded successfully
     int getIncompleteFoldersCount() const;
     void setTotalFoldersCount(int count);
     
