@@ -308,17 +308,12 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
 
         auto checkHasWork = [&](UploadStateManager* sm) -> bool {
             if (!sm) return false;
-            if (preflightFolderHasWork(sm)) return true;
-            // Mandatory root files changed?
-            for (const char* p : rootPaths) {
-                if (sd.exists(p) && sm->hasFileChanged(sd, p)) return true;
-            }
-            // SETTINGS directory changed?
-            auto sf = scanSettingsFiles(sd);
-            for (const String& f : sf) {
-                if (sm->hasFileChanged(sd, f)) return true;
-            }
-            return false;
+            // Pre-flight only checks DATALOG — mandatory root/settings files
+            // (e.g. STR.edf) are uploaded as a bonus during DATALOG sessions but
+            // must NOT independently trigger sessions.  The CPAP machine updates
+            // STR.edf after every SD card release, so including it here causes an
+            // endless reboot loop when DATALOG has no new work.
+            return preflightFolderHasWork(sm);
         };
 
         bool smbWork   = false;
