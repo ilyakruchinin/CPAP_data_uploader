@@ -18,8 +18,9 @@ ENDPOINT = //192.168.1.100/cpap_backups
 ### Key-Value Parser
 - Case-insensitive keys
 - Optional spaces around `=` 
-- Hash (`#`) comments only (double slash removed in v0.8.2)
-- Automatic trimming of whitespace
+- Lines starting with `#` are treated as comments and skipped; `#` within values is **preserved** (valid in passwords/SSIDs)
+- Everything after the first `=` on a non-comment line is the value — passwords with `=`, `#`, or spaces are all handled correctly
+- Automatic trimming of leading/trailing whitespace from key and value
 
 ### Credential Security
 - **Secure Mode (default)**: Stores passwords in ESP32 flash memory
@@ -31,7 +32,7 @@ ENDPOINT = //192.168.1.100/cpap_backups
 - **SMB**: Network shares (Windows, NAS, Samba)
 - **Cloud**: SleepHQ direct upload
 - **WebDAV**: Planned support (placeholder only)
-- **Dual Upload**: Multiple backends simultaneously
+- **Single-backend sessions**: Each upload session uses one backend (cycling via oldest timestamp)
 
 ## Configuration Parameters
 
@@ -48,7 +49,7 @@ ENDPOINT = //192.168.1.100/cpap_backups
 ### Upload Scheduling
 - `UPLOAD_MODE` - "smart" or "scheduled"
 - `UPLOAD_START_HOUR` / `UPLOAD_END_HOUR` - Upload window (0-23)
-- `INACTIVITY_SECONDS` - Bus silence required before upload (default: 125)
+- `INACTIVITY_SECONDS` - Bus silence required before upload (default: 62)
 - `EXCLUSIVE_ACCESS_MINUTES` - Max SD card hold time (default: 5)
 - `COOLDOWN_MINUTES` - Pause between sessions (default: 10)
 
@@ -95,8 +96,17 @@ const char* PREFS_KEY_CLOUD_SECRET = "cloud_secret";
 - Missing credentials: Error for required backends
 - Secure storage failures: Fallback to plain text with warning
 
+## Web Config Editor
+The Web GUI Config tab provides a live editor for `config.txt` directly on the SD card:
+- **GET `/api/config-raw`**: Returns raw `config.txt` content as `text/plain` — borrows SD control if not already held
+- **POST `/api/config-raw`**: Writes new content atomically (temp file + rename), max 4096 bytes; blocked during active upload (409)
+- Passwords stored in flash appear as `***STORED_IN_FLASH***` — leaving them unchanged preserves existing credentials
+- Changes take effect after reboot (`Save & Reboot` button triggers `esp_restart()`)
+- SD is borrowed only briefly for the read/write operation and released immediately
+
 ## Integration Points
 - **main.cpp**: Loads configuration during setup
 - **WiFiManager**: Uses WiFi credentials
 - **FileUploader**: Uses backend and scheduling settings
 - **All uploaders**: Use endpoint credentials
+- **TestWebServer**: Serves config editor via `/api/config-raw`

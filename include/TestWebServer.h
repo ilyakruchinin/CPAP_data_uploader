@@ -10,6 +10,7 @@
 #include "CPAPMonitor.h"
 #include "TrafficMonitor.h"
 #include "WebStatus.h"
+#include "SDCardManager.h"
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -22,6 +23,10 @@ extern volatile bool g_softRebootFlag;
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
 
+// Config edit lock — set by web UI to pause FSM uploads while user edits config
+extern bool g_configEditLock;
+extern unsigned long g_configEditLockAt;
+
 class TestWebServer {
 private:
     WebServer* server;
@@ -32,6 +37,7 @@ private:
     WiFiManager* wifiManager;
     CPAPMonitor* cpapMonitor;
     TrafficMonitor* trafficMonitor;
+    SDCardManager* sdManager;
     
 #ifdef ENABLE_OTA_UPDATES
     OTAManager* otaManager;
@@ -53,7 +59,10 @@ private:
     void handleMonitorStop();
     void handleSdActivity();
     void handleMonitorPage();
-    
+    void handleApiConfigRawGet();   // GET /api/config-raw
+    void handleApiConfigRawPost();  // POST /api/config-raw
+    void handleApiConfigLock();     // POST /api/config-lock
+
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
     void handleOTAPage();
@@ -88,6 +97,7 @@ public:
     void setSmbStateManager(UploadStateManager* sm);
     void setWiFiManager(WiFiManager* wifi);
     void setTrafficMonitor(TrafficMonitor* tm);
+    void setSdManager(SDCardManager* sd);
 
     // Zero-heap status snapshot — call from main loop every ~2-3 s
     void updateStatusSnapshot();

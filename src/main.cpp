@@ -54,6 +54,10 @@ UploadState currentState = UploadState::IDLE;
 unsigned long stateEnteredAt = 0;
 unsigned long cooldownStartedAt = 0;
 bool uploadCycleHadTimeout = false;
+bool g_nothingToUpload = false;  // Set when pre-flight finds no work — skip reboot, go to cooldown
+bool g_configEditLock = false;   // Set by web UI config editor — FSM won't start new upload session
+unsigned long g_configEditLockAt = 0;  // millis() when lock was acquired
+const unsigned long CONFIG_EDIT_LOCK_TIMEOUT_MS = 30UL * 60UL * 1000UL;  // 30 min auto-expire
 
 // Monitoring mode flags
 bool monitoringRequested = false;
@@ -423,6 +427,9 @@ void setup() {
         testWebServer->setTrafficMonitor(&trafficMonitor);
         LOG_DEBUG("TrafficMonitor linked to web server");
 
+        testWebServer->setSdManager(&sdManager);
+        LOG_DEBUG("SDCardManager linked to web server for config editor");
+
         // Give web server access to the SMB state manager so updateStatusSnapshot()
         // can show folder counts from the active backend (SMB pass vs cloud pass).
         testWebServer->setSmbStateManager(uploader->getSmbStateManager());
@@ -483,7 +490,17 @@ void handleIdle() {
 void handleListening() {
     // TrafficMonitor.update() is called in main loop before FSM dispatch
     uint32_t inactivityMs = (uint32_t)config.getInactivitySeconds() * 1000UL;
-    
+
+    // Config edit lock — pause upload until user saves or cancels
+    if (g_configEditLock) {
+        if (millis() - g_configEditLockAt > CONFIG_EDIT_LOCK_TIMEOUT_MS) {
+            LOG_WARN("[FSM] Config edit lock expired (30 min) — auto-releasing");
+            g_configEditLock = false;
+        } else {
+            return;  // Hold in LISTENING — don't start upload
+        }
+    }
+
     if (trafficMonitor.isIdleFor(inactivityMs)) {
         LOGF("[FSM] %ds of bus silence confirmed", config.getInactivitySeconds());
         transitionTo(UploadState::ACQUIRING);
@@ -540,6 +557,11 @@ static void runUploadBlocking(DataFilter filter) {
             break;
         case UploadResult::ERROR:
             LOG_ERROR("[FSM] Upload error");
+            transitionTo(UploadState::RELEASING);
+            break;
+        case UploadResult::NOTHING_TO_DO:
+            LOG("[FSM] Nothing to upload — entering cooldown (no reboot)");
+            g_nothingToUpload = true;
             transitionTo(UploadState::RELEASING);
             break;
     }
@@ -654,6 +676,11 @@ void handleUploading() {
                 LOG_ERROR("[FSM] Upload error occurred");
                 transitionTo(UploadState::RELEASING);
                 break;
+            case UploadResult::NOTHING_TO_DO:
+                LOG("[FSM] Nothing to upload — releasing SD and entering cooldown (no reboot)");
+                g_nothingToUpload = true;
+                transitionTo(UploadState::RELEASING);
+                break;
         }
     }
     // else: task still running — return immediately (non-blocking)
@@ -673,21 +700,24 @@ void handleReleasing() {
         return;
     }
 
-    // TLS heap fragmentation check: the cloud TLS session permanently fragments heap,
-    // dropping max_alloc from ~47 KB to ~38.9 KB.  SD_MMC mount fails below ~45 KB
-    // contiguous, making all subsequent upload cycles fail.  A clean reboot restores
-    // the full contiguous heap without losing any state (files already saved).
-    const uint32_t SD_MOUNT_MIN_ALLOC = 45000;
-    uint32_t maxAlloc = ESP.getMaxAllocHeap();
-    if (maxAlloc < SD_MOUNT_MIN_ALLOC) {
-        LOGF("[FSM] Heap fragmented post-upload (max_alloc=%u < %u) — fast-reboot to restore heap",
-             maxAlloc, SD_MOUNT_MIN_ALLOC);
-        delay(200);
-        esp_restart();
+    // If nothing was uploaded, skip the reboot and go straight to cooldown.
+    // This prevents an endless reboot cycle when all backends are already synced.
+    if (g_nothingToUpload) {
+        g_nothingToUpload = false;
+        LOGF("[FSM] Nothing to upload — entering cooldown without reboot (fh=%u ma=%u)",
+             (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+        cooldownStartedAt = millis();
+        transitionTo(UploadState::COOLDOWN);
+        return;
     }
 
-    cooldownStartedAt = millis();
-    transitionTo(UploadState::COOLDOWN);
+    // Otherwise always soft-reboot after a real upload session.
+    // A clean reboot restores the full contiguous heap and keeps the FSM simple.
+    // The fast-boot path (ESP_RST_SW) skips cold-boot delays.
+    LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
+         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    delay(200);
+    esp_restart();
 }
 
 void handleCooldown() {

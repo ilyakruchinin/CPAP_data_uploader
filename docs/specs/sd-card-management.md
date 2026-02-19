@@ -3,6 +3,13 @@
 ## Overview
 The SD Card Manager (`SDCardManager.cpp/.h`) provides exclusive access control to the SD card, coordinating between the CPAP machine and the uploader. Implements safe handoff mechanisms and ensures reliable operation.
 
+## Hardware Architecture (SD-WIFI-PRO)
+The SD-WIFI-PRO board contains a **built-in 8GB flash** that acts as the SD card for both the CPAP machine and the ESP32. A single-control-pin **analog bus MUX** (GPIO 26) switches the SDIO bus between:
+- **GPIO 26 LOW** (`SD_SWITCH_ESP_VALUE`): ESP32 SDIO ↔ 8GB flash (ESP32 has access)
+- **GPIO 26 HIGH** (`SD_SWITCH_CPAP_VALUE`): SD card fingers (CPAP slot) ↔ 8GB flash (CPAP has access)
+
+The MUX physically isolates both sides when not selected, so ESP32's SDIO pin state does not affect CPAP access after the switch. The MUX settle delay in `setControlPin()` is 300ms to ensure stable handoff and give the CPAP time to reinitialize its SD driver after regaining access.
+
 ## Core Responsibilities
 
 ### Exclusive Access Control
@@ -60,7 +67,7 @@ void releaseControl() {
 ### Timing Parameters
 - `EXCLUSIVE_ACCESS_MINUTES`: Maximum uploader hold time (default: 5)
 - `COOLDOWN_MINUTES`: Minimum pause between sessions (default: 10)
-- `INACTIVITY_SECONDS`: Required silence before access (default: 125)
+- `INACTIVITY_SECONDS`: Required silence before access (default: 62)
 
 ### Hardware Configuration
 - **Pin mapping**: SD_CLK, SD_CMD, SD_D0 pins
@@ -229,7 +236,7 @@ bool shouldReleaseForActivity() {
 ```ini
 EXCLUSIVE_ACCESS_MINUTES = 5
 COOLDOWN_MINUTES = 10
-INACTIVITY_SECONDS = 125
+INACTIVITY_SECONDS = 62
 ```
 
 ### Conservative Settings

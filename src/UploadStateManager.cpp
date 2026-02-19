@@ -208,7 +208,7 @@ void UploadStateManager::md5ToHex(const uint8_t md5[16], char out[33]) {
 
 int UploadStateManager::findCompletedIndex(DayKey day) const {
     for (uint16_t i = 0; i < completedCount; ++i) {
-        if (completedFolders[i] == day) {
+        if (completedFolders[i].day == day) {
             return (int)i;
         }
     }
@@ -242,27 +242,30 @@ void UploadStateManager::queueEvent(const JournalEvent& event) {
 }
 
 bool UploadStateManager::addCompletedInternal(DayKey day, bool queue) {
-    if (day == 0) {
-        return false;
-    }
     if (findCompletedIndex(day) >= 0) {
-        return true;
+        return false;  // Already exists
     }
 
     if (completedCount >= MAX_COMPLETED_FOLDERS) {
-        memmove(&completedFolders[0], &completedFolders[1], sizeof(DayKey) * (MAX_COMPLETED_FOLDERS - 1));
-        completedCount = MAX_COMPLETED_FOLDERS - 1;
+        // Remove oldest entry (at index 0)
+        if (completedCount > 1) {
+            memmove(&completedFolders[0], &completedFolders[1], 
+                    sizeof(CompletedFolderEntry) * (completedCount - 1));
+        }
+        completedCount--;
         forceCompaction = true;
     }
 
-    completedFolders[completedCount++] = day;
+    completedFolders[completedCount].day = day;
+    completedCount++;
 
     if (queue) {
-        JournalEvent ev = {};
-        ev.type = JournalEventType::AddCompleted;
-        ev.day = day;
-        queueEvent(ev);
+        JournalEvent event = {};
+        event.type = JournalEventType::AddCompleted;
+        event.day = day;
+        queueEvent(event);
     }
+
     return true;
 }
 
@@ -273,7 +276,7 @@ bool UploadStateManager::removeCompletedInternal(DayKey day, bool queue) {
     }
 
     if ((uint16_t)idx < (completedCount - 1)) {
-        memmove(&completedFolders[idx], &completedFolders[idx + 1], sizeof(DayKey) * (completedCount - idx - 1));
+        memmove(&completedFolders[idx], &completedFolders[idx + 1], sizeof(CompletedFolderEntry) * (completedCount - idx - 1));
     }
     completedCount--;
 
@@ -524,6 +527,13 @@ void UploadStateManager::markFolderCompleted(const String& folderName) {
 
     if (currentRetryFolderDay == day) {
         clearCurrentRetry();
+    }
+}
+
+void UploadStateManager::removeFileEntriesForPaths(const std::vector<String>& filePaths) {
+    for (const String& path : filePaths) {
+        PathHash h = hashPath(path);
+        removeFileEntry(h, true);
     }
 }
 
@@ -849,8 +859,9 @@ bool UploadStateManager::applySnapshotLine(const char* line) {
     }
 
     if (strncmp(line, "C|", 2) == 0) {
+        // Format: C|day  (extra fields from older snapshot formats are silently ignored)
         char dayToken[16] = {0};
-        if (sscanf(line, "C|%15s", dayToken) == 1) {
+        if (sscanf(line, "C|%15[^|\n]", dayToken) == 1) {
             DayKey day = 0;
             if (parseDayToken(dayToken, day)) {
                 return addCompletedInternal(day, false);
@@ -1094,7 +1105,7 @@ bool UploadStateManager::compactState(fs::FS &sd) {
 
     for (uint16_t i = 0; i < completedCount; ++i) {
         char dayText[16] = {0};
-        dayKeyToChars(completedFolders[i], dayText, sizeof(dayText));
+        dayKeyToChars(completedFolders[i].day, dayText, sizeof(dayText));
         snprintf(line, sizeof(line), "C|%s", dayText);
         if (file.println(line) == 0) {
             file.close();
