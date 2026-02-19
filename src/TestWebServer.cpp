@@ -168,8 +168,9 @@ bool TestWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleSoftReboot();
     });
-    server->on("/api/config-raw", HTTP_GET,  [this]() { this->handleApiConfigRawGet(); });
-    server->on("/api/config-raw", HTTP_POST, [this]() { this->handleApiConfigRawPost(); });
+    server->on("/api/config-raw",  HTTP_GET,  [this]() { this->handleApiConfigRawGet(); });
+    server->on("/api/config-raw",  HTTP_POST, [this]() { this->handleApiConfigRawPost(); });
+    server->on("/api/config-lock", HTTP_POST, [this]() { this->handleApiConfigLock(); });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -747,6 +748,46 @@ void TestWebServer::handleApiConfigRawPost() {
     if (tookControl) sdManager->releaseControl();
     LOG("[TestWebServer] config.txt updated via web UI");
     server->send(200, "application/json", "{\"ok\":true,\"message\":\"Saved. Reboot to apply.\"}");
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/config-lock — acquire or release the config edit lock
+// Body: {"lock":true} or {"lock":false}
+// While held, the FSM will not start a new upload session.
+// Auto-expires after 30 minutes (CONFIG_EDIT_LOCK_TIMEOUT_MS in main.cpp).
+// ---------------------------------------------------------------------------
+void TestWebServer::handleApiConfigLock() {
+    addCorsHeaders(server);
+    server->sendHeader("Cache-Control", "no-store");
+    server->sendHeader("Connection", "close");
+
+    String body = server->arg("plain");
+    bool lock;
+    if (body.indexOf("true") >= 0) {
+        lock = true;
+    } else if (body.indexOf("false") >= 0) {
+        lock = false;
+    } else {
+        server->send(400, "application/json", "{\"error\":\"Body must contain 'true' or 'false'\"}");
+        return;
+    }
+
+    if (lock && isUploadInProgress()) {
+        server->send(409, "application/json",
+                     "{\"error\":\"Upload in progress — cannot lock config now\",\"locked\":false}");
+        return;
+    }
+
+    g_configEditLock = lock;
+    if (lock) {
+        g_configEditLockAt = millis();
+        LOG("[TestWebServer] Config edit lock ACQUIRED — upload FSM paused");
+        server->send(200, "application/json", "{\"ok\":true,\"locked\":true}");
+    } else {
+        g_configEditLockAt = 0;
+        LOG("[TestWebServer] Config edit lock RELEASED — upload FSM resumed");
+        server->send(200, "application/json", "{\"ok\":true,\"locked\":false}");
+    }
 }
 
 // Set WiFi manager reference

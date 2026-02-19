@@ -129,6 +129,17 @@ const char* getMainPageHtml() {
 - `GET /reset-state` - Clear upload history
 - `GET /soft-reboot` - Restart with fast-boot
 - `POST /ota` - Firmware update (OTA builds only)
+- `GET /api/config-raw` - Read raw `config.txt` from SD card
+- `POST /api/config-raw` - Write new `config.txt` content (max 4096 bytes, atomic rename)
+- `POST /api/config-lock` - Acquire or release the config edit lock (body: `{"lock":true/false}`)
+
+### Config Edit Lock (`/api/config-lock`)
+Prevents the FSM from starting new upload sessions while the user edits `config.txt` in the web UI. Automatically expires after **30 minutes** if not released. Rejected (HTTP 409) if an upload is currently in progress.
+
+Flow:
+1. User clicks **Edit** → `POST /api/config-lock {"lock":true}` → FSM paused, textarea unlocked
+2. User edits, then clicks **Save** or **Save & Reboot** → config written atomically → `POST /api/config-lock {"lock":false}` → FSM resumed
+3. **Cancel** → `POST /api/config-lock {"lock":false}` → FSM resumed, no write
 
 ### Monitoring Endpoints
 - `GET /monitor` - SD activity status JSON

@@ -7,6 +7,7 @@ Automatically upload CPAP therapy data from your SD card to network storage or t
 ## Table of Contents
 - [⚠️ Breaking Change in v0.8.0](#️-breaking-change-in-v080)
 - [🚀 Quick Start](#-quick-start)
+- [🚨 SD Card Errors? Use Scheduled Mode](#-sd-card-errors-use-scheduled-mode)
 - [Features](#features)
 - [Hardware Requirements](#hardware-requirements)
 - [Getting Started (End Users)](#getting-started-end-users)
@@ -95,6 +96,22 @@ CLOUD_CLIENT_SECRET = your-client-secret
 ---
 
 **That's it!** Insert the SD card in your CPAP machine and you're done. Everything else has smart defaults.
+
+---
+
+## 🚨 SD Card Errors? Use Scheduled Mode
+
+> **If your CPAP machine shows an "SD Card Error" or "SD Card Removed" message, add these lines to your `config.txt` immediately:**
+
+```ini
+UPLOAD_MODE = scheduled
+UPLOAD_START_HOUR = 9
+UPLOAD_END_HOUR = 23
+```
+
+The default `smart` mode uses SD bus activity detection to determine when it is safe to take the card. On some CPAP models this detection may not work reliably, causing the uploader to take the card at the wrong moment. **Scheduled mode avoids this entirely** — it only uploads during the window you configure (e.g. while you're awake), never during sleep.
+
+> Set `UPLOAD_START_HOUR` / `UPLOAD_END_HOUR` to hours when you are typically awake and not using the CPAP. See the [full guide](release/README.md#️-sd-card-errors--use-scheduled-mode) for details.
 
 ---
 

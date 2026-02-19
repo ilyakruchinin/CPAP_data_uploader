@@ -60,6 +60,17 @@ void handleReleasing() {
 - FSM sets `g_nothingToUpload = true` and transitions to `RELEASING`
 - `RELEASING` state then skips the reboot and enters `COOLDOWN` instead
 
+### Config Edit Lock (`g_configEditLock`)
+```cpp
+bool g_configEditLock = false;          // set via POST /api/config-lock
+unsigned long g_configEditLockAt = 0;  // millis() when lock acquired
+const unsigned long CONFIG_EDIT_LOCK_TIMEOUT_MS = 30 * 60 * 1000;  // 30 min
+```
+- When `true`, `handleListening()` returns early and does NOT transition to `ACQUIRING` — FSM stays in `LISTENING` until lock is released or expires
+- Auto-expires after 30 minutes to prevent accidentally blocking uploads forever
+- Cannot be acquired while an upload is in progress (HTTP 409 from `/api/config-lock`)
+- Released automatically after a successful Save or Save & Reboot from the web UI
+
 ### Upload Modes
 - **Smart Mode**: Continuous loop, uploads recent data anytime, old data only in upload window
 - **Scheduled Mode**: Only uploads within configured time window, enters IDLE between windows

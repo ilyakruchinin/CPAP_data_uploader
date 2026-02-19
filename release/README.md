@@ -663,6 +663,26 @@ The firmware includes an optional test web server for development and troublesho
 - Verify router allows device to access internet
 - Check firewall settings
 
+### ⚠️ SD Card Errors — Use Scheduled Mode
+
+> **If your CPAP machine is showing "SD Card Error" or "SD Card Removed" messages, switch to `UPLOAD_MODE = scheduled` immediately.**
+
+The default `smart` upload mode detects SD bus activity to decide when it is safe to take the card. On some CPAP models or firmware versions the activity detection may not work correctly, causing the uploader to take the SD card at the wrong moment. This results in your CPAP displaying an SD card error.
+
+**Fix:**
+
+```ini
+UPLOAD_MODE = scheduled
+UPLOAD_START_HOUR = 9
+UPLOAD_END_HOUR = 23
+```
+
+In scheduled mode the uploader **only runs during the configured window** (e.g. 9 AM–11 PM) and completely avoids uploading while you sleep. This eliminates any possibility of conflicting with your CPAP at night.
+
+> **Tip:** Set `UPLOAD_START_HOUR` and `UPLOAD_END_HOUR` to cover the hours when you are typically awake and not using the CPAP machine.
+
+---
+
 ### SD Card Issues
 
 **SD card not detected**
