@@ -52,6 +52,16 @@ Three compounding root causes were diagnosed and fixed. Each caused the device t
 
 ---
 
+### 🪵 Log Tab — Trailing Empty Lines on Every Poll
+
+**Symptom**: The "N lines buffered" counter incremented by 1 every 3 seconds even when the device was idle and no new log lines were produced.
+
+**Cause**: Server responses always end with blank lines. `lastSeenLine` tracks the last *non-empty* line, so `slice(lastSeenPos+1)` returned those trailing empty strings as "new" on every poll.
+
+**Fix**: Trailing empty/whitespace-only lines are now stripped from `newLines` before appending to `clientLogBuf`.
+
+---
+
 ### 📋 Log Tab — Copy to Clipboard Button
 
 Added a **"Copy to clipboard"** button in the Logs tab that exports the entire client-side log buffer as plain text (works with both modern Clipboard API and legacy `execCommand` fallback).
