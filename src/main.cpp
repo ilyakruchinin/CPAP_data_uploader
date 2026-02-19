@@ -55,6 +55,9 @@ unsigned long stateEnteredAt = 0;
 unsigned long cooldownStartedAt = 0;
 bool uploadCycleHadTimeout = false;
 bool g_nothingToUpload = false;  // Set when pre-flight finds no work — skip reboot, go to cooldown
+bool g_configEditLock = false;   // Set by web UI config editor — FSM won't start new upload session
+unsigned long g_configEditLockAt = 0;  // millis() when lock was acquired
+const unsigned long CONFIG_EDIT_LOCK_TIMEOUT_MS = 30UL * 60UL * 1000UL;  // 30 min auto-expire
 
 // Monitoring mode flags
 bool monitoringRequested = false;
@@ -487,7 +490,17 @@ void handleIdle() {
 void handleListening() {
     // TrafficMonitor.update() is called in main loop before FSM dispatch
     uint32_t inactivityMs = (uint32_t)config.getInactivitySeconds() * 1000UL;
-    
+
+    // Config edit lock — pause upload until user saves or cancels
+    if (g_configEditLock) {
+        if (millis() - g_configEditLockAt > CONFIG_EDIT_LOCK_TIMEOUT_MS) {
+            LOG_WARN("[FSM] Config edit lock expired (30 min) — auto-releasing");
+            g_configEditLock = false;
+        } else {
+            return;  // Hold in LISTENING — don't start upload
+        }
+    }
+
     if (trafficMonitor.isIdleFor(inactivityMs)) {
         LOGF("[FSM] %ds of bus silence confirmed", config.getInactivitySeconds());
         transitionTo(UploadState::ACQUIRING);

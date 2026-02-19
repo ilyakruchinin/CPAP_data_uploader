@@ -23,6 +23,10 @@ extern volatile bool g_softRebootFlag;
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
 
+// Config edit lock — set by web UI to pause FSM uploads while user edits config
+extern bool g_configEditLock;
+extern unsigned long g_configEditLockAt;
+
 class TestWebServer {
 private:
     WebServer* server;
@@ -57,6 +61,7 @@ private:
     void handleMonitorPage();
     void handleApiConfigRawGet();   // GET /api/config-raw
     void handleApiConfigRawPost();  // POST /api/config-raw
+    void handleApiConfigLock();     // POST /api/config-lock
 
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers

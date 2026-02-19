@@ -14,10 +14,15 @@ Each upload session runs **exactly one backend** (SMB or Cloud), selected by cyc
 5. **Soft reboot** — FSM always reboots after releasing the SD card, restoring heap
 
 ### Pre-flight Scans
-Before writing the session-start timestamp (and before any network activity), performs SD-only scans across **all configured backends**:
+Before writing the session-start timestamp (and before any network activity), performs SD-only scans across **all configured backends**. Uses a **dedicated `preflightFolderHasWork()`** instead of `scanDatalogFolders()` to avoid a critical false-positive:
+
+> `scanDatalogFolders()` always returns recently-completed folders for rescanning. If used naively in the pre-flight, it would make `hasWork=true` on every boot — causing endless reboots even when all data is synced.
+
 ```cpp
-bool smbWork   = checkHasWork(smbStateManager);
-bool cloudWork = checkHasWork(cloudStateManager);
+// preflightFolderHasWork() logic:
+// 1. Genuinely incomplete folder (not completed, not pending) → true immediately
+// 2. Recently-completed folder → scan files; true only if ≥1 file changed size
+// 3. Old completed or pending (empty) folder → skip (no work)
 if (!smbWork && !cloudWork) {
     return UploadResult::NOTHING_TO_DO;  // → FSM enters COOLDOWN, no reboot
 }

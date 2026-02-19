@@ -256,21 +256,60 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     // ── Pre-flight: check every configured backend for pending work ──────────
     // Do this BEFORE writing the session-start summary so we don't advance the
     // cycling pointer when there is genuinely nothing to upload.  The scan is
-    // SD-only (no network) and is fast.
+    // SD-only (no network) and must NOT call scanDatalogFolders() because that
+    // function always includes recently-completed folders (for rescan), which
+    // would cause a false positive every boot and trigger endless reboots.
     {
         static const char* rootPaths[] = {
             "/Identification.json", "/Identification.crc",
             "/Identification.tgt",  "/STR.edf"
         };
+
+        // Dedicated pre-flight folder check:
+        //  - Genuinely incomplete folder (not completed, not pending) → work
+        //  - Recently-completed folder → only work if ≥1 file has changed
+        //  - Old completed or pending (empty) folder → no work
+        auto preflightFolderHasWork = [&](UploadStateManager* sm) -> bool {
+            File root = sd.open("/DATALOG");
+            if (!root || !root.isDirectory()) return false;
+            File entry = root.openNextFile();
+            while (entry) {
+                if (entry.isDirectory()) {
+                    String name = String(entry.name());
+                    int sl = name.lastIndexOf('/');
+                    if (sl >= 0) name = name.substring(sl + 1);
+
+                    if (!sm->isFolderCompleted(name) && !sm->isPendingFolder(name)) {
+                        // Genuinely incomplete — real work exists
+                        entry.close(); root.close(); return true;
+                    }
+                    if (sm->isFolderCompleted(name) && isRecentFolder(name)) {
+                        // Recently completed but CPAP may have extended files.
+                        // Check each file for changes (size comparison only).
+                        String folderPath = "/DATALOG/" + name;
+                        auto files = scanFolderFiles(sd, folderPath);
+                        for (const String& fp : files) {
+                            if (sm->hasFileChanged(sd, fp)) {
+                                entry.close(); root.close(); return true;
+                            }
+                        }
+                    }
+                }
+                entry.close();
+                entry = root.openNextFile();
+            }
+            root.close();
+            return false;
+        };
+
         auto checkHasWork = [&](UploadStateManager* sm) -> bool {
             if (!sm) return false;
-            // Folder work?
-            if (!scanDatalogFolders(sd, sm).empty()) return true;
-            // Mandatory root file changed?
+            if (preflightFolderHasWork(sm)) return true;
+            // Mandatory root files changed?
             for (const char* p : rootPaths) {
                 if (sd.exists(p) && sm->hasFileChanged(sd, p)) return true;
             }
-            // SETTINGS directory?
+            // SETTINGS directory changed?
             auto sf = scanSettingsFiles(sd);
             for (const String& f : sf) {
                 if (sm->hasFileChanged(sd, f)) return true;
