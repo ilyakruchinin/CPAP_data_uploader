@@ -279,15 +279,32 @@ void TestWebServer::handleRoot() {
 // GET /trigger-upload - Force immediate upload
 void TestWebServer::handleTriggerUpload() {
     LOG("[TestWebServer] Upload trigger requested via web interface");
-    
-    // Set global trigger flag
+
+    // Scheduled mode: reject trigger outside the upload window.
+    // Triggering outside the window would acquire the SD card (CPAP may be writing),
+    // do nothing (canUploadFreshData/canUploadOldData both false), then reboot — harmful.
+    if (scheduleManager && !scheduleManager->isSmartMode()) {
+        if (!scheduleManager->isInUploadWindow()) {
+            addCorsHeaders(server);
+            int startHour = scheduleManager->getUploadStartHour();
+            int endHour   = scheduleManager->getUploadEndHour();
+            char json[256];
+            snprintf(json, sizeof(json),
+                "{\"status\":\"scheduled\",\"message\":"
+                "\"Scheduled mode: uploads only between %02d:00 and %02d:00. "
+                "Switch to Smart mode for anytime uploads.\"}",
+                startHour, endHour);
+            server->send(200, "application/json", json);
+            return;
+        }
+    }
+
+    // Set global trigger flag — FSM picks this up in the next loop iteration
     g_triggerUploadFlag = true;
-    
-    // Add CORS headers
+
     addCorsHeaders(server);
-    
-    String response = "{\"status\":\"success\",\"message\":\"Upload triggered. Check serial output for progress.\"}";
-    server->send(200, "application/json", response);
+    server->send(200, "application/json",
+        "{\"status\":\"success\",\"message\":\"Upload triggered. Check serial output for progress.\"}");
 }
 
 // GET /status - JSON status information (Legacy - Removed, use handleApiStatus)
@@ -605,7 +622,6 @@ void TestWebServer::initConfigSnapshot() {
         ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
         ",\"gmt_offset_hours\":%d,\"max_days\":%d"
         ",\"cloud_configured\":%s"
-        ",\"boot_delay_seconds\":%d"
         ",\"firmware\":\"%s\"}",
         config->getWifiSSID().c_str(),
         config->getHostname().c_str(),
@@ -617,7 +633,6 @@ void TestWebServer::initConfigSnapshot() {
         config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),
         config->getGmtOffsetHours(), config->getMaxDays(),
         hasCloud ? "true" : "false",
-        config->getBootDelaySeconds(),
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webConfigBuf, buf, n + 1);

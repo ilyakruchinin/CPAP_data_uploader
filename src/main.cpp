@@ -199,44 +199,46 @@ void setup() {
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
 
-    // Smart Boot Delay — skipped on any programmatic restart (ESP_RST_SW).
-    // CPAP was already idle and voltages were stable, so the stabilization
-    // delay and Smart Wait add no value. Power-on, brownout, and watchdog
-    // resets all use distinct reason codes and still do the full wait.
+    // Determine boot type: software reset (ESP_RST_SW) = soft-reboot / FastBoot.
+    // Cold boots (power-on, brownout, watchdog) use distinct reason codes.
     g_heapRecoveryBoot = (esp_reset_reason() == ESP_RST_SW);
     bool fastBoot = g_heapRecoveryBoot;
-    if (fastBoot) {
-        LOG("[FastBoot] Software reset — skipping stabilization + Smart Wait");
-    } else {
-        // 1. Wait 2 seconds unconditionally for voltage stabilization and CPAP boot start
-        LOG("Waiting 2s for electrical stabilization...");
-        delay(2000);
 
-        // 2. Wait for bus silence (CPAP finished initial card checks)
-        // We look for 3 seconds of continuous silence, with a max timeout of 20 seconds
+    // Smart Wait constants — same values for both cold and soft-reboot.
+    // 5 s of continuous SD bus silence required; give up after 45 s max.
+    const unsigned long SMART_WAIT_MAX_MS      = 45000;
+    const unsigned long SMART_WAIT_REQUIRED_MS =  5000;
+
+    auto runSmartWait = [&]() {
         LOG("Checking for CPAP SD card activity (Smart Wait)...");
-
         unsigned long waitStart = millis();
-        const unsigned long MAX_WAIT_MS = 20000;     // Max time to wait in this phase
-        const unsigned long REQUIRED_IDLE_MS = 3000; // Required silence duration
         bool busIsQuiet = false;
-
-        while (millis() - waitStart < MAX_WAIT_MS) {
-            trafficMonitor.update(); // Update activity stats
-
-            // Feed watchdog to prevent resets during long waits
+        while (millis() - waitStart < SMART_WAIT_MAX_MS) {
+            trafficMonitor.update();
             delay(10);
-
-            if (trafficMonitor.isIdleFor(REQUIRED_IDLE_MS)) {
-                LOGF("Bus silence detected (%dms) - CPAP is idle", REQUIRED_IDLE_MS);
+            if (trafficMonitor.isIdleFor(SMART_WAIT_REQUIRED_MS)) {
+                LOGF("Smart Wait: %lums of bus silence — CPAP is idle", SMART_WAIT_REQUIRED_MS);
                 busIsQuiet = true;
                 break;
             }
         }
-
         if (!busIsQuiet) {
-            LOG_WARN("Smart wait timed out - bus still active, but proceeding anyway");
+            LOG_WARN("Smart Wait timed out — bus still active, proceeding anyway");
         }
+    };
+
+    if (fastBoot) {
+        // Soft-reboot: voltages already stable, skip 15 s electrical stabilization.
+        // Smart Wait still runs — CPAP may have been mid-access when the reboot
+        // was triggered and we must wait for it to finish before touching the SD card.
+        LOG("[FastBoot] Software reset — skipping 15s electrical stabilization");
+        runSmartWait();
+    } else {
+        // Cold boot: wait for power-rail stabilization and CPAP boot sequence to settle,
+        // then wait for SD bus silence before attempting to take SD card control.
+        LOG("Waiting 15s for electrical stabilization...");
+        delay(15000);
+        runSmartWait();
     }
     
     LOG("Boot delay complete, attempting SD card access...");
