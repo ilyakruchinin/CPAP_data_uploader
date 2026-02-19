@@ -283,17 +283,27 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                     int sl = name.lastIndexOf('/');
                     if (sl >= 0) name = name.substring(sl + 1);
 
-                    if (!sm->isFolderCompleted(name) && !sm->isPendingFolder(name)) {
+                    bool completed = sm->isFolderCompleted(name);
+                    bool pending   = sm->isPendingFolder(name);
+                    bool recent    = isRecentFolder(name);
+                    LOGF("[FileUploader] Pre-flight scan: folder=%s completed=%d pending=%d recent=%d",
+                         name.c_str(), completed, pending, recent);
+
+                    if (!completed && !pending) {
                         // Genuinely incomplete — real work exists
+                        LOGF("[FileUploader] Pre-flight: WORK — folder %s not completed/pending",
+                             name.c_str());
                         entry.close(); root.close(); return true;
                     }
-                    if (sm->isFolderCompleted(name) && isRecentFolder(name)) {
+                    if (completed && recent) {
                         // Recently completed but CPAP may have extended files.
                         // Check each file for changes (size comparison only).
                         String folderPath = "/DATALOG/" + name;
                         auto files = scanFolderFiles(sd, folderPath);
                         for (const String& fp : files) {
                             if (sm->hasFileChanged(sd, fp)) {
+                                LOGF("[FileUploader] Pre-flight: WORK — file changed: %s",
+                                     fp.c_str());
                                 entry.close(); root.close(); return true;
                             }
                         }
