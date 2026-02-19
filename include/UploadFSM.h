@@ -1,7 +1,7 @@
 #ifndef UPLOAD_FSM_H
 #define UPLOAD_FSM_H
 
-// Upload FSM states — shared between main.cpp and TestWebServer
+// Upload FSM states — shared between main.cpp and WebServer
 enum class UploadState {
     IDLE,
     LISTENING,

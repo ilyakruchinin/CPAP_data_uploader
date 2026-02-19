@@ -583,7 +583,7 @@ Add `getSamplesJSON(int maxSamples)` method to serialize recent samples for the 
 
 ### 7.2 Web Endpoints
 
-**TestWebServer.cpp** additions:
+**WebServer.cpp** additions:
 
 1. `POST /api/monitor/start` → sets `g_monitorActivityFlag = true`
 2. `POST /api/monitor/stop` → sets `g_stopMonitorFlag = true`
@@ -607,7 +607,7 @@ Add a monitor section to the existing web interface (or a dedicated `/monitor` p
 - Threshold indicator: "Would trigger upload: Yes/No"
 - "Stop Monitoring" button → POST /api/monitor/stop
 
-Implementation: embedded HTML in TestWebServer.cpp (same pattern as existing pages),
+Implementation: embedded HTML in WebServer.cpp (same pattern as existing pages),
 using JavaScript fetch() for polling.
 
 ### 7.4 Test
@@ -637,7 +637,7 @@ using JavaScript fetch() for polling.
 | `include/SDCardManager.h` | No changes | 5 |
 | `src/SDCardManager.cpp` | Modify: remove digitalRead check | 5 |
 | `src/main.cpp` | Modify: major rewrite of loop(), MONITORING state | 6 |
-| `src/TestWebServer.cpp` | Modify: FSM state in /status, monitor endpoints + UI | 6, 7 |
+| `src/WebServer.cpp` | Modify: FSM state in /status, monitor endpoints + UI | 6, 7 |
 | `include/CPAPMonitor.h` | Modify: integrate TrafficMonitor or remove stub | 6 |
 
 ---

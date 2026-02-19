@@ -568,7 +568,7 @@ Usually `/dev/ttyUSB0` or `/dev/ttyACM0`
 
 ## Test Web Server (Optional)
 
-The firmware includes an optional test web server for development and troubleshooting.
+The firmware includes an optional web server for development and troubleshooting.
 
 ### Accessing the Web Interface
 

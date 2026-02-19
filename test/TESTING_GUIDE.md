@@ -268,14 +268,14 @@ If tests hang or crash:
 - Look for null pointer dereferences
 - Use `Serial.println()` to add debug output
 
-## Hardware Testing with TestWebServer
+## Hardware Testing with WebServer
 
-For hardware testing, the TestWebServer can be enabled to test uploads on-demand:
+For hardware testing, the WebServer can be enabled to test uploads on-demand:
 
 1. **Enable the feature** in `platformio.ini`:
    ```ini
    build_flags = 
-       -DENABLE_TEST_WEBSERVER
+       -DENABLE_WEBSERVER
    ```
 
 2. **Build and upload**:
@@ -305,9 +305,9 @@ For hardware testing, the TestWebServer can be enabled to test uploads on-demand
    curl http://192.168.1.100/logs
    ```
 
-5. **Disable for production** - Comment out `-DENABLE_TEST_WEBSERVER` before deploying
+5. **Disable for production** - Comment out `-DENABLE_WEBSERVER` before deploying
 
-**⚠️ Security Note:** The test web server has no authentication. Only enable it on trusted networks during development/testing.
+**⚠️ Security Note:** The web server has no authentication. Only enable it on trusted networks during development/testing.
 
 ## Further Reading
 

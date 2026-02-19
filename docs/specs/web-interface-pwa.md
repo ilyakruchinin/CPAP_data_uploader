@@ -1,7 +1,7 @@
 # Web Interface (Progressive Web App)
 
 ## Overview
-The Web Interface (`TestWebServer.cpp/.h` + `web_ui.h`) provides a Progressive Web App (PWA) for monitoring and controlling the CPAP uploader. Features pre-allocated buffers to prevent heap fragmentation and auto-refreshing real-time updates.
+The Web Interface (`WebServer.cpp/.h` + `web_ui.h`) provides a Progressive Web App (PWA) for monitoring and controlling the CPAP uploader. Features pre-allocated buffers to prevent heap fragmentation and auto-refreshing real-time updates.
 
 ## Architecture
 

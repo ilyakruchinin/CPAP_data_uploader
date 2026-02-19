@@ -24,8 +24,8 @@ bool g_heapRecoveryBoot = false;
 #include "OTAManager.h"
 #endif
 
-#ifdef ENABLE_TEST_WEBSERVER
-#include "TestWebServer.h"
+#ifdef ENABLE_WEBSERVER
+#include "CpapWebServer.h"
 #include "CPAPMonitor.h"
 #endif
 
@@ -42,8 +42,8 @@ TrafficMonitor trafficMonitor;
 OTAManager otaManager;
 #endif
 
-#ifdef ENABLE_TEST_WEBSERVER
-TestWebServer* testWebServer = nullptr;
+#ifdef ENABLE_WEBSERVER
+CpapWebServer* webServer = nullptr;
 CPAPMonitor* cpapMonitor = nullptr;
 #endif
 
@@ -102,12 +102,12 @@ const unsigned long LOG_DUMP_INTERVAL_MS = 10 * 1000;  // 10 seconds
 // Gates [res fh= ma= fd=] heap suffix on all log lines and verbose pre-flight output.
 bool g_debugMode = false;
 
-#ifdef ENABLE_TEST_WEBSERVER
-// External trigger flags (defined in TestWebServer.cpp)
+#ifdef ENABLE_WEBSERVER
+// External trigger flags (defined in WebServer.cpp)
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
 
-// Monitoring trigger flags (defined in TestWebServer.cpp)
+// Monitoring trigger flags (defined in WebServer.cpp)
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
 #endif
@@ -401,7 +401,7 @@ void setup() {
         lastNtpSyncAttempt = millis();
     }
 
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
     // Initialize CPAP monitor
 #ifdef ENABLE_CPAP_MONITOR
     LOG("Initializing CPAP SD card usage monitor...");
@@ -413,48 +413,48 @@ void setup() {
     cpapMonitor = new CPAPMonitor();  // Use stub implementation
 #endif
     
-    // Initialize test web server for on-demand testing
-    LOG("Initializing test web server...");
+    // Initialize web server
+    LOG("Initializing web server...");
     
-    // Create test web server with references to uploader's internal components
-    testWebServer = new TestWebServer(&config, 
+    // Create web server with references to uploader's internal components
+    webServer = new CpapWebServer(&config, 
                                       uploader->getStateManager(),
                                       uploader->getScheduleManager(),
                                       &wifiManager,
                                       cpapMonitor);
     
-    if (testWebServer->begin()) {
-        LOG("Test web server started successfully");
+    if (webServer->begin()) {
+        LOG("Web server started successfully");
         LOGF("Access web interface at: http://%s", wifiManager.getIPAddress().c_str());
         
 #ifdef ENABLE_OTA_UPDATES
         // Set OTA manager reference in web server
-        testWebServer->setOTAManager(&otaManager);
+        webServer->setOTAManager(&otaManager);
         LOG_DEBUG("OTA manager linked to web server");
 #endif
         
         // Set TrafficMonitor reference in web server for SD Activity Monitor
-        testWebServer->setTrafficMonitor(&trafficMonitor);
+        webServer->setTrafficMonitor(&trafficMonitor);
         LOG_DEBUG("TrafficMonitor linked to web server");
 
-        testWebServer->setSdManager(&sdManager);
+        webServer->setSdManager(&sdManager);
         LOG_DEBUG("SDCardManager linked to web server for config editor");
 
         // Give web server access to the SMB state manager so updateStatusSnapshot()
         // can show folder counts from the active backend (SMB pass vs cloud pass).
-        testWebServer->setSmbStateManager(uploader->getSmbStateManager());
+        webServer->setSmbStateManager(uploader->getSmbStateManager());
         
         // Set web server reference in uploader for responsive handling during uploads
         if (uploader) {
-            uploader->setWebServer(testWebServer);
+            uploader->setWebServer(webServer);
             LOG_DEBUG("Web server linked to uploader for responsive handling");
         }
 
         // Build static config snapshot once — served from g_webConfigBuf with zero heap alloc.
-        testWebServer->initConfigSnapshot();
+        webServer->initConfigSnapshot();
         LOG_DEBUG("[WebStatus] Config snapshot built");
     } else {
-        LOG_ERROR("Failed to start test web server");
+        LOG_ERROR("Failed to start web server");
     }
 #endif
 
@@ -614,7 +614,7 @@ void handleUploading() {
         
         // Disable web server handling inside upload task — main loop handles it
         // This prevents concurrent handleClient() calls from two cores
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
         uploader->setWebServer(nullptr);
 #endif
         
@@ -651,8 +651,8 @@ void handleUploading() {
             delete params;
             // Re-subscribe IDLE0 since task didn't start
             esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
-#ifdef ENABLE_TEST_WEBSERVER
-            uploader->setWebServer(testWebServer);
+#ifdef ENABLE_WEBSERVER
+            uploader->setWebServer(webServer);
 #endif
             // Fallback: run synchronously (old behavior)
             runUploadBlocking(filter);
@@ -668,8 +668,8 @@ void handleUploading() {
         esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
         
         // Restore web server handling in uploader
-#ifdef ENABLE_TEST_WEBSERVER
-        uploader->setWebServer(testWebServer);
+#ifdef ENABLE_WEBSERVER
+        uploader->setWebServer(webServer);
 #endif
         
         UploadResult result = (UploadResult)uploadTaskResult;
@@ -818,7 +818,7 @@ void loop() {
         trafficMonitor.update();
     }
 
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
     // Update CPAP monitor
 #ifdef ENABLE_CPAP_MONITOR
     if (cpapMonitor) {
@@ -827,13 +827,13 @@ void loop() {
 #endif
     
     // Handle web server requests
-    if (testWebServer) {
-        testWebServer->handleClient();
+    if (webServer) {
+        webServer->handleClient();
         // Refresh status snapshot every 3 s — assembles JSON using snprintf into
         // g_webStatusBuf (stack only, zero heap allocation).
         static unsigned long lastStatusSnapMs = 0;
         if (millis() - lastStatusSnapMs >= 3000) {
-            testWebServer->updateStatusSnapshot();
+            webServer->updateStatusSnapshot();
             lastStatusSnapMs = millis();
         }
     }

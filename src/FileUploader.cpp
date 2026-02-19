@@ -5,8 +5,8 @@
 #include <functional>
 #include <time.h>
 
-#ifdef ENABLE_TEST_WEBSERVER
-#include "TestWebServer.h"
+#ifdef ENABLE_WEBSERVER
+#include "CpapWebServer.h"
 #endif
 
 // Constructor
@@ -17,7 +17,7 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
       scheduleManager(nullptr),
       wifiManager(wifi),
       activeBackend(UploadBackend::NONE),
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
       webServer(nullptr),
 #endif
       cloudImportCreated(false),
@@ -445,7 +445,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 for (const String& folder : freshFolders) {
                     if (isTimerExpired()) { timerExpired = true; break; }
                     uploadDatalogFolderSmb(sdManager, folder);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
                     if (webServer) webServer->handleClient();
 #endif
                 }
@@ -455,7 +455,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 for (const String& folder : oldFolders) {
                     if (isTimerExpired()) { timerExpired = true; break; }
                     uploadDatalogFolderSmb(sdManager, folder);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
                     if (webServer) webServer->handleClient();
 #endif
                 }
@@ -518,7 +518,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 auto runCloudFolder = [&](const String& folder) -> bool {
                     if (isTimerExpired()) { timerExpired = true; return false; }
                     uploadDatalogFolderCloud(sdManager, folder);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
                     if (webServer) webServer->handleClient();
 #endif
                     return true;
@@ -982,7 +982,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         uploadedCount++;
         g_smbSessionStatus.filesUploaded = uploadedCount;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), smbBytes);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
     }
@@ -1153,7 +1153,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         cloudDatalogFilesUploaded++;
         g_cloudSessionStatus.filesUploaded = uploadedCount;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), cloudBytes);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
     }

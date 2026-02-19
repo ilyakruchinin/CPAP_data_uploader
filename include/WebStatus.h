@@ -4,7 +4,7 @@
 // ============================================================================
 // Zero-heap web data buffers
 // ============================================================================
-// These static char arrays are written by the main task (TestWebServer) and
+// These static char arrays are written by the main task (WebServer) and
 // served directly by web handlers — no malloc in the request/response path.
 //
 // g_webStatusBuf : rebuilt every ~3 s in the main loop via updateStatusSnapshot()
@@ -30,7 +30,7 @@ struct SessionStatus {
 extern volatile SessionStatus g_smbSessionStatus;
 extern volatile SessionStatus g_cloudSessionStatus;
 
-// Active/inactive backend summary — written by FileUploader, read by TestWebServer.
+// Active/inactive backend summary — written by FileUploader, read by WebServer.
 // Torn reads on a status display are harmless (no mutex needed).
 struct BackendSummaryStatus {
     char     name[8];          // "SMB", "CLOUD", or "NONE"
