@@ -68,7 +68,7 @@ void handleMonitor() {
 
 ### Monitoring Tools
 - **SD activity graph**: Real-time bus activity visualization
-- **Log viewer**: Recent system logs with filtering
+- **Log viewer**: Client-side persistent log buffer with reboot detection, deduplication, and copy-to-clipboard
 - **Status API**: JSON endpoint for external monitoring
 - **OTA updates**: Firmware update interface
 
@@ -115,6 +115,13 @@ const char* getMainPageHtml() {
 - **Live status**: JSON API for custom monitoring
 - **Progress tracking**: Real-time upload progress bars
 - **Manual controls**: Upload triggers, state reset, soft reboot indication
+
+### Client-side Log Buffering
+The Logs tab maintains a persistent in-browser ring buffer (up to 2000 lines) that survives page soft-reloads:
+- **Deduplication**: Each poll response is diffed against `lastSeenLine` (last non-empty line already in buffer). Only lines after `lastSeenLine` are appended — no duplicates across polls.
+- **Reboot detection**: The boot banner (`=== CPAP Data Auto-Uploader ===`) is always present in server responses (ring buffer starts from boot). A genuinely new reboot is detected only when `lastSeenLine` is absent from the response **or** appears before the boot banner. In that case a `─── DEVICE REBOOTED ───` separator is inserted. Same-boot polls are treated as normal tails.
+- **Copy to clipboard**: A "Copy to clipboard" button exports the entire buffer as plain text.
+- **Clear buffer**: Resets the buffer and `lastSeenLine` state.
 
 ## API Endpoints
 

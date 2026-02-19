@@ -14,20 +14,29 @@ Each upload session runs **exactly one backend** (SMB or Cloud), selected by cyc
 5. **Soft reboot** — FSM always reboots after releasing the SD card, restoring heap
 
 ### Pre-flight Scans
-Before writing the session-start timestamp (and before any network activity), performs SD-only scans across **all configured backends**. Uses a **dedicated `preflightFolderHasWork()`** instead of `scanDatalogFolders()` to avoid a critical false-positive:
+Before writing the session-start timestamp (and before any network activity), performs SD-only scans across **all configured backends**. Uses a **dedicated `preflightFolderHasWork()`** instead of `scanDatalogFolders()` to avoid several critical false-positive conditions that cause endless reboot loops:
 
-> `scanDatalogFolders()` always returns recently-completed folders for rescanning. If used naively in the pre-flight, it would make `hasWork=true` on every boot — causing endless reboots even when all data is synced.
+```
+preflightFolderHasWork() rules (evaluated per folder):
+  1. not completed AND not pending AND (recent OR canUploadOldData()) → WORK
+  2. completed AND recent → scan files; WORK only if ≥1 file changed size
+  3. Everything else (old completed, pending, or old incomplete outside window) → skip
+```
+
+**Critical design constraints** — three root causes of endless loops, each addressed:
+
+| Root cause | Fix |
+|---|---|
+| `scanDatalogFolders()` always includes recently-completed folders, making `hasWork=true` on every boot | Pre-flight uses dedicated `preflightFolderHasWork()` that only returns true for genuinely changed recent files |
+| Mandatory files (STR.edf, Identification.*, SETTINGS) grow every time the CPAP writes to the SD card; including them in the pre-flight check triggers a new upload session on every boot | Mandatory/settings files are **never** counted as pre-flight work — they are uploaded as a bonus during DATALOG-triggered sessions only |
+| Old incomplete folders (e.g. uploaded to Cloud but not SMB) are detected as `smb_work=1` by pre-flight, but Phase 2 of the session is gated by `canUploadOldData()` (upload window). Outside the window, pre-flight detects work that the session cannot perform → reboot → repeat | Old (`!recent`) incomplete folders in pre-flight are gated by the same `canUploadOldData()` call used in Phase 2 |
 
 ```cpp
-// preflightFolderHasWork() logic:
-// 1. Genuinely incomplete folder (not completed, not pending) → true immediately
-// 2. Recently-completed folder → scan files; true only if ≥1 file changed size
-// 3. Old completed or pending (empty) folder → skip (no work)
 if (!smbWork && !cloudWork) {
     return UploadResult::NOTHING_TO_DO;  // → FSM enters COOLDOWN, no reboot
 }
 ```
-- Returns `UploadResult::NOTHING_TO_DO` when every backend is fully synced
+- Returns `UploadResult::NOTHING_TO_DO` when every backend is fully synced (or only out-of-window old work remains)
 - The session-start summary is NOT written in this case — cycling pointer does not advance
 - FSM responds by entering `COOLDOWN` directly without an `esp_restart()`, preventing endless reboot cycles
 
@@ -44,6 +53,7 @@ if (!smbWork && !cloudWork) {
 - Backend with **oldest timestamp** is selected; ties go to SMB
 - Missing summary file → treated as ts=0 (oldest possible) so never-run backends are prioritized
 - Written at session START so the pointer advances even on crashes
+- **Redirect balancing**: when pre-flight detects that the selected backend has no work but the other backend does, it redirects to the working backend AND also writes a session-start summary for the original backend. Without this, the original backend's timestamp would stay frozen, causing it to be selected as "oldest" every boot → perpetual redirect → endless loop
 
 ### Uploaders
 - **SMBUploader**: Network share uploads with transport resilience
