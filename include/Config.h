@@ -40,6 +40,7 @@ private:
     String endpointPassword;
     int gmtOffsetHours;
     bool logToSdCard;
+    bool debugMode;
     bool isValid;
     
     // Cloud upload settings
@@ -120,6 +121,7 @@ public:
     const String& getEndpointPassword() const;
     int getGmtOffsetHours() const;
     bool getLogToSdCard() const;
+    bool getDebugMode() const;
     bool valid() const;
     
     // Cloud upload getters

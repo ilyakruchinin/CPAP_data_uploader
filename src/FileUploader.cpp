@@ -286,8 +286,10 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                     bool completed = sm->isFolderCompleted(name);
                     bool pending   = sm->isPendingFolder(name);
                     bool recent    = isRecentFolder(name);
-                    LOGF("[FileUploader] Pre-flight scan: folder=%s completed=%d pending=%d recent=%d",
-                         name.c_str(), completed, pending, recent);
+                    if (g_debugMode) {
+                        LOGF("[FileUploader] Pre-flight scan: folder=%s completed=%d pending=%d recent=%d",
+                             name.c_str(), completed, pending, recent);
+                    }
 
                     if (!completed && !pending) {
                         // Genuinely incomplete — but old folders are gated by canUploadOldData()
