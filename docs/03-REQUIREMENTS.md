@@ -19,7 +19,7 @@
 |---|---|---|---|
 | `RECENT_FOLDER_DAYS` | int | `2` | Defines fresh vs old data boundary (B) |
 | `MAX_DAYS` | int (1-366) | `365` | Hard cutoff — older folders ignored entirely |
-| `BOOT_DELAY_SECONDS` | int | `30` | Initial delay before first SD access |
+| ~~`BOOT_DELAY_SECONDS`~~ | ~~int~~ | ~~`30`~~ | **Removed in v0.9.2** — hardcoded to 15 s (see §1.3) |
 | `GMT_OFFSET_HOURS` | int | `0` | Timezone for schedule calculations |
 | `LOG_TO_SD_CARD` | bool | `false` | Debug logging only; can block CPAP SD access. Use only briefly in scheduled mode outside therapy times. |
 | All WiFi/endpoint/cloud params | — | — | No changes |
@@ -55,8 +55,7 @@ Unsupported legacy keys:
   "RECENT_FOLDER_DAYS": 2,
   "MAX_DAYS": 30,
 
-  "GMT_OFFSET_HOURS": 11,
-  "BOOT_DELAY_SECONDS": 30
+  "GMT_OFFSET_HOURS": 11
 }
 ```
 

@@ -38,7 +38,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bd{background:#c0392b;color:#fff}.bd:hover{background:#e04030}
 .sig-exc{color:#44ff44}.sig-good{color:#88dd44}.sig-fair{color:#ddcc44}.sig-weak{color:#dd8844}.sig-vweak{color:#dd4444}
 .toast{position:fixed;right:12px;bottom:12px;max-width:310px;background:#1b2838;border:1px solid #2a475e;color:#c7d5e0;padding:9px 11px;border-radius:8px;font-size:.82em;box-shadow:0 5px 20px rgba(0,0,0,.4);opacity:0;transform:translateY(7px);transition:opacity .2s,transform .2s;pointer-events:none;z-index:9999}
-.toast.on{opacity:1;transform:translateY(0)}.toast.ok{border-color:#2f8f57}.toast.er{border-color:#c0392b}
+.toast.on{opacity:1;transform:translateY(0)}.toast.ok{border-color:#2f8f57}.toast.er{border-color:#c0392b}.toast.warn{border-color:#c07830;color:#f0c070}
 #log-box{background:#1b2838;border:1px solid #2a475e;border-radius:6px;padding:12px;white-space:pre-wrap;word-wrap:break-word;font-family:Consolas,Monaco,monospace;font-size:11.5px;height:68vh;overflow-y:auto}
 #cfg-box{background:#1b2838;border:1px solid #2a475e;border-radius:6px;padding:12px;white-space:pre-wrap;font-family:Consolas,Monaco,monospace;font-size:11.5px;color:#aaddff;overflow-x:auto}
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px;margin-bottom:12px}
@@ -225,10 +225,11 @@ function tab(t){
   if(t==='mon'){startMon();}else{stopMon();}
   if(t==='cfg'){loadCfg();}
 }
-function toast(msg,ok){
+function toast(msg,mode){
   var el=document.getElementById('toast');
-  el.textContent=msg;el.className='toast on '+(ok?'ok':'er');
-  setTimeout(function(){el.className='toast';},3000);
+  var cls=mode===true||mode==='ok'?'ok':mode==='warn'?'warn':'er';
+  el.textContent=msg;el.className='toast on '+cls;
+  setTimeout(function(){el.className='toast';},4000);
 }
 function fmt(ms){var s=Math.round(ms/1000);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m '+s%60+'s';return Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m';}
 function fmtUp(s){if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m '+s%60+'s';var h=Math.floor(s/3600);return h+'h '+Math.floor(s%3600/60)+'m';}
@@ -508,8 +509,9 @@ function triggerUpload(){
   var b=document.getElementById('btn-up');
   if(b._busy)return;b._busy=1;b.textContent='Triggering...';
   fetch('/trigger-upload',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
-    toast(d.message||'Upload triggered.',true);
-  }).catch(function(){toast('Failed to trigger upload.',false);
+    var mode=d.status==='success'?'ok':d.status==='scheduled'?'warn':'er';
+    toast(d.message||'Upload triggered.',mode);
+  }).catch(function(){toast('Failed to trigger upload.','er');
   }).finally(function(){setTimeout(function(){b._busy=0;b.textContent='\u25b2 Trigger Upload';},700);});
 }
 function softReboot(){
