@@ -527,7 +527,7 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, UploadStateMana
         LOG_DEBUGF("[FileUploader] Found %d incomplete DATALOG folders", folders.size());
     }
 
-    if (sm) sm->setTotalFoldersCount(eligibleFolderCount);
+    if (sm) sm->setTotalFoldersCount(folders.size());
     
     return folders;
 }
