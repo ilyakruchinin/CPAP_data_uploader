@@ -208,7 +208,7 @@ void UploadStateManager::md5ToHex(const uint8_t md5[16], char out[33]) {
 
 int UploadStateManager::findCompletedIndex(DayKey day) const {
     for (uint16_t i = 0; i < completedCount; ++i) {
-        if (completedFolders[i] == day) {
+        if (completedFolders[i].day == day) {
             return (int)i;
         }
     }
