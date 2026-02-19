@@ -290,10 +290,16 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                          name.c_str(), completed, pending, recent);
 
                     if (!completed && !pending) {
-                        // Genuinely incomplete — real work exists
-                        LOGF("[FileUploader] Pre-flight: WORK — folder %s not completed/pending",
-                             name.c_str());
-                        entry.close(); root.close(); return true;
+                        // Genuinely incomplete — but old folders are gated by canUploadOldData()
+                        // (same gate used in Phase 2).  Outside the upload window old folders
+                        // cannot be processed, so must not count as "work" here either.
+                        bool isOld = !recent;
+                        bool canDoOld = !isOld || !scheduleManager || scheduleManager->canUploadOldData();
+                        if (canDoOld) {
+                            LOGF("[FileUploader] Pre-flight: WORK — folder %s not completed/pending",
+                                 name.c_str());
+                            entry.close(); root.close(); return true;
+                        }
                     }
                     if (completed && recent) {
                         // Recently completed but CPAP may have extended files.
