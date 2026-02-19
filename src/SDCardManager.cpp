@@ -7,7 +7,7 @@ SDCardManager::SDCardManager() : initialized(false), espHasControl(false) {}
 
 void SDCardManager::setControlPin(bool espControl) {
     digitalWrite(SD_SWITCH_PIN, espControl ? SD_SWITCH_ESP_VALUE : SD_SWITCH_CPAP_VALUE);
-    delay(100);  // Wait for switch to settle
+    delay(300);  // Wait for MUX switch to settle and CPAP to reinitialize after returning control
 }
 
 bool SDCardManager::begin() {

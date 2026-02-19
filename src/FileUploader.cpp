@@ -253,6 +253,47 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         return UploadResult::ERROR;
     }
 
+    // ── Pre-flight: check every configured backend for pending work ──────────
+    // Do this BEFORE writing the session-start summary so we don't advance the
+    // cycling pointer when there is genuinely nothing to upload.  The scan is
+    // SD-only (no network) and is fast.
+    {
+        static const char* rootPaths[] = {
+            "/Identification.json", "/Identification.crc",
+            "/Identification.tgt",  "/STR.edf"
+        };
+        auto checkHasWork = [&](UploadStateManager* sm) -> bool {
+            if (!sm) return false;
+            // Folder work?
+            if (!scanDatalogFolders(sd, sm).empty()) return true;
+            // Mandatory root file changed?
+            for (const char* p : rootPaths) {
+                if (sd.exists(p) && sm->hasFileChanged(sd, p)) return true;
+            }
+            // SETTINGS directory?
+            auto sf = scanSettingsFiles(sd);
+            for (const String& f : sf) {
+                if (sm->hasFileChanged(sd, f)) return true;
+            }
+            return false;
+        };
+
+        bool smbWork   = false;
+        bool cloudWork = false;
+#ifdef ENABLE_SMB_UPLOAD
+        if (config->hasSmbEndpoint())   smbWork   = checkHasWork(smbStateManager);
+#endif
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+        if (config->hasCloudEndpoint()) cloudWork = checkHasWork(cloudStateManager);
+#endif
+        if (!smbWork && !cloudWork) {
+            LOG("[FileUploader] Pre-flight: no work for any backend — skipping session");
+            return UploadResult::NOTHING_TO_DO;
+        }
+        LOGF("[FileUploader] Pre-flight: smb_work=%d cloud_work=%d — proceeding with %s",
+             smbWork, cloudWork, abName);
+    }
+
     // Record session start timestamp immediately — written before any work so
     // the backend pointer advances even if the session is interrupted.
     time_t nowTs; time(&nowTs);
