@@ -1,14 +1,17 @@
 # File Uploader Orchestrator
 
 ## Overview
-The File Uploader (`FileUploader.cpp/.h`) is the central orchestrator that coordinates all upload operations across multiple backends (SMB, Cloud, WebDAV). It manages upload state, performs pre-flight scans, and handles the complete upload lifecycle.
+The File Uploader (`FileUploader.cpp/.h`) is the central orchestrator that coordinates all upload operations across multiple backends (SMB, Cloud, WebDAV). It manages upload state, performs pre-flight scans, handles the complete upload lifecycle, and selects which backend to run each session via timestamp-based cycling.
 
 ## Core Architecture
 
-### Backend Pass Strategy
-The uploader processes backends in stages to optimize memory usage:
-1. **SMB Pass** - While heap is fresh (max_alloc ~73KB)
-2. **Cloud Pass** - After SMB teardown, with optimized TLS handling
+### Single-Backend Session Strategy
+Each upload session runs **exactly one backend** (SMB or Cloud), selected by cycling:
+1. **Backend selection** — at `begin()`, read `.backend_summary.smb` / `.backend_summary.cloud` and pick the backend with the **oldest `sessionStartTs`** (never-run backends have ts=0, so they go first)
+2. **Session start** — write a placeholder summary entry with the current timestamp (advances the cycling pointer even if the session crashes)
+3. **Upload pass** — run only the selected backend
+4. **Session end** — overwrite the summary with full stats (done/total/empty)
+5. **Soft reboot** — FSM always reboots after releasing the SD card, restoring heap
 
 ### Pre-flight Scans
 Before any network activity, performs SD-only scans:
@@ -22,12 +25,18 @@ if (!smbHasWork) {
 ## Key Features
 
 ### Intelligent Folder Scanning
-- **Recent completed folders**: Only included if files changed size
+- **Recent completed folders**: Always rescanned — CPAP may extend/add files. Per-file size tracking (`hasFileChanged`) skips unchanged files
 - **Old completed folders**: Skipped entirely
 - **Pending folders**: Tracked for when they acquire content
 - **Fresh vs Old data**: Different scheduling rules
 
-### Multi-Backend Coordination
+### Backend Cycling
+- `selectActiveBackend(sd)` compares `sessionStartTs` from `.backend_summary.smb` and `.backend_summary.cloud`
+- Backend with **oldest timestamp** is selected; ties go to SMB
+- Missing summary file → treated as ts=0 (oldest possible) so never-run backends are prioritized
+- Written at session START so the pointer advances even on crashes
+
+### Uploaders
 - **SMBUploader**: Network share uploads with transport resilience
 - **SleepHQUploader**: Cloud uploads with OAuth and import sessions
 - **WebDAVUploader**: Placeholder for future implementation
@@ -39,9 +48,14 @@ if (!smbHasWork) {
 - **Checksum tracking**: For mandatory/SETTINGS files
 
 ### Memory Optimization
-- **Staged passes**: SMB then Cloud to isolate memory pressure
+- **Single backend per session**: No concurrent SMB+TLS heap pressure
+- **Soft reboot between sessions**: Restores full contiguous heap via `esp_restart()` (fast-boot path skips delays)
 - **Buffer management**: Dynamic SMB buffer sizing based on heap
 - **TLS reuse**: Persistent connections for cloud operations
+
+### Mark-Complete Strategy
+- **Recent folders**: Always marked complete (per-file size entries track changed/new files for next rescan)
+- **Old folders**: Only marked complete when ALL files uploaded — failed old folders are retried whole next session
 
 ## Upload Process Flow
 

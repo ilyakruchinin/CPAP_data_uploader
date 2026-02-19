@@ -97,14 +97,14 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=cards>
 <div class=card style="grid-column:1/-1"><h2>Upload Progress</h2>
 <div class=be>
-<div class=bh><span class=bt-s>SMB</span><span id=d-smb-st class=v>—</span></div>
-<div class=prog><div id=d-pf-smb class=pf style=width:0%></div></div>
-<div id=d-smb-det class=bd-i></div>
+<div class=bh><span id=d-ab-name class=bt-s>—</span><span id=d-ab-st class=v>—</span></div>
+<div class=prog><div id=d-pf-active class=pf style=width:0%></div></div>
+<div id=d-ab-det class=bd-i></div>
 </div>
-<div class=be>
-<div class=bh><span class=bt-c>Cloud</span><span id=d-cloud-st class=v>—</span></div>
-<div class=prog><div id=d-pf-cloud class="pf pfc" style=width:0%></div></div>
-<div id=d-cloud-det class=bd-i></div>
+<div class=be id=d-next-be style=display:none>
+<div class=bh><span id=d-nb-name class="bt-s" style=color:#8f98a0>Next: —</span><span id=d-nb-st class=v style="font-size:.78em;color:#8f98a0">—</span></div>
+<div class=prog><div id=d-pf-next class=pf style="width:0%;background:linear-gradient(90deg,#556070,#6a7a8a)"></div></div>
+<div id=d-nb-det class=bd-i style=color:#8f98a0></div>
 </div>
 <div class=row style="border-top:1px solid #2a475e;padding-top:8px;margin-top:2px"><span class=k>Status</span><span id=d-fst class=v></span></div>
 </div>
@@ -232,23 +232,30 @@ function renderStatus(d){
   set('d-ip',d.wifi_ip||'—');
   set('d-ep',cfg.endpoint_type||d.endpoint_type||'—');
   set('d-up',fmtUp(d.uptime||0));
-  // Use success counts if available, otherwise fall back to completion counts (for old state migration)
-  var smbSuccess=d.smb_success||0,smbComp=d.smb_comp||0;
-  var sc=smbSuccess||smbComp,si=d.smb_inc||0,st2=smbComp;
-  var cloudSuccess=d.cloud_success||0,cloudComp=d.cloud_comp||0;
-  var cc=cloudSuccess||cloudComp,ci=d.cloud_inc||0,ct=cloudComp;
-  document.getElementById('d-pf-smb').style.width=(st2>0?Math.round(sc*100/st2):0)+'%';
-  document.getElementById('d-pf-cloud').style.width=(ct>0?Math.round(cc*100/ct):0)+'%';
-  var sR=si>0?'<span style=color:#ffaa44>'+si+' left</span>':'<span style=color:#44ff44>&#10003; done</span>';
-  var cR=ci>0?'<span style=color:#ffaa44>'+ci+' left</span>':'<span style=color:#44ff44>&#10003; done</span>';
-  document.getElementById('d-smb-st').innerHTML=st2>0?sc+' / '+st2+' &nbsp;'+sR:'—';
-  document.getElementById('d-cloud-st').innerHTML=ct>0?cc+' / '+ct+' &nbsp;'+cR:'—';
-  var smbDet=d.smb_active?'Uploading '+d.smb_up+' / '+d.smb_total+' files'+(d.smb_folder?' &middot; '+d.smb_folder:''):'';
-  var clDet=d.cloud_active?'Uploading '+d.cloud_up+' / '+d.cloud_total+' files'+(d.cloud_folder?' &middot; '+d.cloud_folder:''):'';
-  document.getElementById('d-smb-det').innerHTML=smbDet;
-  document.getElementById('d-cloud-det').innerHTML=clDet;
-  var pend=(si||0)+(ci||0);
-  var fst=pend>0?'&#9888; '+pend+' folder(s) pending':(sc+cc>0?'&#10003; All synced':'Waiting for first scan');
+  var ab=d.active_backend||'NONE';
+  var abColor=ab==='SMB'?'#66c0f4':ab==='CLOUD'?'#aa66ff':'#8f98a0';
+  var abEl=document.getElementById('d-ab-name');abEl.textContent=ab;abEl.style.color=abColor;
+  var done=d.folders_done||0,total=d.folders_total||0,pend=d.folders_pending||0;
+  var pct=total>0?Math.round(done*100/total):0;
+  document.getElementById('d-pf-active').style.width=pct+'%';
+  var inc=Math.max(0,total-done-pend);
+  var abSt=total>0?(done+' / '+total+(pend>0?' ('+pend+' empty)':'')):'\u2014';
+  if(total>0&&inc>0)abSt+=' &nbsp;<span style=color:#ffaa44>'+inc+' left</span>';
+  else if(total>0&&inc===0&&done>0)abSt+=' &nbsp;<span style=color:#44ff44>&#10003;</span>';
+  document.getElementById('d-ab-st').innerHTML=abSt;
+  var liveDet=d.live_active?'File '+d.live_up+'/'+d.live_total+(d.live_folder?' &middot; '+d.live_folder:''):'';
+  document.getElementById('d-ab-det').innerHTML=liveDet;
+  var nb=d.next_backend||'NONE';
+  var nbEl=document.getElementById('d-next-be');
+  if(nb&&nb!=='NONE'){nbEl.style.display='';
+    var nbDone=d.next_done||0,nbTotal=d.next_total||0,nbPct=nbTotal>0?Math.round(nbDone*100/nbTotal):0;
+    document.getElementById('d-nb-name').textContent='Next: '+nb;
+    document.getElementById('d-pf-next').style.width=nbPct+'%';
+    var tsStr=d.next_ts>0?new Date(d.next_ts*1000).toLocaleDateString():'never';
+    document.getElementById('d-nb-st').innerHTML=nbDone+'/'+nbTotal+' \u00b7 last '+tsStr+' <em style="color:#666">(stale)</em>';
+    document.getElementById('d-nb-det').textContent=d.next_empty>0?d.next_empty+' empty folder(s)':'';
+  }else{nbEl.style.display='none';}
+  var fst=inc>0?'&#9888; '+inc+' folder(s) pending':(done>0?'&#10003; All synced':'Waiting for first scan');
   seti('d-fst',fst);
   set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
 }

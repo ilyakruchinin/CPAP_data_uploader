@@ -45,15 +45,24 @@ F|1234567890abcdef|1024|- # File entry (hash, size, MD5)
 ```
 U2|2|1704312000           # Header: version|subversion|timestamp
 R|20240101|0             # Retry: day|count
-C|20240101|1704224000|1|23|23|1  # Completed folder: day|last_scan_time|recent_scan_passed|files_total|files_uploaded|upload_success
+C|20240101               # Completed folder: day
 P|20240101|1704224000     # Pending folder: day|first_seen
 F|hash|size|md5           # File entry: path_hash|file_size|md5_hash
 ```
 
-**Format Evolution:**
-- **v2.0**: `C|day` (basic completion)
-- **v2.1**: `C|day|last_scan_time|recent_scan_passed` (hybrid tracking)
-- **v2.2**: `C|day|last_scan_time|recent_scan_passed|files_total|files_uploaded|upload_success` (success tracking)
+**Backward Compatibility:**  
+The parser ignores extra `|`-delimited fields after the day token in `C|` lines, enabling migration from older snapshot formats that stored additional fields.
+
+**Backend Summary Files (per-backend session info):**
+```
+/.backend_summary.smb     # Written at session START and END
+/.backend_summary.cloud
+# Content: ts=1704312000,done=12,total=20,empty=1
+#   ts    = Unix timestamp of session start (used for cycling)
+#   done  = completed folders last session
+#   total = total eligible folders last session  
+#   empty = pending-empty folders last session
+```
 
 **Journal Lines (Events):**
 ```

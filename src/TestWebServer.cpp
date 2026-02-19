@@ -525,35 +525,36 @@ void TestWebServer::updateStatusSnapshot() {
         rssi = wifiManager->getSignalStrength();
         strncpy(wifiIp, wifiManager->getIPAddress().c_str(), sizeof(wifiIp) - 1);
     }
-    // Read each backend's folder counts independently for the two-bar UI.
-    // In SMB-only mode stateManager == smbStateManager (same pointer), so
-    // guard against double-counting by skipping the cloud read in that case.
-    int smbComp = 0, smbInc = 0, clComp = 0, clInc = 0;
-    if (smbStateManager) {
-        smbComp = smbStateManager->getCompletedFoldersCount();
-        smbInc  = smbStateManager->getIncompleteFoldersCount();
-    }
-    int smbSuccess = 0, clSuccess = 0;
-    if (smbStateManager) {
-        smbSuccess = smbStateManager->getSuccessfulFoldersCount();
-    }
-    if (stateManager && stateManager != smbStateManager) {
-        clComp = stateManager->getCompletedFoldersCount();
-        clSuccess = stateManager->getSuccessfulFoldersCount();
-        clInc  = stateManager->getIncompleteFoldersCount();
+    // Active backend folder counts from the current session's state manager.
+    int foldersDone    = 0;
+    int foldersTotal   = 0;
+    int foldersPending = 0;
+    if (stateManager) {
+        foldersDone    = stateManager->getCompletedFoldersCount();
+        foldersPending = stateManager->getPendingFoldersCount();
+        foldersTotal   = foldersDone + stateManager->getIncompleteFoldersCount() + foldersPending;
     }
     long nextUp = -1; bool timeSynced = false;
     if (scheduleManager) {
         nextUp = scheduleManager->getSecondsUntilNextUpload();
         timeSynced = scheduleManager->isTimeSynced();
     }
-    char smbFolder[33]   = ""; int smbUp = 0, smbTotal = 0; bool smbActive = false;
-    char cloudFolder[33] = ""; int clUp  = 0, clTotal  = 0; bool clActive  = false;
-    strncpy(smbFolder,   (const char*)g_smbSessionStatus.currentFolder,   sizeof(smbFolder)   - 1);
-    strncpy(cloudFolder, (const char*)g_cloudSessionStatus.currentFolder, sizeof(cloudFolder) - 1);
-    smbUp    = g_smbSessionStatus.filesUploaded;   smbTotal = g_smbSessionStatus.filesTotal;
-    clUp     = g_cloudSessionStatus.filesUploaded; clTotal  = g_cloudSessionStatus.filesTotal;
-    smbActive = g_smbSessionStatus.uploadActive;   clActive  = g_cloudSessionStatus.uploadActive;
+    // Live per-file progress from the upload task
+    char liveFolder[33] = "";
+    int  liveUp = 0, liveTotal = 0; bool liveActive = false;
+    if (g_activeBackendStatus.valid &&
+        strncmp(g_activeBackendStatus.name, "SMB", 3) == 0 &&
+        g_smbSessionStatus.uploadActive) {
+        strncpy(liveFolder, (const char*)g_smbSessionStatus.currentFolder, sizeof(liveFolder) - 1);
+        liveUp = g_smbSessionStatus.filesUploaded; liveTotal = g_smbSessionStatus.filesTotal;
+        liveActive = true;
+    } else if (g_activeBackendStatus.valid &&
+               strncmp(g_activeBackendStatus.name, "CLOUD", 5) == 0 &&
+               g_cloudSessionStatus.uploadActive) {
+        strncpy(liveFolder, (const char*)g_cloudSessionStatus.currentFolder, sizeof(liveFolder) - 1);
+        liveUp = g_cloudSessionStatus.filesUploaded; liveTotal = g_cloudSessionStatus.filesTotal;
+        liveActive = true;
+    }
 
     char buf[WEB_STATUS_BUF_SIZE];
     int n = snprintf(buf, sizeof(buf),
@@ -561,19 +562,21 @@ void TestWebServer::updateStatusSnapshot() {
         ",\"time\":\"%s\",\"time_synced\":%s"
         ",\"free_heap\":%u,\"max_alloc\":%u"
         ",\"wifi\":%s,\"rssi\":%d,\"wifi_ip\":\"%s\""
-        ",\"smb_comp\":%d,\"smb_success\":%d,\"smb_inc\":%d,\"cloud_comp\":%d,\"cloud_success\":%d,\"cloud_inc\":%d"
+        ",\"active_backend\":\"%s\",\"folders_done\":%d,\"folders_total\":%d,\"folders_pending\":%d"
+        ",\"next_backend\":\"%s\",\"next_done\":%d,\"next_total\":%d,\"next_empty\":%d,\"next_ts\":%lu"
         ",\"next_upload\":%ld"
-        ",\"smb_active\":%s,\"smb_folder\":\"%s\",\"smb_up\":%d,\"smb_total\":%d"
-        ",\"cloud_active\":%s,\"cloud_folder\":\"%s\",\"cloud_up\":%d,\"cloud_total\":%d"
+        ",\"live_active\":%s,\"live_folder\":\"%s\",\"live_up\":%d,\"live_total\":%d"
         ",\"firmware\":\"%s\"}",
         st, inStateSec, upSec,
         timeBuf, timeSynced ? "true" : "false",
         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
         wifiConn ? "true" : "false", rssi, wifiIp,
-        smbComp, smbSuccess, smbInc, clComp, clSuccess, clInc,
+        g_activeBackendStatus.name,   foldersDone, foldersTotal, foldersPending,
+        g_inactiveBackendStatus.name, g_inactiveBackendStatus.foldersDone,
+        g_inactiveBackendStatus.foldersTotal, g_inactiveBackendStatus.foldersEmpty,
+        (unsigned long)g_inactiveBackendStatus.sessionStartTs,
         nextUp,
-        smbActive ? "true" : "false", smbFolder, smbUp, smbTotal,
-        clActive  ? "true" : "false", cloudFolder, clUp,  clTotal,
+        liveActive ? "true" : "false", liveFolder, liveUp, liveTotal,
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webStatusBuf, buf, n + 1);
