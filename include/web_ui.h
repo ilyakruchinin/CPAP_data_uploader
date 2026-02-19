@@ -396,10 +396,24 @@ function _appendLogs(text){
   }
   var newLines;
   if(bootIdx>=0){
-    // Reboot — insert separator if we had prior content, then take from banner onward
-    if(clientLogBuf.length>0)clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
-    newLines=lines.slice(bootIdx);
-    lastSeenLine='';
+    // Boot banner found. Determine if this is genuinely a NEW reboot or the
+    // same boot we already buffered (banner is present in every server response).
+    // A new reboot means lastSeenLine doesn't exist in this response at all, OR
+    // it appears before/at the boot banner (i.e. it belongs to a prior boot).
+    var lastSeenPos=-1;
+    if(lastSeenLine){
+      for(var i=lines.length-1;i>=0;i--){
+        if(lines[i]===lastSeenLine){lastSeenPos=i;break;}
+      }
+    }
+    if(lastSeenPos>bootIdx){
+      // Same boot continuing — treat as normal poll, append only new tail
+      newLines=lines.slice(lastSeenPos+1);
+    } else {
+      // Genuinely new reboot — insert separator and start from boot banner
+      if(clientLogBuf.length>0)clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
+      newLines=lines.slice(bootIdx);
+    }
   } else {
     // Normal poll — find the last line we already buffered (search from end)
     // and only append what comes after it.
