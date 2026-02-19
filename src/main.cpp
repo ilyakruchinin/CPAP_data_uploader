@@ -98,6 +98,10 @@ unsigned long lastSdCardRetry = 0;
 unsigned long lastLogDumpTime = 0;
 const unsigned long LOG_DUMP_INTERVAL_MS = 10 * 1000;  // 10 seconds
 
+// Runtime debug mode: set from config DEBUG=true after config load.
+// Gates [res fh= ma= fd=] heap suffix on all log lines and verbose pre-flight output.
+bool g_debugMode = false;
+
 #ifdef ENABLE_TEST_WEBSERVER
 // External trigger flags (defined in TestWebServer.cpp)
 extern volatile bool g_triggerUploadFlag;
@@ -313,6 +317,10 @@ void setup() {
     }
 
     LOG("Configuration loaded successfully");
+    g_debugMode = config.getDebugMode();
+    if (g_debugMode) {
+        LOG_WARN("DEBUG mode enabled — verbose pre-flight logs and heap stats active");
+    }
     LOG_DEBUGF("WiFi SSID: %s", config.getWifiSSID().c_str());
     LOG_DEBUGF("Endpoint: %s", config.getEndpoint().c_str());
 

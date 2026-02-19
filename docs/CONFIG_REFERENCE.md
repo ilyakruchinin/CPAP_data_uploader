@@ -88,6 +88,7 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 | Key | Default | Description |
 |---|---|---|
 | `LOG_TO_SD_CARD` | `false` | Set to `true` to periodically dump the in-memory log buffer to the SD card. **Debugging only** — this keeps the SD card mounted continuously and will block CPAP data writes. Use only in `scheduled` mode outside therapy hours. |
+| `DEBUG` | `false` | Set to `true` to enable verbose diagnostics: (1) per-folder `Pre-flight scan` lines in the upload log, and (2) `[res fh= ma= fd=]` heap/file-descriptor stats appended to every log line. Leave `false` in normal operation to keep logs concise. |
 
 ---
 
