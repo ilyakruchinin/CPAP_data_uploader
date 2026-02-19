@@ -228,8 +228,8 @@ function renderStatus(d){
   set('d-ip',d.wifi_ip||'—');
   set('d-ep',cfg.endpoint_type||d.endpoint_type||'—');
   set('d-up',fmtUp(d.uptime||0));
-  var sc=d.smb_comp||0,si=d.smb_inc||0,st2=sc+si;
-  var cc=d.cloud_comp||0,ci=d.cloud_inc||0,ct=cc+ci;
+  var sc=d.smb_success||0,si=d.smb_inc||0,st2=(d.smb_comp||0);
+  var cc=d.cloud_success||0,ci=d.cloud_inc||0,ct=(d.cloud_comp||0);
   document.getElementById('d-pf-smb').style.width=(st2>0?Math.round(sc*100/st2):0)+'%';
   document.getElementById('d-pf-cloud').style.width=(ct>0?Math.round(cc*100/ct):0)+'%';
   var sR=si>0?'<span style=color:#ffaa44>'+si+' left</span>':'<span style=color:#44ff44>&#10003; done</span>';
