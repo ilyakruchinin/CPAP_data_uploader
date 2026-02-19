@@ -329,6 +329,25 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             LOG("[FileUploader] Pre-flight: no work for any backend — skipping session");
             return UploadResult::NOTHING_TO_DO;
         }
+
+        // If the selected backend has no work but the other one does, redirect to
+        // the backend with actual work.  Running the no-work backend would:
+        //  (a) write a session-start summary (advancing the cycling pointer), and
+        //  (b) still reboot after doing nothing — causing an endless reboot loop.
+        bool activeHasWork = (activeBackend == UploadBackend::SMB)   ? smbWork :
+                             (activeBackend == UploadBackend::CLOUD) ? cloudWork : false;
+        if (!activeHasWork) {
+            if (smbWork && activeBackend != UploadBackend::SMB) {
+                LOG("[FileUploader] Pre-flight: active backend has no work — redirecting to SMB");
+                activeBackend = UploadBackend::SMB;
+                abName = "SMB";
+            } else if (cloudWork && activeBackend != UploadBackend::CLOUD) {
+                LOG("[FileUploader] Pre-flight: active backend has no work — redirecting to CLOUD");
+                activeBackend = UploadBackend::CLOUD;
+                abName = "CLOUD";
+            }
+        }
+
         LOGF("[FileUploader] Pre-flight: smb_work=%d cloud_work=%d — proceeding with %s",
              smbWork, cloudWork, abName);
     }
