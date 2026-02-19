@@ -242,27 +242,32 @@ void UploadStateManager::queueEvent(const JournalEvent& event) {
 }
 
 bool UploadStateManager::addCompletedInternal(DayKey day, bool queue) {
-    if (day == 0) {
-        return false;
-    }
     if (findCompletedIndex(day) >= 0) {
-        return true;
+        return false;  // Already exists
     }
 
     if (completedCount >= MAX_COMPLETED_FOLDERS) {
-        memmove(&completedFolders[0], &completedFolders[1], sizeof(DayKey) * (MAX_COMPLETED_FOLDERS - 1));
-        completedCount = MAX_COMPLETED_FOLDERS - 1;
+        // Remove oldest entry (at index 0)
+        if (completedCount > 1) {
+            memmove(&completedFolders[0], &completedFolders[1], 
+                    sizeof(CompletedFolderEntry) * (completedCount - 1));
+        }
+        completedCount--;
         forceCompaction = true;
     }
 
-    completedFolders[completedCount++] = day;
+    completedFolders[completedCount].day = day;
+    completedFolders[completedCount].lastScanTime = 0;
+    completedFolders[completedCount].recentScanPassed = false;
+    completedCount++;
 
     if (queue) {
-        JournalEvent ev = {};
-        ev.type = JournalEventType::AddCompleted;
-        ev.day = day;
-        queueEvent(ev);
+        JournalEvent event = {};
+        event.type = JournalEventType::AddCompleted;
+        event.day = day;
+        queueEvent(event);
     }
+
     return true;
 }
 
@@ -273,7 +278,7 @@ bool UploadStateManager::removeCompletedInternal(DayKey day, bool queue) {
     }
 
     if ((uint16_t)idx < (completedCount - 1)) {
-        memmove(&completedFolders[idx], &completedFolders[idx + 1], sizeof(DayKey) * (completedCount - idx - 1));
+        memmove(&completedFolders[idx], &completedFolders[idx + 1], sizeof(CompletedFolderEntry) * (completedCount - idx - 1));
     }
     completedCount--;
 
@@ -525,6 +530,66 @@ void UploadStateManager::markFolderCompleted(const String& folderName) {
     if (currentRetryFolderDay == day) {
         clearCurrentRetry();
     }
+}
+
+void UploadStateManager::markFolderCompletedWithScan(const String& folderName, bool recentScanPassed) {
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        LOG_WARNF("[UploadStateManager] Invalid folder name for completion: %s", folderName.c_str());
+        return;
+    }
+
+    int idx = findCompletedIndex(day);
+    if (idx >= 0) {
+        // Update existing entry
+        completedFolders[idx].lastScanTime = time(nullptr);
+        completedFolders[idx].recentScanPassed = recentScanPassed;
+    } else {
+        // Add new entry
+        addCompletedInternal(day, false);  // Don't queue journal event yet
+        completedFolders[completedCount - 1].lastScanTime = time(nullptr);
+        completedFolders[completedCount - 1].recentScanPassed = recentScanPassed;
+        
+        // Queue journal event for the addition
+        JournalEvent event = {};
+        event.type = JournalEventType::AddCompleted;
+        event.day = day;
+        queueEvent(event);
+    }
+
+    if (removePendingInternal(day, true)) {
+        LOG_DEBUGF("[UploadStateManager] Removed folder from pending state: %s", folderName.c_str());
+    }
+
+    if (currentRetryFolderDay == day) {
+        clearCurrentRetry();
+    }
+}
+
+void UploadStateManager::markFolderRecentScanFailed(const String& folderName) {
+    markFolderCompletedWithScan(folderName, false);
+}
+
+bool UploadStateManager::shouldRescanRecentFolder(const String& folderName) {
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        return false;
+    }
+
+    int idx = findCompletedIndex(day);
+    if (idx < 0) {
+        return false;  // Not completed, will be scanned anyway
+    }
+
+    const CompletedFolderEntry& entry = completedFolders[idx];
+    
+    // If recent scan passed, don't rescan
+    if (entry.recentScanPassed) {
+        return false;
+    }
+    
+    // If no recent scan time or recent scan failed, rescan
+    return (entry.lastScanTime == 0) || (!entry.recentScanPassed);
 }
 
 void UploadStateManager::removeFolderFromCompleted(const String& folderName) {
@@ -850,10 +915,27 @@ bool UploadStateManager::applySnapshotLine(const char* line) {
 
     if (strncmp(line, "C|", 2) == 0) {
         char dayToken[16] = {0};
-        if (sscanf(line, "C|%15s", dayToken) == 1) {
+        unsigned long lastScanTime = 0;
+        int recentScanPassed = 0;
+        
+        // Try new format first: C|day|lastScanTime|recentScanPassed
+        if (sscanf(line, "C|%15[^|]|%lu|%d", dayToken, &lastScanTime, &recentScanPassed) == 3) {
             DayKey day = 0;
             if (parseDayToken(dayToken, day)) {
-                return addCompletedInternal(day, false);
+                addCompletedInternal(day, false);
+                completedFolders[completedCount - 1].lastScanTime = lastScanTime;
+                completedFolders[completedCount - 1].recentScanPassed = (recentScanPassed != 0);
+                return true;
+            }
+        }
+        // Fallback to old format: C|day
+        else if (sscanf(line, "C|%15s", dayToken) == 1) {
+            DayKey day = 0;
+            if (parseDayToken(dayToken, day)) {
+                addCompletedInternal(day, false);
+                completedFolders[completedCount - 1].lastScanTime = 0;
+                completedFolders[completedCount - 1].recentScanPassed = false;
+                return true;
             }
         }
         return false;
@@ -1094,8 +1176,12 @@ bool UploadStateManager::compactState(fs::FS &sd) {
 
     for (uint16_t i = 0; i < completedCount; ++i) {
         char dayText[16] = {0};
-        dayKeyToChars(completedFolders[i], dayText, sizeof(dayText));
-        snprintf(line, sizeof(line), "C|%s", dayText);
+        dayKeyToChars(completedFolders[i].day, dayText, sizeof(dayText));
+        // Format: C|day|lastScanTime|recentScanPassed
+        snprintf(line, sizeof(line), "C|%s|%lu|%d", 
+                 dayText, 
+                 (unsigned long)completedFolders[i].lastScanTime,
+                 completedFolders[i].recentScanPassed ? 1 : 0);
         if (file.println(line) == 0) {
             file.close();
             sd.remove(tempPath);

@@ -59,7 +59,13 @@ private:
     String stateSnapshotPath;
     String stateJournalPath;
     UnixTs lastUploadTimestamp;
-    DayKey completedFolders[MAX_COMPLETED_FOLDERS];
+    
+    struct CompletedFolderEntry {
+        DayKey day;
+        UnixTs lastScanTime;
+        bool recentScanPassed;
+    };
+    CompletedFolderEntry completedFolders[MAX_COMPLETED_FOLDERS];
     uint16_t completedCount;
     PendingFolderEntry pendingFolders[MAX_PENDING_FOLDERS];
     uint16_t pendingCount;
@@ -124,6 +130,9 @@ public:
     // Folder-based tracking for DATALOG
     bool isFolderCompleted(const String& folderName);
     void markFolderCompleted(const String& folderName);
+    void markFolderCompletedWithScan(const String& folderName, bool recentScanPassed);
+    void markFolderRecentScanFailed(const String& folderName);
+    bool shouldRescanRecentFolder(const String& folderName);
     void removeFolderFromCompleted(const String& folderName);  // For delta scan re-upload
     int getCompletedFoldersCount() const;
     int getIncompleteFoldersCount() const;

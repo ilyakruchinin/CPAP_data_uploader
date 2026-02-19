@@ -45,10 +45,14 @@ F|1234567890abcdef|1024|- # File entry (hash, size, MD5)
 ```
 U2|2|1704312000           # Header: version|subversion|timestamp
 R|20240101|0             # Retry: day|count
-C|20240101                # Completed folder
+C|20240101|1704224000|1   # Completed folder: day|last_scan_time|recent_scan_passed
 P|20240101|1704224000     # Pending folder: day|first_seen
 F|hash|size|md5           # File entry: path_hash|file_size|md5_hash
 ```
+
+**Format Evolution:**
+- **v2.0**: `C|day` (basic completion)
+- **v2.1**: `C|day|last_scan_time|recent_scan_passed` (hybrid tracking)
 
 **Journal Lines (Events):**
 ```
@@ -148,11 +152,16 @@ FileFingerprintEntry getFileFingerprint(const String& path);
 
 ### Folder Status Management
 ```cpp
-// Mark folder as completely uploaded
-bool markFolderCompleted(const String& folderName);
-
-// Check if folder is completed
+// Folder-based tracking for DATALOG
 bool isFolderCompleted(const String& folderName);
+void markFolderCompleted(const String& folderName);
+void markFolderCompletedWithScan(const String& folderName, bool recentScanPassed);
+void markFolderRecentScanFailed(const String& folderName);
+bool shouldRescanRecentFolder(const String& folderName);
+void removeFolderFromCompleted(const String& folderName);
+int getCompletedFoldersCount() const;
+int getIncompleteFoldersCount() const;
+void setTotalFoldersCount(int count);
 
 // Handle empty folders
 bool markFolderPending(const String& folderName);
@@ -221,6 +230,19 @@ Recent DATALOG files (within `RECENT_FOLDER_DAYS`) use size comparison instead o
 - **Performance**: ~10x faster than MD5 calculation
 - **Memory**: No need to load entire file for hashing
 - **Sufficient**: CPAP files rarely change size without content change
+
+### Hybrid Completion Tracking
+Recent folders use enhanced completion tracking to handle upload failures:
+- **Recent Scan Passed**: Flag indicating successful recent upload scan
+- **Last Scan Time**: Timestamp of most recent scan attempt
+- **Failure Recovery**: Failed recent scans are retried on next upload cycle
+- **Data Safety**: Prevents data loss from network failures or CPAP downtime
+
+**Logic Flow:**
+1. Recent folder marked as completed + `recentScanPassed = true`
+2. If upload fails → `recentScanPassed = false` (folder marked complete but scan failed)
+3. Next scan → Re-scans folders with `recentScanPassed = false`
+4. When folder becomes old → Clear recent scan flags
 
 ### Journal Efficiency
 - **Append-only**: Minimal write amplification
