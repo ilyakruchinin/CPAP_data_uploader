@@ -45,7 +45,7 @@ F|1234567890abcdef|1024|- # File entry (hash, size, MD5)
 ```
 U2|2|1704312000           # Header: version|subversion|timestamp
 R|20240101|0             # Retry: day|count
-C|20240101|1704224000|1   # Completed folder: day|last_scan_time|recent_scan_passed
+C|20240101|1704224000|1|23|23|1  # Completed folder: day|last_scan_time|recent_scan_passed|files_total|files_uploaded|upload_success
 P|20240101|1704224000     # Pending folder: day|first_seen
 F|hash|size|md5           # File entry: path_hash|file_size|md5_hash
 ```
@@ -53,6 +53,7 @@ F|hash|size|md5           # File entry: path_hash|file_size|md5_hash
 **Format Evolution:**
 - **v2.0**: `C|day` (basic completion)
 - **v2.1**: `C|day|last_scan_time|recent_scan_passed` (hybrid tracking)
+- **v2.2**: `C|day|last_scan_time|recent_scan_passed|files_total|files_uploaded|upload_success` (success tracking)
 
 **Journal Lines (Events):**
 ```
@@ -157,9 +158,12 @@ bool isFolderCompleted(const String& folderName);
 void markFolderCompleted(const String& folderName);
 void markFolderCompletedWithScan(const String& folderName, bool recentScanPassed);
 void markFolderRecentScanFailed(const String& folderName);
+void markFolderUploadProgress(const String& folderName, uint16_t filesTotal, uint16_t filesUploaded, bool uploadSuccess);
+bool isFolderUploadSuccessful(const String& folderName);
 bool shouldRescanRecentFolder(const String& folderName);
 void removeFolderFromCompleted(const String& folderName);
 int getCompletedFoldersCount() const;
+int getSuccessfulFoldersCount() const;  // Only folders with all files uploaded successfully
 int getIncompleteFoldersCount() const;
 void setTotalFoldersCount(int count);
 

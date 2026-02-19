@@ -259,6 +259,9 @@ bool UploadStateManager::addCompletedInternal(DayKey day, bool queue) {
     completedFolders[completedCount].day = day;
     completedFolders[completedCount].lastScanTime = 0;
     completedFolders[completedCount].recentScanPassed = false;
+    completedFolders[completedCount].filesTotal = 0;
+    completedFolders[completedCount].filesUploaded = 0;
+    completedFolders[completedCount].uploadSuccess = false;
     completedCount++;
 
     if (queue) {
@@ -592,6 +595,62 @@ bool UploadStateManager::shouldRescanRecentFolder(const String& folderName) {
     return (entry.lastScanTime == 0) || (!entry.recentScanPassed);
 }
 
+void UploadStateManager::markFolderUploadProgress(const String& folderName, uint16_t filesTotal, uint16_t filesUploaded, bool uploadSuccess) {
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        LOG_WARNF("[UploadStateManager] Invalid folder name for progress: %s", folderName.c_str());
+        return;
+    }
+
+    int idx = findCompletedIndex(day);
+    if (idx >= 0) {
+        // Update existing entry
+        completedFolders[idx].filesTotal = filesTotal;
+        completedFolders[idx].filesUploaded = filesUploaded;
+        completedFolders[idx].uploadSuccess = uploadSuccess;
+        LOG_DEBUGF("[UploadStateManager] Updated folder progress: %s (%d/%d, success=%s)", 
+                   folderName.c_str(), filesUploaded, filesTotal, uploadSuccess ? "true" : "false");
+    } else {
+        // Create new entry with progress
+        addCompletedInternal(day, false);
+        completedFolders[completedCount - 1].filesTotal = filesTotal;
+        completedFolders[completedCount - 1].filesUploaded = filesUploaded;
+        completedFolders[completedCount - 1].uploadSuccess = uploadSuccess;
+        
+        // Queue journal event for the addition
+        JournalEvent event = {};
+        event.type = JournalEventType::AddCompleted;
+        event.day = day;
+        queueEvent(event);
+        LOG_DEBUGF("[UploadStateManager] Added folder with progress: %s (%d/%d, success=%s)", 
+                   folderName.c_str(), filesUploaded, filesTotal, uploadSuccess ? "true" : "false");
+    }
+}
+
+bool UploadStateManager::isFolderUploadSuccessful(const String& folderName) {
+    DayKey day = 0;
+    if (!parseDayKey(folderName, day)) {
+        return false;
+    }
+
+    int idx = findCompletedIndex(day);
+    if (idx < 0) {
+        return false;  // Not completed
+    }
+
+    return completedFolders[idx].uploadSuccess;
+}
+
+int UploadStateManager::getSuccessfulFoldersCount() const {
+    int count = 0;
+    for (uint16_t i = 0; i < completedCount; ++i) {
+        if (completedFolders[i].uploadSuccess) {
+            count++;
+        }
+    }
+    return count;
+}
+
 void UploadStateManager::removeFolderFromCompleted(const String& folderName) {
     DayKey day = 0;
     if (!parseDayKey(folderName, day)) {
@@ -918,13 +977,31 @@ bool UploadStateManager::applySnapshotLine(const char* line) {
         unsigned long lastScanTime = 0;
         int recentScanPassed = 0;
         
-        // Try new format first: C|day|lastScanTime|recentScanPassed
-        if (sscanf(line, "C|%15[^|]|%lu|%d", dayToken, &lastScanTime, &recentScanPassed) == 3) {
+        // Try newest format: C|day|lastScanTime|recentScanPassed|filesTotal|filesUploaded|uploadSuccess
+        unsigned int filesTotal = 0, filesUploaded = 0;
+        int uploadSuccess = 0;
+        if (sscanf(line, "C|%15[^|]|%lu|%d|%u|%u|%d", dayToken, &lastScanTime, &recentScanPassed, &filesTotal, &filesUploaded, &uploadSuccess) == 6) {
             DayKey day = 0;
             if (parseDayToken(dayToken, day)) {
                 addCompletedInternal(day, false);
                 completedFolders[completedCount - 1].lastScanTime = lastScanTime;
                 completedFolders[completedCount - 1].recentScanPassed = (recentScanPassed != 0);
+                completedFolders[completedCount - 1].filesTotal = filesTotal;
+                completedFolders[completedCount - 1].filesUploaded = filesUploaded;
+                completedFolders[completedCount - 1].uploadSuccess = (uploadSuccess != 0);
+                return true;
+            }
+        }
+        // Try hybrid format: C|day|lastScanTime|recentScanPassed
+        else if (sscanf(line, "C|%15[^|]|%lu|%d", dayToken, &lastScanTime, &recentScanPassed) == 3) {
+            DayKey day = 0;
+            if (parseDayToken(dayToken, day)) {
+                addCompletedInternal(day, false);
+                completedFolders[completedCount - 1].lastScanTime = lastScanTime;
+                completedFolders[completedCount - 1].recentScanPassed = (recentScanPassed != 0);
+                completedFolders[completedCount - 1].filesTotal = 0;
+                completedFolders[completedCount - 1].filesUploaded = 0;
+                completedFolders[completedCount - 1].uploadSuccess = false;  // Unknown, assume failed
                 return true;
             }
         }
@@ -935,6 +1012,9 @@ bool UploadStateManager::applySnapshotLine(const char* line) {
                 addCompletedInternal(day, false);
                 completedFolders[completedCount - 1].lastScanTime = 0;
                 completedFolders[completedCount - 1].recentScanPassed = false;
+                completedFolders[completedCount - 1].filesTotal = 0;
+                completedFolders[completedCount - 1].filesUploaded = 0;
+                completedFolders[completedCount - 1].uploadSuccess = false;  // Unknown, assume failed
                 return true;
             }
         }
@@ -1177,11 +1257,14 @@ bool UploadStateManager::compactState(fs::FS &sd) {
     for (uint16_t i = 0; i < completedCount; ++i) {
         char dayText[16] = {0};
         dayKeyToChars(completedFolders[i].day, dayText, sizeof(dayText));
-        // Format: C|day|lastScanTime|recentScanPassed
-        snprintf(line, sizeof(line), "C|%s|%lu|%d", 
+        // Format: C|day|lastScanTime|recentScanPassed|filesTotal|filesUploaded|uploadSuccess
+        snprintf(line, sizeof(line), "C|%s|%lu|%d|%u|%u|%d", 
                  dayText, 
                  (unsigned long)completedFolders[i].lastScanTime,
-                 completedFolders[i].recentScanPassed ? 1 : 0);
+                 completedFolders[i].recentScanPassed ? 1 : 0,
+                 completedFolders[i].filesTotal,
+                 completedFolders[i].filesUploaded,
+                 completedFolders[i].uploadSuccess ? 1 : 0);
         if (file.println(line) == 0) {
             file.close();
             sd.remove(tempPath);

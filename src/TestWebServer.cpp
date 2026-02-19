@@ -533,8 +533,13 @@ void TestWebServer::updateStatusSnapshot() {
         smbComp = smbStateManager->getCompletedFoldersCount();
         smbInc  = smbStateManager->getIncompleteFoldersCount();
     }
+    int smbSuccess = 0, clSuccess = 0;
+    if (smbStateManager) {
+        smbSuccess = smbStateManager->getSuccessfulFoldersCount();
+    }
     if (stateManager && stateManager != smbStateManager) {
         clComp = stateManager->getCompletedFoldersCount();
+        clSuccess = stateManager->getSuccessfulFoldersCount();
         clInc  = stateManager->getIncompleteFoldersCount();
     }
     long nextUp = -1; bool timeSynced = false;
@@ -556,7 +561,7 @@ void TestWebServer::updateStatusSnapshot() {
         ",\"time\":\"%s\",\"time_synced\":%s"
         ",\"free_heap\":%u,\"max_alloc\":%u"
         ",\"wifi\":%s,\"rssi\":%d,\"wifi_ip\":\"%s\""
-        ",\"smb_comp\":%d,\"smb_inc\":%d,\"cloud_comp\":%d,\"cloud_inc\":%d"
+        ",\"smb_comp\":%d,\"smb_success\":%d,\"smb_inc\":%d,\"cloud_comp\":%d,\"cloud_success\":%d,\"cloud_inc\":%d"
         ",\"next_upload\":%ld"
         ",\"smb_active\":%s,\"smb_folder\":\"%s\",\"smb_up\":%d,\"smb_total\":%d"
         ",\"cloud_active\":%s,\"cloud_folder\":\"%s\",\"cloud_up\":%d,\"cloud_total\":%d"
@@ -565,7 +570,7 @@ void TestWebServer::updateStatusSnapshot() {
         timeBuf, timeSynced ? "true" : "false",
         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
         wifiConn ? "true" : "false", rssi, wifiIp,
-        smbComp, smbInc, clComp, clInc,
+        smbComp, smbSuccess, smbInc, clComp, clSuccess, clInc,
         nextUp,
         smbActive ? "true" : "false", smbFolder, smbUp, smbTotal,
         clActive  ? "true" : "false", cloudFolder, clUp,  clTotal,

@@ -819,9 +819,20 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
     // Per-folder disconnect (not per-file — avoids socket exhaustion)
     if (smbUploader->isConnected()) smbUploader->end();
 
-    smbStateManager->markFolderCompletedWithScan(folderName, true);  // Recent scan passed
+    // Calculate actual upload success
+    bool uploadSuccess = (uploadedCount == (int)files.size());
+    smbStateManager->markFolderUploadProgress(folderName, files.size(), uploadedCount, uploadSuccess);
+    
+    if (uploadSuccess) {
+        smbStateManager->markFolderCompletedWithScan(folderName, true);  // Recent scan passed
+        LOGF("[FileUploader] [SMB] Folder upload successful: %s (%d/%d files)", folderName.c_str(), uploadedCount, (int)files.size());
+    } else {
+        smbStateManager->markFolderRecentScanFailed(folderName);  // Recent scan failed
+        LOG_WARNF("[FileUploader] [SMB] Folder upload incomplete: %s (%d/%d files)", folderName.c_str(), uploadedCount, (int)files.size());
+    }
+    
     smbStateManager->save(sd);
-    return true;
+    return uploadSuccess;
 #endif
 }
 
@@ -972,9 +983,20 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         LOGF("[FileUploader] [Cloud] Folder complete: %d files", uploadedCount);
     }
 
-    cloudStateManager->markFolderCompletedWithScan(folderName, true);  // Recent scan passed
+    // Calculate actual upload success
+    bool uploadSuccess = (uploadedCount == (int)files.size());
+    cloudStateManager->markFolderUploadProgress(folderName, files.size(), uploadedCount, uploadSuccess);
+    
+    if (uploadSuccess) {
+        cloudStateManager->markFolderCompletedWithScan(folderName, true);  // Recent scan passed
+        LOGF("[FileUploader] [Cloud] Folder upload successful: %s (%d/%d files)", folderName.c_str(), uploadedCount, (int)files.size());
+    } else {
+        cloudStateManager->markFolderRecentScanFailed(folderName);  // Recent scan failed
+        LOG_WARNF("[FileUploader] [Cloud] Folder upload incomplete: %s (%d/%d files)", folderName.c_str(), uploadedCount, (int)files.size());
+    }
+    
     cloudStateManager->save(sd);
-    return true;
+    return uploadSuccess;
 #endif
 }
 
