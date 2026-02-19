@@ -303,15 +303,32 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                             entry.close(); root.close(); return true;
                         }
                     }
+                    if (!completed && pending) {
+                        // Pending = was empty when last seen.  Check if the CPAP has since
+                        // written files to it; if so treat it like a normal incomplete folder.
+                        String folderPath = "/DATALOG/" + name;
+                        auto pendingFiles = scanFolderFiles(sd, folderPath);
+                        if (!pendingFiles.empty()) {
+                            bool isOld = !recent;
+                            bool canDoOld = !isOld || !scheduleManager || scheduleManager->canUploadOldData();
+                            if (canDoOld) {
+                                LOGF("[FileUploader] Pre-flight: WORK — pending folder %s now has files",
+                                     name.c_str());
+                                entry.close(); root.close(); return true;
+                            }
+                        }
+                    }
                     if (completed && recent) {
-                        // Recently completed but CPAP may have extended files.
-                        // Check each file for changes (size comparison only).
+                        // Recently completed but CPAP may have extended or added files.
+                        // hasFileChanged needs FULL paths — scanFolderFiles returns bare
+                        // filenames so we must prepend the folder path here.
                         String folderPath = "/DATALOG/" + name;
                         auto files = scanFolderFiles(sd, folderPath);
                         for (const String& fp : files) {
-                            if (sm->hasFileChanged(sd, fp)) {
+                            String fullPath = folderPath + "/" + fp;
+                            if (sm->hasFileChanged(sd, fullPath)) {
                                 LOGF("[FileUploader] Pre-flight: WORK — file changed: %s",
-                                     fp.c_str());
+                                     fullPath.c_str());
                                 entry.close(); root.close(); return true;
                             }
                         }
