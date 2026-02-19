@@ -253,6 +253,10 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         return UploadResult::ERROR;
     }
 
+    // Track originalBackend before any pre-flight redirect so we can advance
+    // both backend timestamps when a redirect occurs (prevents cycling freeze).
+    UploadBackend originalBackend = activeBackend;
+
     // ── Pre-flight: check every configured backend for pending work ──────────
     // Do this BEFORE writing the session-start summary so we don't advance the
     // cycling pointer when there is genuinely nothing to upload.  The scan is
@@ -357,6 +361,13 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     time_t nowTs; time(&nowTs);
     uint32_t sessionTs = (uint32_t)nowTs;
     writeBackendSummaryStart(sd, activeBackend, sessionTs);
+    // If we redirected away from originalBackend, advance its timestamp too so
+    // cycling doesn't permanently select the no-work backend every boot.
+    if (originalBackend != activeBackend) {
+        LOGF("[FileUploader] Pre-flight: also advancing %s timestamp to keep cycling balanced",
+             (originalBackend == UploadBackend::SMB) ? "SMB" : "CLOUD");
+        writeBackendSummaryStart(sd, originalBackend, sessionTs);
+    }
 
     cloudImportCreated = false;
     cloudImportFailed  = false;
