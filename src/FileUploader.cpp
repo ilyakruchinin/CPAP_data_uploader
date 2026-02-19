@@ -213,7 +213,13 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             LOG("[FileUploader] Phase 1: Fresh DATALOG folders");
             for (const String& folder : smbFreshFolders) {
                 if (isTimerExpired()) { timerExpired = true; break; }
-                uploadDatalogFolderSmb(sdManager, folder);
+                bool uploadSuccess = uploadDatalogFolderSmb(sdManager, folder);
+                if (!uploadSuccess) {
+                    LOG_WARNF("[FileUploader] SMB upload failed for folder: %s - marking recent scan failed", folder.c_str());
+                    if (isRecentFolder(folder)) {
+                        smbStateManager->markFolderRecentScanFailed(folder);
+                    }
+                }
 #ifdef ENABLE_TEST_WEBSERVER
                 if (webServer) webServer->handleClient();
 #endif
@@ -224,7 +230,13 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             LOG("[FileUploader] Phase 2: Old DATALOG folders");
             for (const String& folder : smbOldFolders) {
                 if (isTimerExpired()) { timerExpired = true; break; }
-                uploadDatalogFolderSmb(sdManager, folder);
+                bool uploadSuccess = uploadDatalogFolderSmb(sdManager, folder);
+                if (!uploadSuccess) {
+                    LOG_WARNF("[FileUploader] SMB upload failed for folder: %s - marking recent scan failed", folder.c_str());
+                    if (isRecentFolder(folder)) {
+                        smbStateManager->markFolderRecentScanFailed(folder);
+                    }
+                }
 #ifdef ENABLE_TEST_WEBSERVER
                 if (webServer) webServer->handleClient();
 #endif
@@ -316,7 +328,13 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
 
             auto runCloudFolder = [&](const String& folder) -> bool {
                 if (isTimerExpired()) { timerExpired = true; return false; }
-                uploadDatalogFolderCloud(sdManager, folder);
+                bool uploadSuccess = uploadDatalogFolderCloud(sdManager, folder);
+                if (!uploadSuccess) {
+                    LOG_WARNF("[FileUploader] Cloud upload failed for folder: %s - marking recent scan failed", folder.c_str());
+                    if (isRecentFolder(folder)) {
+                        cloudStateManager->markFolderRecentScanFailed(folder);
+                    }
+                }
 #ifdef ENABLE_TEST_WEBSERVER
                 if (webServer) webServer->handleClient();
 #endif
@@ -456,25 +474,11 @@ std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, UploadStateMana
                     // For delta/deep scans, include completed folders
                     folders.push_back(folderName);
                     LOG_INFOF("[FileUploader] Found completed DATALOG folder: %s", folderName.c_str());
-                } else if (isRecentFolder(folderName)) {
-                    // Recent completed folders: only re-scan if at least one file
-                    // has changed size (CPAP may still be writing to today's data).
-                    // Avoids triggering backend auth+connect when nothing is new.
-                    String rfolderPath = "/DATALOG/" + folderName;
-                    std::vector<String> rfiles = scanFolderFiles(sd, rfolderPath);
-                    bool anyChanged = false;
-                    for (const String& fn : rfiles) {
-                        if (sm->hasFileChanged(sd, rfolderPath + "/" + fn)) {
-                            anyChanged = true;
-                            break;
-                        }
-                    }
-                    if (anyChanged) {
-                        folders.push_back(folderName);
-                        LOG_DEBUGF("[FileUploader] Recent folder has new/changed files: %s", folderName.c_str());
-                    } else {
-                        LOG_DEBUGF("[FileUploader] Recent completed folder unchanged, skipping: %s", folderName.c_str());
-                    }
+                } else if (isRecentFolder(folderName) && sm->shouldRescanRecentFolder(folderName)) {
+                    // Recent completed folders: re-scan if recent scan failed
+                    // This ensures failed uploads get retried while avoiding unnecessary scans
+                    folders.push_back(folderName);
+                    LOG_DEBUGF("[FileUploader] Recent folder needs rescan (failed recent scan): %s", folderName.c_str());
                 } else {
                     LOG_DEBUGF("[FileUploader] Skipping completed folder: %s", folderName.c_str());
                 }
@@ -815,7 +819,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
     // Per-folder disconnect (not per-file — avoids socket exhaustion)
     if (smbUploader->isConnected()) smbUploader->end();
 
-    smbStateManager->markFolderCompleted(folderName);
+    smbStateManager->markFolderCompletedWithScan(folderName, true);  // Recent scan passed
     smbStateManager->save(sd);
     return true;
 #endif
@@ -968,7 +972,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         LOGF("[FileUploader] [Cloud] Folder complete: %d files", uploadedCount);
     }
 
-    cloudStateManager->markFolderCompleted(folderName);
+    cloudStateManager->markFolderCompletedWithScan(folderName, true);  // Recent scan passed
     cloudStateManager->save(sd);
     return true;
 #endif
