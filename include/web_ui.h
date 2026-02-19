@@ -122,7 +122,10 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=card style="margin-bottom:10px">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
 <h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
+<div style="display:flex;gap:6px">
+<button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
 <button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
+</div>
 </div>
 <div id=log-box>Loading...</div>
 </div>
@@ -381,29 +384,41 @@ function saveAndReboot(){
 }
 
 // Client-side log buffer — persists across soft-reboots in browser memory
-var logAtBottom=true,clientLogBuf=[],lastLogSnap='',LOG_BUF_MAX=2000;
+var logAtBottom=true,clientLogBuf=[],lastSeenLine='',LOG_BUF_MAX=2000;
 function _appendLogs(text){
   if(!text)return;
   var lines=text.split('\n');
-  // Detect reboot: new log starts with boot banner
-  var isReboot=lines.length>0&&lines[0].indexOf('=== CPAP Data Auto-Uploader ===')>=0;
-  if(isReboot&&clientLogBuf.length>0){
-    clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
+  // Detect reboot: scan ALL lines for the boot banner (not just line 0,
+  // because the server prepends a space byte before streaming the buffer).
+  var bootIdx=-1;
+  for(var i=0;i<lines.length;i++){
+    if(lines[i].indexOf('=== CPAP Data Auto-Uploader ===')>=0){bootIdx=i;break;}
   }
-  // Only append lines not already in the tail
-  var overlap=0;
-  if(!isReboot&&lastLogSnap){
-    var tail=lastLogSnap.split('\n');
-    for(var ti=tail.length-1;ti>=0;ti--){
-      if(tail[ti]&&lines[0]===tail[ti]){overlap=ti;break;}
+  var newLines;
+  if(bootIdx>=0){
+    // Reboot — insert separator if we had prior content, then take from banner onward
+    if(clientLogBuf.length>0)clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
+    newLines=lines.slice(bootIdx);
+    lastSeenLine='';
+  } else {
+    // Normal poll — find the last line we already buffered (search from end)
+    // and only append what comes after it.
+    var startFrom=0;
+    if(lastSeenLine){
+      for(var i=lines.length-1;i>=0;i--){
+        if(lines[i]===lastSeenLine){startFrom=i+1;break;}
+      }
     }
+    newLines=lines.slice(startFrom);
   }
-  var newLines=isReboot?lines:lines.slice(overlap>0?overlap:0);
   for(var i=0;i<newLines.length;i++){
     if(newLines[i]!==undefined)clientLogBuf.push(newLines[i]);
   }
+  // Track the last non-empty line we put into the buffer for next dedup pass
+  for(var i=clientLogBuf.length-1;i>=0;i--){
+    if(clientLogBuf[i]){lastSeenLine=clientLogBuf[i];break;}
+  }
   if(clientLogBuf.length>LOG_BUF_MAX)clientLogBuf=clientLogBuf.slice(clientLogBuf.length-LOG_BUF_MAX);
-  lastLogSnap=text;
 }
 function _renderLogBuf(){
   var b=document.getElementById('log-box');
@@ -419,7 +434,18 @@ function fetchLogs(){
     set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');
   }).catch(function(){set('log-st','Disconnected');});
 }
-function clearLogBuf(){clientLogBuf=[];lastLogSnap='';document.getElementById('log-box').textContent='';}
+function clearLogBuf(){clientLogBuf=[];lastSeenLine='';document.getElementById('log-box').textContent='';}
+function copyLogBuf(){
+  var txt=clientLogBuf.join('\n');
+  if(!txt){return;}
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(function(){set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');},2000);});
+  } else {
+    var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');},2000);
+  }
+}
 document.getElementById('log-box').addEventListener('scroll',function(){
   var b=this;logAtBottom=(b.scrollHeight-b.scrollTop-b.clientHeight)<60;
 });
