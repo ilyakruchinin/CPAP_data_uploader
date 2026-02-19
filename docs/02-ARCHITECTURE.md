@@ -501,7 +501,7 @@ The web page shows a **progressive, auto-updating activity timeline**:
 - `WiFiManager` — no changes
 - `SMBUploader` / `WebDAVUploader` — no architectural changes
 - `Logger` — no changes
-- `TestWebServer` — updates: expose FSM state, SD activity monitor page/endpoint, remove SD release status
+- `CpapWebServer` — updates: expose FSM state, SD activity monitor page/endpoint, remove SD release status
 
 `SleepHQUploader` and `UploadStateManager` received memory-stability changes and should
 not be treated as unchanged.

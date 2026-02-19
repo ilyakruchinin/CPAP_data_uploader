@@ -37,7 +37,7 @@ This document is for developers who want to build, modify, or contribute to the 
 ### Supporting Components
 
 - **Logger** - Circular buffer logging system with web API access
-- **TestWebServer** - Optional web server for development/testing
+- **WebServer** - Optional web server for development/testing
 
 ### Power Management (v0.4.3+)
 
@@ -72,7 +72,7 @@ Power settings are applied automatically during startup and maintain full web se
 │   ├── UploadStateManager.cpp # Upload state tracking
 │   ├── ScheduleManager.cpp    # Upload scheduling
 │   ├── SMBUploader.cpp        # SMB upload implementation
-│   ├── TestWebServer.cpp      # Test web server (optional)
+│   ├── WebServer.cpp      # Web server (optional)
 │   ├── Logger.cpp             # Circular buffer logging
 │   ├── WebDAVUploader.cpp     # WebDAV upload (placeholder)
 │   └── SleepHQUploader.cpp    # SleepHQ cloud upload (OAuth, multipart, TLS)
@@ -397,7 +397,7 @@ build_flags =
     -DENABLE_SMB_UPLOAD          ; Enable SMB/CIFS upload
     ; -DENABLE_WEBDAV_UPLOAD     ; Enable WebDAV (TODO)
     ; -DENABLE_SLEEPHQ_UPLOAD    ; Enable Cloud/SleepHQ upload (HTTPS + OAuth)
-    -DENABLE_TEST_WEBSERVER      ; Enable test web server
+    -DENABLE_WEBSERVER      ; Enable web server
 ```
 
 Multiple upload backends can be enabled simultaneously. Use `ENDPOINT_TYPE` in `config.txt` to select active backends at runtime (e.g., `"SMB"`, `"CLOUD"`, or `"SMB,CLOUD"`).
@@ -718,10 +718,10 @@ Boot → Load config.txt
 
 ### Web Interface Protection
 
-The TestWebServer component respects credential storage mode:
+The WebServer component respects credential storage mode:
 
 ```cpp
-void TestWebServer::handleApiConfig() {
+void CpapWebServer::handleApiConfig() {
     // ...
     if (config) {
         // Check if credentials are stored in secure mode

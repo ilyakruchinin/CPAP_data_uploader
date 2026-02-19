@@ -81,7 +81,7 @@ const unsigned long CONFIG_EDIT_LOCK_TIMEOUT_MS = 30 * 60 * 1000;  // 30 min
 - `WiFiManager` - Network connectivity
 - `FileUploader` - Upload orchestration
 - `TrafficMonitor` - SD bus activity detection
-- `TestWebServer` - Web interface (optional)
+- `CpapWebServer` - Web interface (optional)
 - `OTAManager` - OTA updates (optional)
 
 ## Lifecycle
@@ -102,4 +102,4 @@ const unsigned long CONFIG_EDIT_LOCK_TIMEOUT_MS = 30 * 60 * 1000;  // 30 min
 - **FileUploader**: Backend upload orchestration
 - **TrafficMonitor**: SD activity detection for smart mode
 - **WiFiManager**: Network connectivity for cloud operations
-- **TestWebServer**: User interface and manual controls
+- **WebServer**: User interface and manual controls

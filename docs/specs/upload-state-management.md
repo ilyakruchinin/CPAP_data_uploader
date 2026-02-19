@@ -295,7 +295,7 @@ Recent folders use enhanced completion tracking to handle upload failures:
 - **Config**: Provides timing and retention parameters
 - **SMBUploader**: Updates smbStateManager after successful uploads
 - **SleepHQUploader**: Updates cloudStateManager after successful uploads
-- **TestWebServer**: Displays separate progress for each backend
+- **WebServer**: Displays separate progress for each backend
 
 ## Usage Patterns
 
