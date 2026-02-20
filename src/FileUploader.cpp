@@ -586,7 +586,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     UploadStateManager* sm = activeStateManager();
     int sessionDone  = sm ? sm->getCompletedFoldersCount() : 0;
     int sessionEmpty = sm ? sm->getPendingFoldersCount()   : 0;
-    int sessionTotal = sessionDone + (sm ? sm->getIncompleteFoldersCount() : 0) + sessionEmpty;
+    int sessionTotal = sessionDone + (sm ? sm->getIncompleteFoldersCount() : 0);
     writeBackendSummaryFull(sd, activeBackend, sessionTs, sessionDone, sessionTotal, sessionEmpty);
 
     // ── Determine result ──────────────────────────────────────────────────────
