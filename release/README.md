@@ -3,7 +3,6 @@
 This package contains precompiled firmware for automatically uploading CPAP data from your SD card to a network share or the Cloud (**SleepHQ**).
 
 ## Table of Contents
-- [⚠️ Breaking Change in v0.8.0](#️-important-breaking-change-in-v080)
 - [🚀 Get Started in 3 Steps](#-get-started-in-3-steps-seriously-its-this-easy)
 - [What This Does](#what-this-does)
 - [Firmware Options](#firmware-options)
@@ -16,42 +15,11 @@ This package contains precompiled firmware for automatically uploading CPAP data
 - [Common Configuration Examples](#common-configuration-examples)
 - [How It Works](#how-it-works)
 - [Finding Your Serial Port](#finding-your-serial-port)
-- [Test Web Server](#test-web-server-optional)
+- [Web Interface](#web-interface-optional)
 - [Troubleshooting](#troubleshooting)
 - [File Structure](#file-structure)
 - [Package Contents](#package-contents)
 - [Legal & Support](#legal--trademarks)
-
----
-
-## ⚠️ IMPORTANT: Breaking Change in v0.8.0
-
-**Configuration format has changed from JSON to Key-Value format.**
-
-- **Old format (v0.7.x):** `config.json` (JSON format)
-- **New format (v0.8.0+):** `config.txt` (simple Key-Value format)
-
-### If Upgrading from v0.7.x or Earlier:
-
-**Your existing `config.json` will NOT work!** You must create a new `config.txt` file.
-
-1. ❌ Delete or rename your old `config.json`
-2. ✅ Create a new `config.txt` file in the root of your SD card
-3. ✅ Use the Key-Value format: `SETTING_NAME = value` (one per line)
-4. ✅ See configuration examples below or in the package (`config.txt.example*`)
-
-**Example conversion:**
-```
-Old (config.json):          New (config.txt):
-{                           WIFI_SSID = MyNetwork
-  "WIFI_SSID": "MyNetwork", WIFI_PASSWORD = mypassword
-  "WIFI_PASSWORD": "pwd",   ENDPOINT_TYPE = SMB
-  "ENDPOINT_TYPE": "SMB"    SMB_SERVER = //192.168.1.10/share
-}                           SMB_USER = username
-                            SMB_PASSWORD = password
-```
-
-**No backward compatibility** - manual conversion required.
 
 ---
 
@@ -566,9 +534,9 @@ Usually `/dev/ttyUSB0` or `/dev/ttyACM0`
 
 ---
 
-## Test Web Server (Optional)
+## Web Interface (Optional)
 
-The firmware includes an optional web server for development and troubleshooting.
+The firmware includes an optional web server for monitoring and configuration.
 
 ### Accessing the Web Interface
 
@@ -905,6 +873,19 @@ This software interacts directly with medical device hardware and file systems. 
 
 **GPL-3.0 License Disclaimer:**
 > THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW. EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM IS WITH YOU. SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
+
+<details>
+<summary><b>⚠️ Upgrading from v0.7.x or earlier? (Breaking change in v0.8.0)</b></summary>
+
+The configuration format changed from `config.json` (JSON) to `config.txt` (key-value, one setting per line).
+
+Your existing `config.json` **will not** work. You must create a new `config.txt`:
+1. Delete or rename your old `config.json`
+2. Create `config.txt` using the examples in this package (`config.txt.example*`)
+3. Format: `SETTING_NAME = value` (one setting per line)
+
+The new format is simpler and has no JSON syntax to get wrong.
+</details>
 
 ## Support
 
