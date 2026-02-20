@@ -5,7 +5,6 @@ Automatically upload CPAP therapy data from your SD card to network storage or t
 **Supports:** ResMed Series 9, 10, and 11 CPAP machines
 
 ## Table of Contents
-- [⚠️ Breaking Change in v0.8.0](#️-breaking-change-in-v080)
 - [🚀 Quick Start](#-quick-start)
 - [🚨 SD Card Errors? Use Scheduled Mode](#-sd-card-errors-use-scheduled-mode)
 - [Features](#features)
@@ -16,26 +15,9 @@ Automatically upload CPAP therapy data from your SD card to network storage or t
 - [Project Status](#project-status)
 - [License](#license)
 
-## ⚠️ Breaking Change in v0.8.0
-
-**Configuration format has changed from JSON to Key-Value format.**
-
-- Old: `config.json` (JSON format)
-- New: `config.txt` (simple Key-Value format, one setting per line)
-
-**If upgrading from v0.7.x or earlier:**
-1. Your existing `config.json` will **NOT** work with v0.8.0
-2. Create a new `config.txt` file using the Key-Value format (see examples in `docs/config.txt.example*`)
-3. Read the [Configuration Guide](release/README.md#2-create-configtxt) for syntax and examples
-4. **No backward compatibility** - you must convert your configuration manually
-
-**Why this change?** The new format is more user-friendly, removes the ArduinoJson dependency, and reduces memory usage.
-
----
-
 ## 🚀 Quick Start
 
-**Want to use this?** Get started in 3 simple steps:
+**Want to use this?** Get started in 4 steps:
 
 ### 1. Get the Hardware
 You need: [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) adapter
@@ -46,7 +28,7 @@ You need: [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-p
 
 Follow the included instructions to flash firmware to your SD WIFI PRO.
 
-### 3. Create Simple Config
+### 3. Create a Minimal Config
 Create `config.txt` on your SD card with just **6-10 lines**:
 
 **👇👇👇 Click the option you want to use** (or click ▸ to expand additional options):
@@ -95,7 +77,13 @@ CLOUD_CLIENT_SECRET = your-client-secret
 
 ---
 
-**That's it!** Insert the SD card in your CPAP machine and you're done. Everything else has smart defaults.
+### 4. Open `http://cpap.local` — You're Done
+
+Insert the SD card in your CPAP machine and open **[http://cpap.local](http://cpap.local)** in your browser.
+
+You'll see the live dashboard showing upload status, WiFi signal, time sync, and progress.
+
+> **From this point on you can edit your config directly from the browser** (Config tab → Edit) — no need to pull the SD card again.
 
 ---
 
@@ -115,22 +103,19 @@ The default `smart` mode uses SD bus activity detection to determine when it is 
 
 ---
 
-**💻 Web Interface:** Once running, access the dashboard at **`http://cpap.local`** to monitor uploads, view logs, and manage settings.
-
-📖 **Need more details?** See the comprehensive [User Guide](release/README.md)
+ **Need more details?** See the comprehensive [User Guide](release/README.md)
 
 ### Web Interface
-
-Access the dashboard at `http://cpap.local` to monitor your upload progress:
 
 ![CPAP Data Uploader Web Interface](docs/screenshots/web-interface.png)
 
 **Features:**
 - Real-time upload status and progress
 - System information (WiFi, time sync, memory)
+- **Edit `config.txt` from the browser** — no SD card required
 - Manual upload trigger
 - SD Activity Monitor
-- View logs and configuration
+- View logs
 - OTA firmware updates
 
 ---
@@ -262,6 +247,16 @@ The device respects your CPAP machine's need for SD card access by only accessin
 - **Developer Guide:** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) - Build and contribute
 - **Troubleshooting:** See user guide or developer guide
 - **Issues:** Report bugs or request features via GitHub issues
+
+<details>
+<summary><b>⚠️ Upgrading from v0.7.x or earlier? (Breaking change in v0.8.0)</b></summary>
+
+The configuration format changed from `config.json` (JSON) to `config.txt` (key-value, one setting per line).
+
+Your existing `config.json` **will not** work. Create a new `config.txt` using the examples in `docs/config.txt.example*` or the [Configuration Guide](release/README.md#2-create-configtxt). The new format is simpler, has no library dependency, and uses less memory.
+</details>
+
+---
 
 ## License
 
