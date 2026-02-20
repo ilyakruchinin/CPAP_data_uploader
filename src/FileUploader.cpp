@@ -973,8 +973,9 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
     g_smbSessionStatus.filesTotal    = (int)files.size();
     g_smbSessionStatus.filesUploaded = 0;
 
-    int uploadedCount   = 0;
+    int uploadedCount    = 0;
     int skippedUnchanged = 0;
+    int skippedEmpty     = 0;
 
     for (const String& fileName : files) {
         String localPath  = folderPath + "/" + fileName;
@@ -988,6 +989,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         if (fileSize == 0) {
             f.close();
             smbStateManager->markFileUploaded(localPath, "empty_file", 0);
+            skippedEmpty++;
             continue;
         }
         f.close();
@@ -1026,9 +1028,9 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
     // Per-folder disconnect (not per-file — avoids socket exhaustion)
     if (smbUploader->isConnected()) smbUploader->end();
 
-    bool uploadSuccess = (uploadedCount == (int)files.size() - skippedUnchanged);
-    LOGF("[FileUploader] [SMB] Folder %s: %d/%d files, %d unchanged — success=%s",
-         folderName.c_str(), uploadedCount, (int)files.size(), skippedUnchanged,
+    bool uploadSuccess = (uploadedCount == (int)files.size() - skippedUnchanged - skippedEmpty);
+    LOGF("[FileUploader] [SMB] Folder %s: %d/%d files, %d unchanged, %d empty — success=%s",
+         folderName.c_str(), uploadedCount, (int)files.size(), skippedUnchanged, skippedEmpty,
          uploadSuccess ? "yes" : "no");
 
     // Mark-complete strategy:
@@ -1141,6 +1143,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
 
     int uploadedCount    = 0;
     int skippedUnchanged = 0;
+    int skippedEmpty     = 0;
 
     // Import was created eagerly in begin() before this folder loop starts
     if (cloudImportFailed || sleephqUploader->getCurrentImportId().isEmpty()) {
@@ -1160,6 +1163,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         f.close();
         if (fileSize == 0) {
             cloudStateManager->markFileUploaded(localPath, "empty_file", 0);
+            skippedEmpty++;
             continue;
         }
 
@@ -1194,9 +1198,9 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         LOGF("[FileUploader] [Cloud] Folder complete: %d files", uploadedCount);
     }
 
-    bool uploadSuccess = (uploadedCount == (int)files.size() - skippedUnchanged);
-    LOGF("[FileUploader] [Cloud] Folder %s: %d/%d files, %d unchanged — success=%s",
-         folderName.c_str(), uploadedCount, (int)files.size(), skippedUnchanged,
+    bool uploadSuccess = (uploadedCount == (int)files.size() - skippedUnchanged - skippedEmpty);
+    LOGF("[FileUploader] [Cloud] Folder %s: %d/%d files, %d unchanged, %d empty — success=%s",
+         folderName.c_str(), uploadedCount, (int)files.size(), skippedUnchanged, skippedEmpty,
          uploadSuccess ? "yes" : "no");
 
     // Mark-complete strategy: same as SMB — recent always, old only on full success.
