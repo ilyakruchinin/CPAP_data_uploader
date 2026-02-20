@@ -1,6 +1,20 @@
 # Mock Infrastructure
 
-This directory contains mock implementations of hardware-dependent components for unit testing.
+This directory contains mock implementations of hardware-dependent components for unit testing. All mocks are automatically activated when `UNIT_TEST` is defined (set by the native PlatformIO test environment).
+
+## Quick Reference
+
+| Mock | Header | What it replaces |
+|---|---|---|
+| Arduino core | `Arduino.h` | Types, `millis()`, `delay()`, `Serial`, math helpers |
+| Filesystem (SD) | `FS.h` / `MockFS.h` | `fs::FS`, `fs::File` — in-memory file storage |
+| Time | `MockTime.h` | `millis()`, `time()` — deterministic, manually advanced |
+| Logger | `MockLogger.h` | `LOG()`, `LOGF()` — prints to stdout |
+| ArduinoJson | `ArduinoJson.h` | `StaticJsonDocument`, `DynamicJsonDocument`, `deserializeJson()` |
+
+Jump to any section below for API details and usage examples.
+
+---
 
 ## Available Mocks
 
