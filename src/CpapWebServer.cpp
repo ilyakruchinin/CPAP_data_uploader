@@ -1,4 +1,4 @@
-#include "TestWebServer.h"
+#include "CpapWebServer.h"
 #include "Logger.h"
 #include "UploadFSM.h"
 #include "version.h"
@@ -71,7 +71,7 @@ void sendUploadRateLimitResponse(WebServer* server,
 }
 
 // Constructor
-TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
+CpapWebServer::CpapWebServer(Config* cfg, UploadStateManager* state,
                              ScheduleManager* schedule, 
                              WiFiManager* wifi, CPAPMonitor* monitor)
     : server(nullptr),
@@ -90,7 +90,7 @@ TestWebServer::TestWebServer(Config* cfg, UploadStateManager* state,
 }
 
 // Destructor
-TestWebServer::~TestWebServer() {
+CpapWebServer::~CpapWebServer() {
     if (server) {
         server->stop();
         delete server;
@@ -98,8 +98,8 @@ TestWebServer::~TestWebServer() {
 }
 
 // Initialize and start the web server
-bool TestWebServer::begin() {
-    LOG("[TestWebServer] Initializing web server on port 80...");
+bool CpapWebServer::begin() {
+    LOG("[WebServer] Initializing web server on port 80...");
     
     server = new WebServer(80);
 
@@ -197,32 +197,32 @@ bool TestWebServer::begin() {
     // Start the server
     server->begin();
     
-    LOG("[TestWebServer] Web server started successfully");
-    LOG("[TestWebServer] Available endpoints:");
-    LOG("[TestWebServer]   GET /              - Status page (HTML)");
-    LOG("[TestWebServer]   GET /trigger-upload - Force immediate upload");
-    LOG("[TestWebServer]   GET /status        - Status information (JSON)");
-    LOG("[TestWebServer]   GET /reset-state   - Clear upload state");
-    LOG("[TestWebServer]   GET /config        - Display configuration");
-    LOG("[TestWebServer]   GET /logs          - Retrieve system logs (JSON)");
-    LOG("[TestWebServer]   GET /monitor       - SD Activity Monitor (live)");
+    LOG("[WebServer] Web server started successfully");
+    LOG("[WebServer] Available endpoints:");
+    LOG("[WebServer]   GET /              - Status page (HTML)");
+    LOG("[WebServer]   GET /trigger-upload - Force immediate upload");
+    LOG("[WebServer]   GET /status        - Status information (JSON)");
+    LOG("[WebServer]   GET /reset-state   - Clear upload state");
+    LOG("[WebServer]   GET /config        - Display configuration");
+    LOG("[WebServer]   GET /logs          - Retrieve system logs (JSON)");
+    LOG("[WebServer]   GET /monitor       - SD Activity Monitor (live)");
     
     return true;
 }
 
 // Process incoming HTTP requests
-void TestWebServer::handleClient() {
+void CpapWebServer::handleClient() {
     if (server) {
         // Always service sockets to avoid stale descriptors and connection backlog.
         server->handleClient();
     }
 }
 
-bool TestWebServer::isUploadInProgress() const {
+bool CpapWebServer::isUploadInProgress() const {
     return uploadTaskRunning;
 }
 
-bool TestWebServer::redirectToIpIfMdnsRequest() {
+bool CpapWebServer::redirectToIpIfMdnsRequest() {
     if (!server || server->method() != HTTP_GET) {
         return false;
     }
@@ -258,7 +258,7 @@ bool TestWebServer::redirectToIpIfMdnsRequest() {
     }
 
     String location = "http://" + ip + uri;
-    LOG_DEBUGF("[TestWebServer] Redirecting mDNS request %s -> %s", host.c_str(), location.c_str());
+    LOG_DEBUGF("[WebServer] Redirecting mDNS request %s -> %s", host.c_str(), location.c_str());
 
     server->sendHeader("Location", location, true);
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
@@ -269,7 +269,7 @@ bool TestWebServer::redirectToIpIfMdnsRequest() {
 }
 
 // GET / - Serve static SPA from PROGMEM. Zero heap allocation.
-void TestWebServer::handleRoot() {
+void CpapWebServer::handleRoot() {
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server->sendHeader("Pragma", "no-cache");
     server->sendHeader("Connection", "close");
@@ -277,25 +277,42 @@ void TestWebServer::handleRoot() {
 }
 
 // GET /trigger-upload - Force immediate upload
-void TestWebServer::handleTriggerUpload() {
-    LOG("[TestWebServer] Upload trigger requested via web interface");
-    
-    // Set global trigger flag
+void CpapWebServer::handleTriggerUpload() {
+    LOG("[WebServer] Upload trigger requested via web interface");
+
+    // Scheduled mode: reject trigger outside the upload window.
+    // Triggering outside the window would acquire the SD card (CPAP may be writing),
+    // do nothing (canUploadFreshData/canUploadOldData both false), then reboot — harmful.
+    if (scheduleManager && !scheduleManager->isSmartMode()) {
+        if (!scheduleManager->isInUploadWindow()) {
+            addCorsHeaders(server);
+            int startHour = scheduleManager->getUploadStartHour();
+            int endHour   = scheduleManager->getUploadEndHour();
+            char json[256];
+            snprintf(json, sizeof(json),
+                "{\"status\":\"scheduled\",\"message\":"
+                "\"Scheduled mode: uploads only between %02d:00 and %02d:00. "
+                "Switch to Smart mode for anytime uploads.\"}",
+                startHour, endHour);
+            server->send(200, "application/json", json);
+            return;
+        }
+    }
+
+    // Set global trigger flag — FSM picks this up in the next loop iteration
     g_triggerUploadFlag = true;
-    
-    // Add CORS headers
+
     addCorsHeaders(server);
-    
-    String response = "{\"status\":\"success\",\"message\":\"Upload triggered. Check serial output for progress.\"}";
-    server->send(200, "application/json", response);
+    server->send(200, "application/json",
+        "{\"status\":\"success\",\"message\":\"Upload triggered. Check serial output for progress.\"}");
 }
 
 // GET /status - JSON status information (Legacy - Removed, use handleApiStatus)
 
 
 // GET /soft-reboot - Reboot immediately, skipping cold-boot delays
-void TestWebServer::handleSoftReboot() {
-    LOG("[TestWebServer] Soft reboot requested via web interface");
+void CpapWebServer::handleSoftReboot() {
+    LOG("[WebServer] Soft reboot requested via web interface");
     addCorsHeaders(server);
     server->send(200, "application/json",
         "{\"status\":\"success\",\"message\":\"Rebooting now (waits skipped)...\"}");
@@ -303,8 +320,8 @@ void TestWebServer::handleSoftReboot() {
 }
 
 // GET /reset-state - Clear upload state
-void TestWebServer::handleResetState() {
-    LOG("[TestWebServer] State reset requested via web interface");
+void CpapWebServer::handleResetState() {
+    LOG("[WebServer] State reset requested via web interface");
     
     // Set global reset flag
     g_resetStateFlag = true;
@@ -317,13 +334,13 @@ void TestWebServer::handleResetState() {
 }
 
 // GET /api/config - serve pre-built static config snapshot. Zero heap allocation.
-void TestWebServer::handleApiConfig() {
+void CpapWebServer::handleApiConfig() {
     addCorsHeaders(server);
     server->send(200, "application/json", g_webConfigBuf);
 }
 
 // Handle 404 errors
-void TestWebServer::handleNotFound() {
+void CpapWebServer::handleNotFound() {
     String uri = server->uri();
 
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
@@ -353,14 +370,14 @@ void TestWebServer::handleNotFound() {
     }
     
     // Log unexpected 404s
-    LOG_DEBUGF("[TestWebServer] 404 Not Found: %s", uri.c_str());
+    LOG_DEBUGF("[WebServer] 404 Not Found: %s", uri.c_str());
     
     String message = "{\"status\":\"error\",\"message\":\"Endpoint not found\",\"path\":\"" + uri + "\"}";
     server->send(404, "application/json", message);
 }
 
 // Static helper: Add CORS headers to response
-void TestWebServer::addCorsHeaders(WebServer* server) {
+void CpapWebServer::addCorsHeaders(::WebServer* server) {
     server->sendHeader("Access-Control-Allow-Origin", "*");
     server->sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     server->sendHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -370,7 +387,7 @@ void TestWebServer::addCorsHeaders(WebServer* server) {
 }
 
 // Helper: Get uptime as formatted string
-String TestWebServer::getUptimeString() {
+String CpapWebServer::getUptimeString() {
     unsigned long seconds = millis() / 1000;
     unsigned long minutes = seconds / 60;
     unsigned long hours = minutes / 60;
@@ -388,7 +405,7 @@ String TestWebServer::getUptimeString() {
 }
 
 // Helper: Get current time as formatted string
-String TestWebServer::getCurrentTimeString() {
+String CpapWebServer::getCurrentTimeString() {
     time_t now;
     time(&now);
     
@@ -406,7 +423,7 @@ String TestWebServer::getCurrentTimeString() {
 }
 
 // Helper: Get count of pending files (estimate)
-int TestWebServer::getPendingFilesCount() {
+int CpapWebServer::getPendingFilesCount() {
     if (!stateManager) {
         return 0;
     }
@@ -418,7 +435,7 @@ int TestWebServer::getPendingFilesCount() {
 }
 
 // Helper: Get count of pending DATALOG folders
-int TestWebServer::getPendingFoldersCount() {
+int CpapWebServer::getPendingFoldersCount() {
     if (!stateManager) {
         return 0;
     }
@@ -455,13 +472,13 @@ public:
 };
 
 // GET /logs - serve SPA (client-side rendering handles logs tab)
-void TestWebServer::handleLogs() {
+void CpapWebServer::handleLogs() {
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server->sendHeader("Connection", "close");
     server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }
 // GET /api/logs - Raw logs for AJAX
-void TestWebServer::handleApiLogs() {
+void CpapWebServer::handleApiLogs() {
     // Add CORS headers
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -487,13 +504,13 @@ void TestWebServer::handleApiLogs() {
 }
 
 // GET /config - serve SPA
-void TestWebServer::handleConfigPage() {
+void CpapWebServer::handleConfigPage() {
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server->sendHeader("Connection", "close");
     server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }
 // GET /status - serve SPA
-void TestWebServer::handleStatusPage() {
+void CpapWebServer::handleStatusPage() {
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server->sendHeader("Connection", "close");
     server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
@@ -502,7 +519,7 @@ void TestWebServer::handleStatusPage() {
 // Must NOT rely on the main-loop periodic rebuild: during blocking uploads
 // the main loop is frozen, so g_webStatusBuf would be permanently stale.
 // updateStatusSnapshot() is stack-only (no heap) and safe to call here.
-void TestWebServer::handleApiStatus() {
+void CpapWebServer::handleApiStatus() {
     updateStatusSnapshot();
     addCorsHeaders(server);
     server->send(200, "application/json", g_webStatusBuf);
@@ -512,7 +529,7 @@ void TestWebServer::handleApiStatus() {
 // updateStatusSnapshot() — called every ~3 s from main loop.
 // Assembles status JSON into g_webStatusBuf using snprintf only (no heap).
 // ---------------------------------------------------------------------------
-void TestWebServer::updateStatusSnapshot() {
+void CpapWebServer::updateStatusSnapshot() {
     char timeBuf[32] = "Not synchronized";
     time_t now; time(&now);
     if (now >= 1000000000) {
@@ -592,7 +609,7 @@ void TestWebServer::updateStatusSnapshot() {
 // ---------------------------------------------------------------------------
 // initConfigSnapshot() — called once at boot after Config is loaded.
 // ---------------------------------------------------------------------------
-void TestWebServer::initConfigSnapshot() {
+void CpapWebServer::initConfigSnapshot() {
     if (!config) return;
     char buf[WEB_CONFIG_BUF_SIZE];
     bool hasCloud = config->hasCloudEndpoint();
@@ -605,7 +622,6 @@ void TestWebServer::initConfigSnapshot() {
         ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
         ",\"gmt_offset_hours\":%d,\"max_days\":%d"
         ",\"cloud_configured\":%s"
-        ",\"boot_delay_seconds\":%d"
         ",\"firmware\":\"%s\"}",
         config->getWifiSSID().c_str(),
         config->getHostname().c_str(),
@@ -617,7 +633,6 @@ void TestWebServer::initConfigSnapshot() {
         config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),
         config->getGmtOffsetHours(), config->getMaxDays(),
         hasCloud ? "true" : "false",
-        config->getBootDelaySeconds(),
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webConfigBuf, buf, n + 1);
@@ -625,19 +640,19 @@ void TestWebServer::initConfigSnapshot() {
 }
 
 // Update manager references (needed after uploader recreation)
-void TestWebServer::updateManagers(UploadStateManager* state, ScheduleManager* schedule) {
+void CpapWebServer::updateManagers(UploadStateManager* state, ScheduleManager* schedule) {
     stateManager = state;
     scheduleManager = schedule;
 }
 
-void TestWebServer::setSmbStateManager(UploadStateManager* sm) { smbStateManager = sm; }
+void CpapWebServer::setSmbStateManager(UploadStateManager* sm) { smbStateManager = sm; }
 
-void TestWebServer::setSdManager(SDCardManager* sd) { sdManager = sd; }
+void CpapWebServer::setSdManager(SDCardManager* sd) { sdManager = sd; }
 
 // ---------------------------------------------------------------------------
 // GET /api/config-raw — return raw contents of /config.txt as text/plain
 // ---------------------------------------------------------------------------
-void TestWebServer::handleApiConfigRawGet() {
+void CpapWebServer::handleApiConfigRawGet() {
     addCorsHeaders(server);
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     server->sendHeader("Connection", "close");
@@ -683,7 +698,7 @@ void TestWebServer::handleApiConfigRawGet() {
 // ---------------------------------------------------------------------------
 static constexpr size_t CONFIG_RAW_MAX_BYTES = 4096;
 
-void TestWebServer::handleApiConfigRawPost() {
+void CpapWebServer::handleApiConfigRawPost() {
     addCorsHeaders(server);
     server->sendHeader("Cache-Control", "no-store");
     server->sendHeader("Connection", "close");
@@ -746,7 +761,7 @@ void TestWebServer::handleApiConfigRawPost() {
     }
 
     if (tookControl) sdManager->releaseControl();
-    LOG("[TestWebServer] config.txt updated via web UI");
+    LOG("[WebServer] config.txt updated via web UI");
     server->send(200, "application/json", "{\"ok\":true,\"message\":\"Saved. Reboot to apply.\"}");
 }
 
@@ -756,7 +771,7 @@ void TestWebServer::handleApiConfigRawPost() {
 // While held, the FSM will not start a new upload session.
 // Auto-expires after 30 minutes (CONFIG_EDIT_LOCK_TIMEOUT_MS in main.cpp).
 // ---------------------------------------------------------------------------
-void TestWebServer::handleApiConfigLock() {
+void CpapWebServer::handleApiConfigLock() {
     addCorsHeaders(server);
     server->sendHeader("Cache-Control", "no-store");
     server->sendHeader("Connection", "close");
@@ -781,27 +796,27 @@ void TestWebServer::handleApiConfigLock() {
     g_configEditLock = lock;
     if (lock) {
         g_configEditLockAt = millis();
-        LOG("[TestWebServer] Config edit lock ACQUIRED — upload FSM paused");
+        LOG("[WebServer] Config edit lock ACQUIRED — upload FSM paused");
         server->send(200, "application/json", "{\"ok\":true,\"locked\":true}");
     } else {
         g_configEditLockAt = 0;
-        LOG("[TestWebServer] Config edit lock RELEASED — upload FSM resumed");
+        LOG("[WebServer] Config edit lock RELEASED — upload FSM resumed");
         server->send(200, "application/json", "{\"ok\":true,\"locked\":false}");
     }
 }
 
 // Set WiFi manager reference
-void TestWebServer::setWiFiManager(WiFiManager* wifi) {
+void CpapWebServer::setWiFiManager(WiFiManager* wifi) {
     wifiManager = wifi;
 }
 
 // Set TrafficMonitor reference
-void TestWebServer::setTrafficMonitor(TrafficMonitor* tm) {
+void CpapWebServer::setTrafficMonitor(TrafficMonitor* tm) {
     trafficMonitor = tm;
 }
 
 // Helper: Escape special characters for JSON string
-String TestWebServer::escapeJson(const String& str) {
+String CpapWebServer::escapeJson(const String& str) {
     String escaped = "";
     escaped.reserve(str.length() + 20);  // Reserve extra space for escape sequences
     
@@ -847,12 +862,12 @@ String TestWebServer::escapeJson(const String& str) {
 
 #ifdef ENABLE_OTA_UPDATES
 // Set OTA manager reference
-void TestWebServer::setOTAManager(OTAManager* ota) {
+void CpapWebServer::setOTAManager(OTAManager* ota) {
     otaManager = ota;
 }
 
 // GET /ota - OTA update page
-void TestWebServer::handleOTAPage() {
+void CpapWebServer::handleOTAPage() {
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
 
     auto sendChunk = [this](const String& s) {
@@ -1055,7 +1070,7 @@ void TestWebServer::handleOTAPage() {
 }
 
 // POST /ota-upload - Handle firmware file upload
-void TestWebServer::handleOTAUpload() {
+void CpapWebServer::handleOTAUpload() {
     static bool uploadError = false;
     static bool successResponseSent = false;
     static unsigned long lastUploadAttempt = 0;
@@ -1151,7 +1166,7 @@ void TestWebServer::handleOTAUpload() {
 }
 
 // POST /ota-upload - Handle completion of firmware file upload
-void TestWebServer::handleOTAUploadComplete() {
+void CpapWebServer::handleOTAUploadComplete() {
     LOG_DEBUG("[OTA] handleOTAUploadComplete() called");
     
     if (!otaManager) {
@@ -1178,7 +1193,7 @@ void TestWebServer::handleOTAUploadComplete() {
 }
 
 // POST /ota-url - Handle firmware download from URL
-void TestWebServer::handleOTAURL() {
+void CpapWebServer::handleOTAURL() {
     if (!otaManager) {
         server->send(500, "application/json", "{\"success\":false,\"message\":\"OTA manager not initialized\"}");
         return;
@@ -1217,19 +1232,19 @@ void TestWebServer::handleOTAURL() {
 // SD Activity Monitor Handlers
 // ============================================================================
 
-void TestWebServer::handleMonitorStart() {
+void CpapWebServer::handleMonitorStart() {
     addCorsHeaders(server);
     g_monitorActivityFlag = true;
     server->send(200, "application/json", "{\"success\":true,\"message\":\"Monitoring started\"}");
 }
 
-void TestWebServer::handleMonitorStop() {
+void CpapWebServer::handleMonitorStop() {
     addCorsHeaders(server);
     g_stopMonitorFlag = true;
     server->send(200, "application/json", "{\"success\":true,\"message\":\"Monitoring stopped\"}");
 }
 
-void TestWebServer::handleSdActivity() {
+void CpapWebServer::handleSdActivity() {
     addCorsHeaders(server);
     
     if (!trafficMonitor) {
@@ -1299,7 +1314,7 @@ void TestWebServer::handleSdActivity() {
     server->send(200, "application/json", json);
 }
 
-void TestWebServer::handleMonitorPage() {
+void CpapWebServer::handleMonitorPage() {
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server->sendHeader("Connection", "close");
     server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);

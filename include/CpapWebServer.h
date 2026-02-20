@@ -1,5 +1,5 @@
-#ifndef TEST_WEB_SERVER_H
-#define TEST_WEB_SERVER_H
+#ifndef CPAP_WEB_SERVER_H
+#define CPAP_WEB_SERVER_H
 
 #include <Arduino.h>
 #include <WebServer.h>
@@ -27,7 +27,7 @@ extern volatile bool g_stopMonitorFlag;
 extern bool g_configEditLock;
 extern unsigned long g_configEditLockAt;
 
-class TestWebServer {
+class CpapWebServer {
 private:
     WebServer* server;
     Config* config;
@@ -84,10 +84,10 @@ private:
     static void addCorsHeaders(WebServer* server);
 
 public:
-    TestWebServer(Config* cfg, UploadStateManager* state, 
+    CpapWebServer(Config* cfg, UploadStateManager* state, 
                   ScheduleManager* schedule, 
                   WiFiManager* wifi = nullptr, CPAPMonitor* monitor = nullptr);
-    ~TestWebServer();
+    ~CpapWebServer();
     
     bool begin();
     void handleClient();
@@ -110,4 +110,4 @@ public:
 #endif
 };
 
-#endif // TEST_WEB_SERVER_H
+#endif // CPAP_WEB_SERVER_H

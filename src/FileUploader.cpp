@@ -5,8 +5,8 @@
 #include <functional>
 #include <time.h>
 
-#ifdef ENABLE_TEST_WEBSERVER
-#include "TestWebServer.h"
+#ifdef ENABLE_WEBSERVER
+#include "CpapWebServer.h"
 #endif
 
 // Constructor
@@ -17,7 +17,7 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
       scheduleManager(nullptr),
       wifiManager(wifi),
       activeBackend(UploadBackend::NONE),
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
       webServer(nullptr),
 #endif
       cloudImportCreated(false),
@@ -286,8 +286,10 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                     bool completed = sm->isFolderCompleted(name);
                     bool pending   = sm->isPendingFolder(name);
                     bool recent    = isRecentFolder(name);
-                    LOGF("[FileUploader] Pre-flight scan: folder=%s completed=%d pending=%d recent=%d",
-                         name.c_str(), completed, pending, recent);
+                    if (g_debugMode) {
+                        LOGF("[FileUploader] Pre-flight scan: folder=%s completed=%d pending=%d recent=%d",
+                             name.c_str(), completed, pending, recent);
+                    }
 
                     if (!completed && !pending) {
                         // Genuinely incomplete — but old folders are gated by canUploadOldData()
@@ -301,15 +303,45 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                             entry.close(); root.close(); return true;
                         }
                     }
+                    if (!completed && pending) {
+                        // Pending = was empty when last seen.  Check if the CPAP has since
+                        // written files to it; if so treat it like a normal incomplete folder.
+                        String folderPath = "/DATALOG/" + name;
+                        auto pendingFiles = scanFolderFiles(sd, folderPath);
+                        if (!pendingFiles.empty()) {
+                            bool isOld = !recent;
+                            bool canDoOld = !isOld || !scheduleManager || scheduleManager->canUploadOldData();
+                            if (canDoOld) {
+                                LOGF("[FileUploader] Pre-flight: WORK — pending folder %s now has files",
+                                     name.c_str());
+                                entry.close(); root.close(); return true;
+                            }
+                        } else {
+                            // Still empty — if 7-day timeout has expired, promote to
+                            // completed right here so it no longer appears in future scans.
+                            // This is pure state management (no network I/O) and does not
+                            // count as upload work.
+                            unsigned long currentTime = time(NULL);
+                            if (currentTime >= 1000000000 &&
+                                    sm->shouldPromotePendingToCompleted(name, currentTime)) {
+                                sm->promotePendingToCompleted(name);
+                                sm->save(sd);
+                                LOGF("[FileUploader] Pre-flight: empty folder %s pending 7+ days — promoted to completed",
+                                     name.c_str());
+                            }
+                        }
+                    }
                     if (completed && recent) {
-                        // Recently completed but CPAP may have extended files.
-                        // Check each file for changes (size comparison only).
+                        // Recently completed but CPAP may have extended or added files.
+                        // hasFileChanged needs FULL paths — scanFolderFiles returns bare
+                        // filenames so we must prepend the folder path here.
                         String folderPath = "/DATALOG/" + name;
                         auto files = scanFolderFiles(sd, folderPath);
                         for (const String& fp : files) {
-                            if (sm->hasFileChanged(sd, fp)) {
+                            String fullPath = folderPath + "/" + fp;
+                            if (sm->hasFileChanged(sd, fullPath)) {
                                 LOGF("[FileUploader] Pre-flight: WORK — file changed: %s",
-                                     fp.c_str());
+                                     fullPath.c_str());
                                 entry.close(); root.close(); return true;
                             }
                         }
@@ -443,7 +475,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 for (const String& folder : freshFolders) {
                     if (isTimerExpired()) { timerExpired = true; break; }
                     uploadDatalogFolderSmb(sdManager, folder);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
                     if (webServer) webServer->handleClient();
 #endif
                 }
@@ -453,7 +485,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 for (const String& folder : oldFolders) {
                     if (isTimerExpired()) { timerExpired = true; break; }
                     uploadDatalogFolderSmb(sdManager, folder);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
                     if (webServer) webServer->handleClient();
 #endif
                 }
@@ -516,7 +548,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 auto runCloudFolder = [&](const String& folder) -> bool {
                     if (isTimerExpired()) { timerExpired = true; return false; }
                     uploadDatalogFolderCloud(sdManager, folder);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
                     if (webServer) webServer->handleClient();
 #endif
                     return true;
@@ -980,7 +1012,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         uploadedCount++;
         g_smbSessionStatus.filesUploaded = uploadedCount;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), smbBytes);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
     }
@@ -1151,7 +1183,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         cloudDatalogFilesUploaded++;
         g_cloudSessionStatus.filesUploaded = uploadedCount;
         LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), cloudBytes);
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
     }

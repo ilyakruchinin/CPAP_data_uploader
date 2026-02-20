@@ -227,6 +227,11 @@ protected:
     volatile uint32_t lastDumpedBytes;  // Track bytes already dumped to SD
 };
 
+// Runtime debug mode flag — set from config DEBUG=true after config load.
+// Controls: [res fh= ma= fd=] suffix on every log line, and verbose pre-flight
+// scan output in FileUploader. Declared here so Logger.cpp and callers can access it.
+extern bool g_debugMode;
+
 // Convenience macros for logging
 
 /**

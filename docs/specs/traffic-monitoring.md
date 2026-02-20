@@ -130,7 +130,7 @@ String getActivityStatus() {
 
 ### Integration Points
 - **UploadFSM**: Uses activity detection for state transitions
-- **TestWebServer**: Provides activity monitoring interface
+- **WebServer**: Provides activity monitoring interface
 - **Config**: Supplies inactivity threshold
 
 ## Error Handling
