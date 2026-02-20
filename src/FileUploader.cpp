@@ -316,6 +316,19 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                                      name.c_str());
                                 entry.close(); root.close(); return true;
                             }
+                        } else {
+                            // Still empty — if 7-day timeout has expired, promote to
+                            // completed right here so it no longer appears in future scans.
+                            // This is pure state management (no network I/O) and does not
+                            // count as upload work.
+                            unsigned long currentTime = time(NULL);
+                            if (currentTime >= 1000000000 &&
+                                    sm->shouldPromotePendingToCompleted(name, currentTime)) {
+                                sm->promotePendingToCompleted(name);
+                                sm->save(sd);
+                                LOGF("[FileUploader] Pre-flight: empty folder %s pending 7+ days — promoted to completed",
+                                     name.c_str());
+                            }
                         }
                     }
                     if (completed && recent) {
