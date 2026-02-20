@@ -130,14 +130,16 @@ void Logger::log(const char* message) {
 
 #ifndef UNIT_TEST
 #ifdef ENABLE_LOG_RESOURCE_SUFFIX
-    const uint32_t freeHeap = ESP.getFreeHeap();
-    const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
-    const int freeFdCount = getFreeFileDescriptorCount();
+    if (g_debugMode) {
+        const uint32_t freeHeap = ESP.getFreeHeap();
+        const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
+        const int freeFdCount = getFreeFileDescriptorCount();
 
-    timestampedMsg += " [res fh=" + String(freeHeap) +
-                      " ma=" + String(maxAllocHeap) +
-                      " fd=" + (freeFdCount >= 0 ? String(freeFdCount) : String("?")) +
-                      "]";
+        timestampedMsg += " [res fh=" + String(freeHeap) +
+                          " ma=" + String(maxAllocHeap) +
+                          " fd=" + (freeFdCount >= 0 ? String(freeFdCount) : String("?")) +
+                          "]";
+    }
 #endif
 #endif
 

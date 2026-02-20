@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 
-#if defined(ENABLE_TEST_WEBSERVER) && defined(ENABLE_CPAP_MONITOR)
+#if defined(ENABLE_WEBSERVER) && defined(ENABLE_CPAP_MONITOR)
 
 /**
  * CPAPMonitor - Monitors CPAP SD card usage patterns
@@ -40,7 +40,7 @@ public:
     String getUsageTableHTML() const;  // HTML table for web interface
 };
 
-#else // !ENABLE_CPAP_MONITOR || !ENABLE_TEST_WEBSERVER
+#else // !ENABLE_CPAP_MONITOR || !ENABLE_WEBSERVER
 
 // Stub implementation when CPAP monitoring is disabled
 class CPAPMonitor {
@@ -53,6 +53,6 @@ public:
     String getUsageTableHTML() const { return "<p>CPAP monitoring disabled (CS_SENSE hardware issue)</p>"; }
 };
 
-#endif // ENABLE_TEST_WEBSERVER && ENABLE_CPAP_MONITOR
+#endif // ENABLE_WEBSERVER && ENABLE_CPAP_MONITOR
 
 #endif // CPAP_MONITOR_H

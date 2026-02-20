@@ -24,8 +24,8 @@ bool g_heapRecoveryBoot = false;
 #include "OTAManager.h"
 #endif
 
-#ifdef ENABLE_TEST_WEBSERVER
-#include "TestWebServer.h"
+#ifdef ENABLE_WEBSERVER
+#include "CpapWebServer.h"
 #include "CPAPMonitor.h"
 #endif
 
@@ -42,8 +42,8 @@ TrafficMonitor trafficMonitor;
 OTAManager otaManager;
 #endif
 
-#ifdef ENABLE_TEST_WEBSERVER
-TestWebServer* testWebServer = nullptr;
+#ifdef ENABLE_WEBSERVER
+CpapWebServer* webServer = nullptr;
 CPAPMonitor* cpapMonitor = nullptr;
 #endif
 
@@ -98,12 +98,16 @@ unsigned long lastSdCardRetry = 0;
 unsigned long lastLogDumpTime = 0;
 const unsigned long LOG_DUMP_INTERVAL_MS = 10 * 1000;  // 10 seconds
 
-#ifdef ENABLE_TEST_WEBSERVER
-// External trigger flags (defined in TestWebServer.cpp)
+// Runtime debug mode: set from config DEBUG=true after config load.
+// Gates [res fh= ma= fd=] heap suffix on all log lines and verbose pre-flight output.
+bool g_debugMode = false;
+
+#ifdef ENABLE_WEBSERVER
+// External trigger flags (defined in WebServer.cpp)
 extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_resetStateFlag;
 
-// Monitoring trigger flags (defined in TestWebServer.cpp)
+// Monitoring trigger flags (defined in WebServer.cpp)
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
 #endif
@@ -199,44 +203,46 @@ void setup() {
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
 
-    // Smart Boot Delay — skipped on any programmatic restart (ESP_RST_SW).
-    // CPAP was already idle and voltages were stable, so the stabilization
-    // delay and Smart Wait add no value. Power-on, brownout, and watchdog
-    // resets all use distinct reason codes and still do the full wait.
+    // Determine boot type: software reset (ESP_RST_SW) = soft-reboot / FastBoot.
+    // Cold boots (power-on, brownout, watchdog) use distinct reason codes.
     g_heapRecoveryBoot = (esp_reset_reason() == ESP_RST_SW);
     bool fastBoot = g_heapRecoveryBoot;
-    if (fastBoot) {
-        LOG("[FastBoot] Software reset — skipping stabilization + Smart Wait");
-    } else {
-        // 1. Wait 2 seconds unconditionally for voltage stabilization and CPAP boot start
-        LOG("Waiting 2s for electrical stabilization...");
-        delay(2000);
 
-        // 2. Wait for bus silence (CPAP finished initial card checks)
-        // We look for 3 seconds of continuous silence, with a max timeout of 20 seconds
+    // Smart Wait constants — same values for both cold and soft-reboot.
+    // 5 s of continuous SD bus silence required; give up after 45 s max.
+    const unsigned long SMART_WAIT_MAX_MS      = 45000;
+    const unsigned long SMART_WAIT_REQUIRED_MS =  5000;
+
+    auto runSmartWait = [&]() {
         LOG("Checking for CPAP SD card activity (Smart Wait)...");
-
         unsigned long waitStart = millis();
-        const unsigned long MAX_WAIT_MS = 20000;     // Max time to wait in this phase
-        const unsigned long REQUIRED_IDLE_MS = 3000; // Required silence duration
         bool busIsQuiet = false;
-
-        while (millis() - waitStart < MAX_WAIT_MS) {
-            trafficMonitor.update(); // Update activity stats
-
-            // Feed watchdog to prevent resets during long waits
+        while (millis() - waitStart < SMART_WAIT_MAX_MS) {
+            trafficMonitor.update();
             delay(10);
-
-            if (trafficMonitor.isIdleFor(REQUIRED_IDLE_MS)) {
-                LOGF("Bus silence detected (%dms) - CPAP is idle", REQUIRED_IDLE_MS);
+            if (trafficMonitor.isIdleFor(SMART_WAIT_REQUIRED_MS)) {
+                LOGF("Smart Wait: %lums of bus silence — CPAP is idle", SMART_WAIT_REQUIRED_MS);
                 busIsQuiet = true;
                 break;
             }
         }
-
         if (!busIsQuiet) {
-            LOG_WARN("Smart wait timed out - bus still active, but proceeding anyway");
+            LOG_WARN("Smart Wait timed out — bus still active, proceeding anyway");
         }
+    };
+
+    if (fastBoot) {
+        // Soft-reboot: voltages already stable, skip 15 s electrical stabilization.
+        // Smart Wait still runs — CPAP may have been mid-access when the reboot
+        // was triggered and we must wait for it to finish before touching the SD card.
+        LOG("[FastBoot] Software reset — skipping 15s electrical stabilization");
+        runSmartWait();
+    } else {
+        // Cold boot: wait for power-rail stabilization and CPAP boot sequence to settle,
+        // then wait for SD bus silence before attempting to take SD card control.
+        LOG("Waiting 15s for electrical stabilization...");
+        delay(15000);
+        runSmartWait();
     }
     
     LOG("Boot delay complete, attempting SD card access...");
@@ -311,6 +317,10 @@ void setup() {
     }
 
     LOG("Configuration loaded successfully");
+    g_debugMode = config.getDebugMode();
+    if (g_debugMode) {
+        LOG_WARN("DEBUG mode enabled — verbose pre-flight logs and heap stats active");
+    }
     LOG_DEBUGF("WiFi SSID: %s", config.getWifiSSID().c_str());
     LOG_DEBUGF("Endpoint: %s", config.getEndpoint().c_str());
 
@@ -391,7 +401,7 @@ void setup() {
         lastNtpSyncAttempt = millis();
     }
 
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
     // Initialize CPAP monitor
 #ifdef ENABLE_CPAP_MONITOR
     LOG("Initializing CPAP SD card usage monitor...");
@@ -403,48 +413,48 @@ void setup() {
     cpapMonitor = new CPAPMonitor();  // Use stub implementation
 #endif
     
-    // Initialize test web server for on-demand testing
-    LOG("Initializing test web server...");
+    // Initialize web server
+    LOG("Initializing web server...");
     
-    // Create test web server with references to uploader's internal components
-    testWebServer = new TestWebServer(&config, 
+    // Create web server with references to uploader's internal components
+    webServer = new CpapWebServer(&config, 
                                       uploader->getStateManager(),
                                       uploader->getScheduleManager(),
                                       &wifiManager,
                                       cpapMonitor);
     
-    if (testWebServer->begin()) {
-        LOG("Test web server started successfully");
+    if (webServer->begin()) {
+        LOG("Web server started successfully");
         LOGF("Access web interface at: http://%s", wifiManager.getIPAddress().c_str());
         
 #ifdef ENABLE_OTA_UPDATES
         // Set OTA manager reference in web server
-        testWebServer->setOTAManager(&otaManager);
+        webServer->setOTAManager(&otaManager);
         LOG_DEBUG("OTA manager linked to web server");
 #endif
         
         // Set TrafficMonitor reference in web server for SD Activity Monitor
-        testWebServer->setTrafficMonitor(&trafficMonitor);
+        webServer->setTrafficMonitor(&trafficMonitor);
         LOG_DEBUG("TrafficMonitor linked to web server");
 
-        testWebServer->setSdManager(&sdManager);
+        webServer->setSdManager(&sdManager);
         LOG_DEBUG("SDCardManager linked to web server for config editor");
 
         // Give web server access to the SMB state manager so updateStatusSnapshot()
         // can show folder counts from the active backend (SMB pass vs cloud pass).
-        testWebServer->setSmbStateManager(uploader->getSmbStateManager());
+        webServer->setSmbStateManager(uploader->getSmbStateManager());
         
         // Set web server reference in uploader for responsive handling during uploads
         if (uploader) {
-            uploader->setWebServer(testWebServer);
+            uploader->setWebServer(webServer);
             LOG_DEBUG("Web server linked to uploader for responsive handling");
         }
 
         // Build static config snapshot once — served from g_webConfigBuf with zero heap alloc.
-        testWebServer->initConfigSnapshot();
+        webServer->initConfigSnapshot();
         LOG_DEBUG("[WebStatus] Config snapshot built");
     } else {
-        LOG_ERROR("Failed to start test web server");
+        LOG_ERROR("Failed to start web server");
     }
 #endif
 
@@ -604,7 +614,7 @@ void handleUploading() {
         
         // Disable web server handling inside upload task — main loop handles it
         // This prevents concurrent handleClient() calls from two cores
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
         uploader->setWebServer(nullptr);
 #endif
         
@@ -641,8 +651,8 @@ void handleUploading() {
             delete params;
             // Re-subscribe IDLE0 since task didn't start
             esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
-#ifdef ENABLE_TEST_WEBSERVER
-            uploader->setWebServer(testWebServer);
+#ifdef ENABLE_WEBSERVER
+            uploader->setWebServer(webServer);
 #endif
             // Fallback: run synchronously (old behavior)
             runUploadBlocking(filter);
@@ -658,8 +668,8 @@ void handleUploading() {
         esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
         
         // Restore web server handling in uploader
-#ifdef ENABLE_TEST_WEBSERVER
-        uploader->setWebServer(testWebServer);
+#ifdef ENABLE_WEBSERVER
+        uploader->setWebServer(webServer);
 #endif
         
         UploadResult result = (UploadResult)uploadTaskResult;
@@ -808,7 +818,7 @@ void loop() {
         trafficMonitor.update();
     }
 
-#ifdef ENABLE_TEST_WEBSERVER
+#ifdef ENABLE_WEBSERVER
     // Update CPAP monitor
 #ifdef ENABLE_CPAP_MONITOR
     if (cpapMonitor) {
@@ -817,13 +827,13 @@ void loop() {
 #endif
     
     // Handle web server requests
-    if (testWebServer) {
-        testWebServer->handleClient();
+    if (webServer) {
+        webServer->handleClient();
         // Refresh status snapshot every 3 s — assembles JSON using snprintf into
         // g_webStatusBuf (stack only, zero heap allocation).
         static unsigned long lastStatusSnapMs = 0;
         if (millis() - lastStatusSnapMs >= 3000) {
-            testWebServer->updateStatusSnapshot();
+            webServer->updateStatusSnapshot();
             lastStatusSnapMs = millis();
         }
     }

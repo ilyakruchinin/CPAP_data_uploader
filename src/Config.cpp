@@ -10,8 +10,8 @@ const char* Config::CENSORED_VALUE = "***STORED_IN_FLASH***";
 
 Config::Config() : 
     gmtOffsetHours(0),  // Default: UTC
-    bootDelaySeconds(30),  // Default: 30 seconds
     logToSdCard(false),  // Default: do not log to SD card (debugging only)
+    debugMode(false),    // Default: suppress verbose pre-flight and heap stats
     isValid(false),
     
     // Cloud upload defaults
@@ -189,10 +189,10 @@ void Config::setConfigValue(String key, String value) {
         endpointPassword = value;
     } else if (key == "GMT_OFFSET_HOURS") {
         gmtOffsetHours = value.toInt();
-    } else if (key == "BOOT_DELAY_SECONDS") {
-        bootDelaySeconds = value.toInt();
     } else if (key == "LOG_TO_SD_CARD") {
         logToSdCard = (value.equalsIgnoreCase("true") || value.toInt() == 1);
+    } else if (key == "DEBUG") {
+        debugMode = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "CLOUD_CLIENT_ID") {
         cloudClientId = value;
     } else if (key == "CLOUD_CLIENT_SECRET") {
@@ -566,8 +566,8 @@ const String& Config::getEndpointType() const { return endpointType; }
 const String& Config::getEndpointUser() const { return endpointUser; }
 const String& Config::getEndpointPassword() const { return endpointPassword; }
 int Config::getGmtOffsetHours() const { return gmtOffsetHours; }
-int Config::getBootDelaySeconds() const { return bootDelaySeconds; }
 bool Config::getLogToSdCard() const { return logToSdCard; }
+bool Config::getDebugMode() const { return debugMode; }
 bool Config::valid() const { return isValid; }
 
 // Credential storage mode getters

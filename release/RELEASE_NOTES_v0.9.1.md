@@ -96,3 +96,4 @@ These lines remain in the firmware to aid future diagnosis of upload scheduling 
 | `0b9a1ca` | Fix endless loop: exclude mandatory files from pre-flight work check |
 | `a609bd4` | Add pre-flight diagnostic logging to identify smb\_work=1 cause |
 | `c5d2eae` | Fix endless loop: gate old-folder pre-flight work check with canUploadOldData() |
+q

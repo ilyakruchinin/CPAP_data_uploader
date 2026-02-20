@@ -11,8 +11,8 @@
 #include "SDCardManager.h"
 
 // Forward declaration to avoid circular dependency
-#ifdef ENABLE_TEST_WEBSERVER
-class TestWebServer;
+#ifdef ENABLE_WEBSERVER
+class CpapWebServer;
 #endif
 
 // Include uploader implementations based on feature flags
@@ -64,8 +64,8 @@ private:
     WiFiManager* wifiManager;
     UploadBackend activeBackend;
 
-#ifdef ENABLE_TEST_WEBSERVER
-    TestWebServer* webServer;
+#ifdef ENABLE_WEBSERVER
+    CpapWebServer* webServer;
 #endif
 
     // Uploader instances
@@ -139,8 +139,8 @@ public:
         return sm && sm->getIncompleteFoldersCount() > 0;
     }
 
-#ifdef ENABLE_TEST_WEBSERVER
-    void setWebServer(TestWebServer* server) { webServer = server; }
+#ifdef ENABLE_WEBSERVER
+    void setWebServer(CpapWebServer* server) { webServer = server; }
 #endif
 };
 

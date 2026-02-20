@@ -109,4 +109,4 @@ The Web GUI Config tab provides a live editor for `config.txt` directly on the S
 - **WiFiManager**: Uses WiFi credentials
 - **FileUploader**: Uses backend and scheduling settings
 - **All uploaders**: Use endpoint credentials
-- **TestWebServer**: Serves config editor via `/api/config-raw`
+- **WebServer**: Serves config editor via `/api/config-raw`
