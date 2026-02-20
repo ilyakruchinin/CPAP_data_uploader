@@ -1,42 +1,28 @@
 # ESP32 CPAP Data Uploader
 
-Automatically upload CPAP therapy data from your SD card to network storage or the Cloud (SleepHQ).
+Automatically upload CPAP therapy data from your SD card to a network share or SleepHQ — **within minutes of taking your mask off.**
 
-**Supports:** ResMed Series 9, 10, and 11 CPAP machines
+**Supports:** ResMed Series 9, 10, and 11 · **Hardware:** [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) (ESP32-based SD card adapter)
 
-## Table of Contents
-- [🚀 Quick Start](#-quick-start)
-- [🚨 SD Card Errors? Use Scheduled Mode](#-sd-card-errors-use-scheduled-mode)
-- [Features](#features)
-- [Hardware Requirements](#hardware-requirements)
-- [Getting Started (End Users)](#getting-started-end-users)
-- [For Developers](#for-developers)
-- [How It Works](#how-it-works)
-- [Project Status](#project-status)
-- [License](#license)
-
-## 🚀 Quick Start
-
-**Want to use this?** Get started in 4 steps:
-
-### 1. Get the Hardware
-You need: [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) adapter
-- ESP32-PICO-D4 microcontroller, 4MB Flash, WiFi 2.4GHz
-
-### 2. Download & Flash Firmware
-👉 **[Download Latest Release](../../releases)** (includes firmware + upload tools for Windows/Mac/Linux)
-
-Follow the included instructions to flash firmware to your SD WIFI PRO.
-
-### 3. Create a Minimal Config
-Create `config.txt` on your SD card with just **6-10 lines**:
-
-**👇👇👇 Click the option you want to use** (or click ▸ to expand additional options):
+![CPAP Data Uploader Web Interface](docs/screenshots/web-interface.png)
 
 ---
 
+## 🚀 Quick Start — 4 Steps
+
+### 1. Get the hardware
+[SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) — an ESP32-based SD card adapter that replaces your CPAP's SD card slot.
+
+### 2. Flash the firmware
+👉 **[Download Latest Release](../../releases)** — includes firmware binaries and upload scripts for Windows, Mac, and Linux. Follow the included instructions.
+
+### 3. Create `config.txt` on the SD card
+Just WiFi credentials and upload destination — **6 to 10 lines total**.
+
+**👇 Click your upload destination:**
+
 <details>
-<summary><b>📤 Network Share (SMB)</b></summary>
+<summary><b>📤 Network Share (SMB — Windows, NAS, Samba)</b></summary>
 
 ```ini
 WIFI_SSID = YourWiFiName
@@ -61,7 +47,7 @@ CLOUD_CLIENT_SECRET = your-client-secret
 </details>
 
 <details>
-<summary><b>🔄 Both SMB + SleepHQ (Dual Upload)</b></summary>
+<summary><b>🔄 Both (SMB + SleepHQ simultaneously)</b></summary>
 
 ```ini
 WIFI_SSID = YourWiFiName
@@ -75,21 +61,19 @@ CLOUD_CLIENT_SECRET = your-client-secret
 ```
 </details>
 
----
+### 4. Insert card and open `http://cpap.local`
 
-### 4. Open `http://cpap.local` — You're Done
+That's it. The device connects to WiFi, waits for your therapy session to end, and uploads automatically.
 
-Insert the SD card in your CPAP machine and open **[http://cpap.local](http://cpap.local)** in your browser.
+Open **[http://cpap.local](http://cpap.local)** in your browser to see live upload status, view logs, and manage settings.
 
-You'll see the live dashboard showing upload status, WiFi signal, time sync, and progress.
-
-> **From this point on you can edit your config directly from the browser** (Config tab → Edit) — no need to pull the SD card again.
+> **From here on, you can edit your config directly in the browser** — Config tab → Edit. No need to pull the SD card again.
 
 ---
 
-## 🚨 SD Card Errors? Use Scheduled Mode
+## 🚨 Seeing an SD Card Error on your CPAP?
 
-> **If your CPAP machine shows an "SD Card Error" or "SD Card Removed" message, add these lines to your `config.txt` immediately:**
+> Add these lines to `config.txt` and the errors will stop:
 
 ```ini
 UPLOAD_MODE = scheduled
@@ -97,164 +81,39 @@ UPLOAD_START_HOUR = 9
 UPLOAD_END_HOUR = 23
 ```
 
-The default `smart` mode uses SD bus activity detection to determine when it is safe to take the card. On some CPAP models this detection may not work reliably, causing the uploader to take the card at the wrong moment. **Scheduled mode avoids this entirely** — it only uploads during the window you configure (e.g. while you're awake), never during sleep.
+The default **smart** mode detects SD bus activity to know when it's safe to take the card. On some CPAP models this detection is unreliable — **scheduled mode avoids it entirely** by only uploading during a window you set (e.g. while you're awake and not on therapy).
 
-> Set `UPLOAD_START_HOUR` / `UPLOAD_END_HOUR` to hours when you are typically awake and not using the CPAP. See the [full guide](release/README.md#️-sd-card-errors--use-scheduled-mode) for details.
-
----
-
- **Need more details?** See the comprehensive [User Guide](release/README.md)
-
-### Web Interface
-
-![CPAP Data Uploader Web Interface](docs/screenshots/web-interface.png)
-
-**Features:**
-- Real-time upload status and progress
-- System information (WiFi, time sync, memory)
-- **Edit `config.txt` from the browser** — no SD card required
-- Manual upload trigger
-- SD Activity Monitor
-- View logs
-- OTA firmware updates
+See the [Full Setup Guide](release/README.md#️-sd-card-errors--use-scheduled-mode) for details.
 
 ---
 
-## Features
-- Automatic uploads to Windows shares, NAS, Samba servers or the Cloud (**SleepHQ**)
-- **"Smart" upload mode** (uploads for recent data start automatically within minutes of therapy end)
-  - <u>Automatic detection of CPAP therapy session ending</u> (based on SD card activity)
-  - **You get your last night of sleep data within a few minutes after taking your mask off**
-- Scheduled upload mode: predictable upload window with timezone support
-- **Progressive Web App interface** with pre-allocated buffers (prevents heap fragmentation)
-- **Automatic heap recovery** with seamless soft-reboots when memory fragmented
-- **Pre-flight scans** - only authenticates when files need uploading
-- **Over-The-Air (OTA) firmware updates** via web interface
-- **Local Network Discovery (mDNS)**: Access the device via `http://cpap.local` (configurable hostname)
-- Secure credential storage in ESP32 flash memory (optional)
-- Respects CPAP machine access to SD card (only "holds" the SD card for the bare minimum required time)
-  - Quick file uploads with TLS connection reuse and exclusive file access (no time budget sharing with CPAP machine)
-- Tracks uploaded files (no duplicates)
-- Smart empty folder handling (waits 7 days before marking folders complete)
-- <u>Web interface</u> for monitoring and testing (responsive, runs as a separate task on another core)
-- Automatic retry mechanism with progress tracking
-- Automatic directory creation on remote shares for SMB protocol
+## What You Get
+
+- **Automatic uploads after every therapy session** — smart mode detects when your CPAP finishes and starts uploading within minutes
+- **Uploads to Windows shares, NAS, or SleepHQ** — or both at the same time
+- **Web dashboard at `http://cpap.local`** — live progress, logs, config editor, OTA updates
+- **Edit config from the browser** — no SD card pulls after initial setup
+- **Never uploads the same file twice** — tracks what's been sent, even across reboots
+- **Respects your CPAP machine** — only accesses the SD card when therapy is not running
 
 ---
 
-## Hardware Requirements
+## Hardware
 
-**Required Hardware:**
-- [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) adapter (ESP32-PICO-D4, 4MB Flash, WiFi 2.4GHz)
-- SD WIFI PRO development board (for initial firmware flashing via USB)
-
-**Supported CPAP Machines:**
-- ✅ ResMed **Series 9** (S9 AutoSet, Lumis)
-- ✅ ResMed **Series 10** (AirSense, AirCurve)  
-- ✅ ResMed **Series 11** (Elite, AutoSet)
-- ❌ Other brands/models not currently supported
-
-**Network Requirements:**
-- 2.4GHz WiFi network (ESP32 doesn't support 5GHz)
-- SMB/CIFS share OR SleepHQ account
+| | |
+|---|---|
+| **Adapter** | [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) (ESP32-PICO-D4, 4MB Flash, WiFi 2.4GHz) |
+| **CPAP machines** | ResMed Series 9, 10, and 11 |
+| **WiFi** | 2.4GHz only (ESP32 limitation) |
+| **Upload targets** | SMB/CIFS share, SleepHQ cloud, or both |
 
 ---
 
-## Getting Started (End Users)
+## Documentation
 
-**👉 [Download Latest Release](../../releases)** - Includes precompiled firmware and upload tools
+📖 **[Full Setup Guide](release/README.md)** — firmware flashing, all config options, troubleshooting, web interface reference
 
-**📖 [Complete User Guide](release/README.md)** - Detailed setup, configuration, and troubleshooting
-
-**📁 [Config Examples](docs/)** - See `config.txt.example*` files for different setups
-
-## For Developers
-
-**Want to build, modify, or contribute?**
-
-📘 **[Development Guide](docs/DEVELOPMENT.md)** - Complete developer documentation:
-- Architecture & design decisions
-- Build instructions (PlatformIO)
-- libsmb2 integration
-- Testing procedures  
-- Contributing guidelines
-
-**Quick Build:**
-```bash
-# Clone with submodules
-git clone --recurse-submodules https://github.com/yourusername/CPAP_data_uploader
-
-# Or if already cloned
-git submodule update --init --recursive
-
-# Build (libsmb2 automatically configured)
-pio run -e pico32         # Standard build (3MB app space, no OTA)
-pio run -e pico32-ota     # OTA build (1.5MB app space, web updates)
-```
-
-**Additional Documentation:**
-- [Architecture](docs/02-ARCHITECTURE.md)
-- [Requirements](docs/03-REQUIREMENTS.md)
-- [Build Troubleshooting](docs/BUILD_TROUBLESHOOTING.md)
-- [Feature Flags](docs/FEATURE_FLAGS.md)
-
-## How It Works
-
-1. **Device reads configuration** from `config.txt` on SD card
-2. **Connects to WiFi** and synchronizes time with internet
-3. **Waits for upload eligibility based on mode**
-   - **Smart mode:** starts shortly after therapy ends (activity detection)
-   - **Scheduled mode:** uploads during configured window
-4. **Pre-flight scan** checks if files need uploading (skips authentication if nothing new)
-5. **Uploads required CPAP data** in stages (SMB first, then Cloud) to optimize memory
-   - Takes exclusive control of SD card (default 5 minutes). **Only accesses the card when NOT in use** by the CPAP machine (no therapy running, automatic detection)
-   - Uploads `DATALOG/` folders and `SETTINGS/` files
-   - Uploads root files **if present**: `STR.edf`, `Identification.crc`, `Identification.tgt` (ResMed 9/10), `Identification.json` (ResMed 11)
-   - Tracks what's been uploaded (no duplicates)
-   - Releases SD card for CPAP machine use
-6. **Automatic heap recovery** reboots if memory becomes fragmented (seamless, fast-boot)
-7. **Repeats** automatically (periodically, daily if in "scheduled" mode)
-
-The device respects your CPAP machine's need for SD card access by only accessing the card when it's not used by CPAP, keeping upload sessions short and releasing control immediately after each session.
-
-
-## Project Status
-
-**Current Version:** see "Releases" section for version information
-
-**Status:** ✅ Production Ready + Power Management
-- Hardware tested and validated
-- Integration tested with real CPAP data
-- All unit tests passing
-- SMB/CIFS and Cloud upload (SleepHQ) fully implemented
-- Web interface remains responsive during uploads, runs on a separate task/different core
-- Automatic retry mechanism with progress tracking
-- Automatic directory creation verified and working (SMB)
-- FreeRTOS tasks for true concurrent web server operation during uploads
-- Configurable power management for reduced current consumption
-
-**Supported Upload Methods:**
-- ✅ SMB/CIFS (Windows shares, NAS, Samba)
-- ✅ SleepHQ direct upload
-- ⏳ WebDAV (planned)
-
-## Future Improvements
-- Add WebDAV upload support
-
-## Support & Documentation
-
-- **User Guide:** [release/README.md](release/README.md) - Setup and usage instructions
-- **Developer Guide:** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) - Build and contribute
-- **Troubleshooting:** See user guide or developer guide
-- **Issues:** Report bugs or request features via GitHub issues
-
-<details>
-<summary><b>⚠️ Upgrading from v0.7.x or earlier? (Breaking change in v0.8.0)</b></summary>
-
-The configuration format changed from `config.json` (JSON) to `config.txt` (key-value, one setting per line).
-
-Your existing `config.json` **will not** work. Create a new `config.txt` using the examples in `docs/config.txt.example*` or the [Configuration Guide](release/README.md#2-create-configtxt). The new format is simpler, has no library dependency, and uses less memory.
-</details>
+🔧 **[Developer Guide](docs/DEVELOPMENT.md)** — build from source, architecture, contributing
 
 ---
 
