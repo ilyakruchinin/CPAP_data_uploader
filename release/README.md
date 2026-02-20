@@ -358,6 +358,14 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 
 ### Debugging Settings
 
+**DEBUG** (optional, default: false)
+- Enable verbose diagnostic logging at runtime (no re-flash required)
+- When `true`, adds per-folder pre-flight scan lines to the log:
+  `[FileUploader] Pre-flight scan: folder=20260219 completed=1 pending=0 recent=1`
+- Also appends `[res fh= ma= fd=]` heap and resource stats to every log line
+- Useful for diagnosing upload scheduling issues; disable when not needed
+- Example: `DEBUG = true`
+
 **LOG_TO_SD_CARD** (optional, default: false)
 - Enable logging system messages to `/debug.log` file on SD card
 - **WARNING**: Can prevent the CPAP machine from reliably accessing the SD card
