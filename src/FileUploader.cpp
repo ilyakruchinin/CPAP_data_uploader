@@ -527,6 +527,14 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         if (!hasWork) {
             LOG("[FileUploader] Cloud: nothing to upload — skipping auth + import");
         } else {
+            // Shared mode: SD is no longer needed until actual file reads.
+            // Release now so the CPAP machine can access it during the ~12s
+            // of network I/O (OAuth + team ID + import creation) in begin().
+            // reacquireSdCard() inside the upload loop will re-take it.
+            if (config->isSharedMode() && sdManager->hasControl()) {
+                LOG("[FileUploader] [Cloud] Shared mode: releasing SD before cloud auth");
+                sdManager->releaseControl();
+            }
             LOGF("[FileUploader] Heap before cloud begin: fh=%u ma=%u",
                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
             if (!sleephqUploader->isConnected()) {
