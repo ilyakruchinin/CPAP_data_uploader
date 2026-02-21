@@ -90,7 +90,7 @@ bool BufferManager::copyToBuffer(fs::FS& sourceFS, const String& sourcePath, Buf
 
     // Copy data
     size_t bytesCopied = 0;
-    uint8_t buf[2048];
+    uint8_t buf[8192];
     while (sourceFile.available()) {
         size_t bytesToRead = sourceFile.read(buf, sizeof(buf));
         if (bytesToRead > 0) {

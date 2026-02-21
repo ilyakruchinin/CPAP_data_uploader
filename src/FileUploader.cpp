@@ -1373,8 +1373,13 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
                 size_t fileSize = f.size();
                 f.close();
 
-                // If a single file is too large for the buffer, and the batch is empty, direct stream it
-                if (!bufferManager || !bufferManager->hasSpaceFor(fileSize)) {
+                // Files >= 32KB: direct-stream from SD instead of copying to SPIFFS.
+                // SPIFFS writes at ~24KB/s; TLS upload at ~150KB/s — for large files,
+                // holding SD during upload is 6x shorter than holding it for SPIFFS copy.
+                static const size_t DIRECT_STREAM_THRESHOLD = 32768;
+                bool tooLargeForBuffer  = (!bufferManager || !bufferManager->hasSpaceFor(fileSize));
+                bool preferDirectStream = (fileSize >= DIRECT_STREAM_THRESHOLD);
+                if (tooLargeForBuffer || preferDirectStream) {
                     if (batch.empty()) {
                         directStream = true;
                         BufferedFile bf;
@@ -1382,8 +1387,11 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
                         bf.size = fileSize;
                         batch.push_back(bf);
                         fileIdx++;
+                        if (preferDirectStream && !tooLargeForBuffer) {
+                            LOGF("[FileUploader] [Cloud] Large file (%lu bytes) → direct stream (skipping SPIFFS copy)", (unsigned long)fileSize);
+                        }
                     }
-                    break; // Stop building batch, buffer is full or file is too large
+                    break; // Flush current batch first, handle this file next iteration
                 }
 
                 // Copy to buffer
