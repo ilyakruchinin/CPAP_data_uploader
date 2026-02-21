@@ -61,6 +61,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bt-s{color:#66c0f4;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bt-c{color:#aa66ff;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bd-i{font-size:.79em;color:#8f98a0;margin-top:4px;min-height:1.1em;padding-left:2px}
+details summary{cursor:pointer;list-style:none;user-select:none}details summary::-webkit-details-marker{display:none}
 </style></head><body>
 <div class=wrap>
 <h1>CPAP Data Uploader</h1>
@@ -163,13 +164,34 @@ nav button:hover:not(.act){background:#3a5a7e}
 <!-- MONITOR -->
 <div id=mon class=page>
 <div class=card style="margin-bottom:10px"><h2>CPAP Profiler Wizard <span id=mon-dot class="dot idle"></span></h2>
-<p style="font-size:.85em;color:#c7d5e0;line-height:1.5;margin-bottom:10px">Empirically measure your CPAP machine's SD card writing behavior to tune upload settings.</p>
+<p style="font-size:.85em;color:#c7d5e0;line-height:1.5;margin-bottom:10px">Measure your CPAP machine's SD card write patterns to find the right <code>inactivity_seconds</code> value. See the guide below for instructions.</p>
 <div class=actions>
 <button id=btn-mst class="btn bp" onclick=startMon()>Start Profiling</button>
 <button id=btn-msp class="btn bd" onclick=stopMon() style=display:none>Stop</button>
 <button class="btn bs" onclick="tab('dash')">&#8592; Dashboard</button>
 </div>
 </div>
+<details style="background:#1b2838;border:1px solid #2a475e;border-radius:10px;margin-bottom:10px">
+<summary style="padding:12px 15px;font-size:.8em;text-transform:uppercase;letter-spacing:1px;color:#66c0f4">&#9432; How to profile your CPAP &mdash; tap to expand</summary>
+<div style="padding:0 15px 14px">
+<p style="font-size:.82em;color:#c7d5e0;line-height:1.6;margin-bottom:10px">The profiler samples SD card bus activity once per second. The key metric is <strong>Longest Idle</strong> &mdash; the longest consecutive gap with no SD writes. You need two measurements to find a safe value for <code>inactivity_seconds</code>.</p>
+<p style="font-size:.8em;font-weight:700;color:#66c0f4;margin-bottom:4px">&#9312; During therapy &mdash; at least 5 minutes</p>
+<ol style="font-size:.8em;color:#c7d5e0;padding-left:20px;margin-bottom:10px;line-height:1.8">
+<li>Put on your mask and start CPAP therapy, breathing normally</li>
+<li>Click <strong>Start Profiling</strong> &mdash; resets all counters and pauses uploads</li>
+<li>Continue breathing normally for at least <strong>5 minutes</strong></li>
+<li>Click <strong>Stop</strong> and note <strong>Longest Idle</strong> &nbsp;<em style="color:#8f98a0">(example: 8 s)</em></li>
+</ol>
+<p style="font-size:.8em;font-weight:700;color:#aa66ff;margin-bottom:4px">&#9313; Machine in standby, no therapy &mdash; at least 20 minutes</p>
+<ol style="font-size:.8em;color:#c7d5e0;padding-left:20px;margin-bottom:10px;line-height:1.8">
+<li>Power on the CPAP machine but <strong>do not start therapy</strong></li>
+<li>Click <strong>Start Profiling</strong></li>
+<li>Wait at least <strong>20 minutes</strong></li>
+<li>Click <strong>Stop</strong> and note <strong>Longest Idle</strong> &nbsp;<em style="color:#8f98a0">(example: 50 s)</em></li>
+</ol>
+<p style="font-size:.8em;color:#c7d5e0;line-height:1.6;margin-bottom:8px">&#9881; <strong>Set <code>inactivity_seconds</code></strong> to your Run&nbsp;&#9312; <strong>Longest Idle</strong> plus a couple of seconds safety margin. Example: Longest Idle during therapy&nbsp;=&nbsp;8&thinsp;s &rarr; set <code>inactivity_seconds&nbsp;=&nbsp;10</code>. Run&nbsp;&#9313; confirms the machine truly goes quiet in standby (Longest Idle should be far longer) &mdash; this is the idle period that will actually trigger the upload.</p>
+<p style="font-size:.79em;color:#8f98a0;line-height:1.5">&#9432; Data appears as soon as you open this tab because the firmware always samples the bus. <strong>Start Profiling</strong> resets the stats to zero and prevents the uploader from triggering uploads during your measurement session.</p>
+</div></details>
 <div class=stats-grid>
 <div class=stat-box><span class=sl>Phase</span><span class=sv id=m-phase>--</span></div>
 <div class=stat-box><span class=sl>Consecutive Idle</span><span class=sv id=m-i>--</span></div>

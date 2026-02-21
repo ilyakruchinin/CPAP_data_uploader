@@ -59,7 +59,8 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 
 | Key | Default | Range | Description |
 |---|---|---|---|
-| `INACTIVITY_SECONDS` | `62` | 10–3600 | Seconds of SD bus silence required before the device attempts to take SD card control. Increase if your CPAP accesses the card frequently during warm-up. |
+| `INACTIVITY_SECONDS` | `62` | 10–3600 | Seconds of consecutive SD bus silence required before the device attempts to take SD card control. Must exceed the longest idle gap observed during active CPAP therapy — use the Monitor → CPAP Profiler Wizard to measure this. |
+| `SMART_WAIT_SECONDS` | `5` | 1–60 | Seconds of SD bus silence required immediately before (re-)acquiring the SD card — both at the start of each upload session and between upload batches. Acts as a short final check that the bus is clear. Should be shorter than `INACTIVITY_SECONDS`. |
 | `EXCLUSIVE_ACCESS_MINUTES` | `5` | 1–30 | Maximum minutes the device holds exclusive SD card control per upload session. The session ends early if all work is done. |
 | `COOLDOWN_MINUTES` | `10` | 1–60 | Minutes to wait (SD card released) between upload cycles before starting the next inactivity check. |
 
