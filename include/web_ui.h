@@ -98,65 +98,53 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=card style="grid-column:1/-1"><h2>Upload Progress</h2>
 <div class=be>
 <div class=bh><span id=d-ab-name class=bt-s>—</span><span id=d-ab-st class=v>—</span></div>
-<div class=prog><div id=d-pf-active class=pf style=width:0%></div></div>
-<div id=d-ab-det class=bd-i></div>
+<div class=prog><div id=d-ab-pb class=pf style=width:0></div></div>
+<div id=d-ab-det class=bd-i>Waiting for next upload session.</div>
 </div>
-<div class=be id=d-next-be style=display:none>
-<div class=bh><span id=d-nb-name class="bt-s" style=color:#8f98a0>Next: —</span><span id=d-nb-st class=v style="font-size:.78em;color:#8f98a0">—</span></div>
-<div class=prog><div id=d-pf-next class=pf style="width:0%;background:linear-gradient(90deg,#556070,#6a7a8a)"></div></div>
-<div id=d-nb-det class=bd-i style=color:#8f98a0></div>
-</div>
-<div class=row style="border-top:1px solid #2a475e;padding-top:8px;margin-top:2px"><span class=k>Status</span><span id=d-fst class=v></span></div>
+<div id=d-ib-wrap class=be style="display:none;opacity:0.6;margin-top:16px;border-top:1px solid #2a475e;padding-top:12px">
+<div class=bh><span id=d-ib-name class=bt-c>—</span><span id=d-ib-st class=v>—</span></div>
+<div class=prog><div id=d-ib-pb class="pf pfc" style=width:0></div></div>
+<div id=d-ib-det class=bd-i>—</div>
 </div>
 </div>
-<div class=card style="margin-bottom:14px"><h2>Actions</h2>
+<div class=card style="grid-column:1/-1"><h2>Actions</h2>
 <div class=actions>
 <button id=btn-up class="btn bp" onclick=triggerUpload()>&#9650; Trigger Upload</button>
+<button id=btn-srb class="btn bs" onclick=softReboot()>&#8635; Soft Reboot</button>
 <button id=btn-rst class="btn bd" onclick=resetState()>Reset State</button>
+</div>
 </div>
 </div>
 </div>
 
 <!-- LOGS -->
 <div id=logs class=page>
-<div class=card style="margin-bottom:10px">
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-<h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
-<div style="display:flex;gap:6px">
-<button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
-<button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
+<div class=card style="margin-bottom:10px"><h2>System Logs</h2>
+<div id=log-box><em>Loading...</em></div>
+<div class=actions style="margin-top:10px">
+<button class="btn bs" onclick="var b=document.getElementById('log-box');b.scrollTop=b.scrollHeight">&#8595; Scroll to Bottom</button>
 </div>
-</div>
-<div id=log-box>Loading...</div>
 </div>
 </div>
 
 <!-- CONFIG -->
 <div id=cfg class=page>
-<div id=cfg-lock-banner style="display:none;background:#2a4a2a;border:1px solid #4a8a4a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#a0e0a0">
-&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume uploads without saving, or <em>Save &amp; Reboot</em> to apply changes.
+<div class=wb id=cfg-lock-banner style=display:none><h3>Config Editing Paused FSM</h3><p>Uploads are suspended while you edit. Changes will trigger a reboot.</p></div>
+<div class=card style="margin-bottom:10px">
+<h2>Configuration <span id=cfg-lock-badge class="badge bc" style="display:none;float:right">EDITING</span></h2>
+<div id=cfg-box><em>Loading...</em></div>
+<textarea id=cfg-raw style="width:100%;height:300px;background:#111820;color:#6a7a8a;border:1px solid #2d3440;border-radius:6px;padding:12px;font-family:Consolas,monospace;font-size:12px;margin-top:10px;resize:vertical" readonly spellcheck=false onkeyup=cfgRawCount() onchange=cfgRawCount()></textarea>
+<div class=row style="margin-top:5px;justify-content:flex-end"><span id=cfg-raw-cnt style="color:#8f98a0;font-size:11px"></span></div>
+<div class=actions style="margin-top:10px;justify-content:space-between">
+<div>
+<button id=btn-cfg-edit class="btn bp" onclick=acquireCfgLock()>Edit config.txt</button>
+<button id=btn-cfg-save class="btn bp" style=display:none onclick="saveRawCfg(false)">Save</button>
+<button id=btn-cfg-savereboot class="btn bd" style="display:none;margin-left:5px" onclick="saveRawCfg(true)">Save &amp; Reboot</button>
+<button id=btn-cfg-cancel class="btn bs" style="display:none;margin-left:5px" onclick=releaseCfgLock()>Cancel</button>
+<button id=btn-cfg-reload class="btn bs" style="display:none;margin-left:5px" onclick=loadRawCfg()>Reload from SD</button>
 </div>
-<div class=card><h2>Configuration</h2>
-<pre id=cfg-box style="font-size:.8em;max-height:300px;overflow-y:auto">Loading...</pre>
+<span id=cfg-raw-msg style="color:#8f98a0;font-size:12px;align-self:center"></span>
 </div>
-<div class=card>
-<h2>Edit config.txt
-<span id=cfg-lock-badge style="display:none;margin-left:8px;background:#4a8a4a;color:#fff;font-size:.65em;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle">LOCKED</span>
-</h2>
-<p style="font-size:.82em;color:#8f98a0;margin-bottom:8px">Direct editor for the SD card config file. Passwords stored securely in flash appear as <code>***STORED_IN_FLASH***</code> &mdash; leave them unchanged to keep existing credentials. Max 4096 bytes. <strong>Changes take effect after reboot.</strong></p>
-<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> first to pause uploads and enable editing. Uploads resume automatically on Save, Cancel, or after 30&nbsp;min.</p>
-<textarea id=cfg-raw style="width:100%;box-sizing:border-box;height:320px;background:#111820;color:#6a7a8a;border:1px solid #2d3440;border-radius:4px;padding:8px;font-family:monospace;font-size:.8em;resize:vertical" maxlength=4096 oninput=cfgRawCount() placeholder="Click Edit to begin..." readonly></textarea>
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
-<span id=cfg-raw-cnt style="font-size:.8em;color:#8f98a0">0 / 4096 bytes</span>
-<div class=actions style=margin:0>
-<button id=btn-cfg-edit class="btn bp" onclick=acquireCfgLock() style="padding:6px 14px">&#9998; Edit</button>
-<button id=btn-cfg-reload class="btn bs" onclick=loadRawCfg() style="padding:6px 14px;display:none">&#8635; Reload</button>
-<button id=btn-cfg-save class="btn bp" onclick=saveRawCfg() style="padding:6px 14px;display:none">&#128190; Save</button>
-<button id=btn-cfg-savereboot class="btn bd" onclick=saveAndReboot() style="padding:6px 14px;display:none">Save &amp; Reboot</button>
-<button id=btn-cfg-cancel class="btn bs" onclick=releaseCfgLock() style="padding:6px 14px;display:none">&#10005; Cancel</button>
-</div>
-</div>
-<div id=cfg-raw-msg style="margin-top:6px;font-size:.83em"></div>
 </div>
 </div>
 
@@ -180,6 +168,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=chart id=m-ch><em>Waiting for data...</em></div>
 </div>
 </div>
+
 <!-- OTA -->
 <div id=ota class=page>
 <div class=wb><h3>WARNING</h3><ul>
@@ -201,19 +190,14 @@ nav button:hover:not(.act){background:#3a5a7e}
 <button type=submit class="btn bp" style=width:100%>Download &amp; Install</button>
 <div id=s-url class=sm></div></form>
 </div>
-<div class=card><h2>System Actions</h2>
-<div class=actions>
-<button id=btn-srb class="btn bs" onclick=softReboot()>&#8635; Soft Reboot</button>
-</div>
-</div>
 </div>
 </div>
 
-<div id=toast class=toast></div>
 </div>
-
 <script>
-var cfg={},monPoll=null,logPoll=null,curTab='dash';
+var curTab='dash',poll,logPoll,monPoll,cfg=null;
+var renderStatus={_first:true,_cfgLoaded:false};
+function set(id,v){document.getElementById(id).textContent=v;}
 function tab(t){
   ['dash','logs','cfg','mon','ota'].forEach(function(x){
     document.getElementById(x).classList.toggle('on',x===t);
@@ -226,76 +210,102 @@ function tab(t){
 }
 function toast(msg,mode){
   var el=document.getElementById('toast');
+  if(!el){el=document.createElement('div');el.id='toast';document.body.appendChild(el);}
   var cls=mode===true||mode==='ok'?'ok':mode==='warn'?'warn':'er';
   el.textContent=msg;el.className='toast on '+cls;
-  setTimeout(function(){el.className='toast';},4000);
+  setTimeout(function(){el.className='toast';},8000);
 }
 function fmt(ms){var s=Math.round(ms/1000);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m '+s%60+'s';return Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m';}
 function fmtUp(s){if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m '+s%60+'s';var h=Math.floor(s/3600);return h+'h '+Math.floor(s%3600/60)+'m';}
 function sigClass(r){if(r>=-65)return 'sig-exc';if(r>=-75)return 'sig-good';if(r>=-85)return 'sig-fair';if(r>=-95)return 'sig-weak';return 'sig-vweak';}
 function sigLabel(r){if(r>=-65)return 'Excellent';if(r>=-75)return 'Good';if(r>=-85)return 'Fair';if(r>=-95)return 'Weak';return 'Very Weak';}
 function badgeHtml(st){var s=st.toLowerCase(),c='bi';
-  if(s==='listening')c='bl';else if(s==='acquiring'||s==='uploading')c='bu';
-  else if(s==='cooldown'||s==='releasing')c='bc';else if(s==='complete')c='bco';
-  return '<span class="badge '+c+'">'+st+'</span>';
+  if(s==='idle')c='bi';else if(s==='listening')c='bl';
+  else if(s==='acquiring'||s==='releasing')c='ba';else if(s==='uploading')c='bu';
+  else if(s==='cooldown')c='bc';else if(s==='complete')c='bco';
+  else if(s==='monitoring')c='bc';
+  return '<span class="badge '+c+'">'+st+'</span>';}
+function buildMode(m,w){if(m==='smart')return 'Smart (Inactivity trigger)';return 'Scheduled ('+w+')';}
+function upText(a,b){
+  if(a==='active')return 'Syncing '+b.done+'/'+b.tot+' folders ('+b.pend+' pending)...';
+  if(a==='done')return 'Completed. Synced '+b.done+'/'+b.tot+' folders.';
+  if(a==='waiting')return 'Waiting to sync ('+b.tot+' total folders).';
+  return '—';
 }
-function set(id,html,inner){var el=document.getElementById(id);if(el){if(inner===false)el.innerHTML=html;else el.textContent=html;}}
-function seti(id,html){set(id,html,false);}
-
-function renderStatus(d){
-  seti('d-st',badgeHtml(d.state||'?'));
-  var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
-  set('d-mode',cfg.upload_mode||'—');
-  set('d-tsync',d.time_synced?'Yes':'No');
-  var ws=(cfg.upload_start_hour!=null&&cfg.upload_end_hour!=null)?cfg.upload_start_hour+':00 - '+cfg.upload_end_hour+':00':'—';
-  set('d-win',ws);
-  var nx=d.next_upload;
-  set('d-next',nx<0?'—':nx===0?'Now':fmtUp(nx));
-  set('d-time',d.time||'—');
-  set('d-fh',d.free_heap?Math.round(d.free_heap/1024)+' KB':'—');
-  set('d-ma',d.max_alloc?Math.round(d.max_alloc/1024)+' KB':'—');
-  if(d.wifi){
-    var rc=sigClass(d.rssi),rl=sigLabel(d.rssi);
-    document.getElementById('d-wifi').innerHTML='<span class='+rc+'>'+rl+' ('+d.rssi+' dBm)</span>';
-  }else{set('d-wifi','Disconnected');}
-  set('d-ip',d.wifi_ip||'—');
-  set('d-ep',cfg.endpoint_type||d.endpoint_type||'—');
-  set('d-up',fmtUp(d.uptime||0));
-  var ab=d.active_backend||'NONE';
-  var abColor=ab==='SMB'?'#66c0f4':ab==='CLOUD'?'#aa66ff':'#8f98a0';
-  var abEl=document.getElementById('d-ab-name');abEl.textContent=ab;abEl.style.color=abColor;
-  var done=d.folders_done||0,total=d.folders_total||0,pend=d.folders_pending||0;
-  var pct=total>0?Math.round(done*100/total):0;
-  document.getElementById('d-pf-active').style.width=pct+'%';
-  var inc=Math.max(0,total-done);
-  var abSt=total>0?(done+' / '+total+(pend>0?' ('+pend+' empty)':'')):'\u2014';
-  if(total>0&&inc>0)abSt+=' &nbsp;<span style=color:#ffaa44>'+inc+' left</span>';
-  else if(total>0&&inc===0&&done>0)abSt+=' &nbsp;<span style=color:#44ff44>&#10003;</span>';
-  document.getElementById('d-ab-st').innerHTML=abSt;
-  var liveDet=d.live_active?'File '+d.live_up+'/'+d.live_total+(d.live_folder?' &middot; '+d.live_folder:''):'';
-  document.getElementById('d-ab-det').innerHTML=liveDet;
-  var nb=d.next_backend||'NONE';
-  var nbEl=document.getElementById('d-next-be');
-  if(nb&&nb!=='NONE'){nbEl.style.display='';
-    var nbDone=d.next_done||0,nbTotal=d.next_total||0,nbPct=nbTotal>0?Math.round(nbDone*100/nbTotal):0;
-    document.getElementById('d-nb-name').textContent='Next: '+nb;
-    document.getElementById('d-pf-next').style.width=nbPct+'%';
-    var tsStr=d.next_ts>0?new Date(d.next_ts*1000).toLocaleDateString():'never';
-    document.getElementById('d-nb-st').innerHTML=nbDone+'/'+nbTotal+' \u00b7 last '+tsStr+' <em style="color:#666">(stale)</em>';
-    document.getElementById('d-nb-det').textContent=d.next_empty>0?d.next_empty+' empty folder(s)':'';
-  }else{nbEl.style.display='none';}
-  var fst=inc>0?'&#9888; '+inc+' folder(s) pending':(done>0?'&#10003; All synced':'Waiting for first scan');
-  seti('d-fst',fst);
-  set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
+function upHtml(st){
+  if(!st.val)return{n:'—',st:'—',p:0,t:'Not configured.'};
+  var n=st.name,p=0,a='waiting',txt='';
+  if(st.tot>0){
+    if(st.tot===st.done)p=100;
+    else p=Math.round((st.done/st.tot)*100);
+  }
+  if(st.upA){a='active';}else if(st.tot>0&&st.tot===st.done){a='done';}
+  
+  if(st.upA){
+    txt='Syncing '+st.done+'/'+st.tot+' folders';
+    if(st.livTot>0)txt+=' | File '+st.livUp+'/'+st.livTot+' in '+st.livF;
+  }else if(st.tot>0&&st.tot===st.done){
+    txt='Completed. Synced '+st.done+'/'+st.tot+' folders.';
+  }else if(st.tot>0){
+    txt='Waiting to sync ('+st.done+'/'+st.tot+' complete).';
+  }else{
+    txt='No folders scanned yet.';
+  }
+  
+  return {n:n,st:(a==='active'?'SYNCING':(a==='done'?'COMPLETE':'WAITING')),p:p,t:txt};
 }
 
-var statusTimer=null;
-function pollStatus(){
+function fetchStatus(){
   fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
-    renderStatus(d);
-  }).catch(function(){set('d-st','Offline');});
+    if(renderStatus._first){document.title=d.hostname+' - CPAP Uploader';set('sub','Connected | '+d.hostname+'.local');renderStatus._first=false;}
+    set('d-time',d.time);set('d-fh',(d.fh/1024).toFixed(1)+' KB');set('d-ma',(d.ma/1024).toFixed(1)+' KB');
+    set('d-up',fmtUp(d.up));
+    var w=document.getElementById('d-wifi');w.textContent=d.wifi?'Connected ('+d.rssi+' dBm)':'Disconnected';w.className='v '+(d.wifi?sigClass(d.rssi):'sig-vweak');w.title=d.wifi?sigLabel(d.rssi):'';
+    set('d-ip',d.ip||'—');
+    document.getElementById('d-st').innerHTML=badgeHtml(d.fsm);
+    set('d-ins',fmt(d.ins));
+    
+    if(renderStatus._cfgLoaded&&cfg){
+      set('d-mode',buildMode(cfg.upload_mode,cfg.upload_start_hour+':00 - '+cfg.upload_end_hour+':00'));
+      var eps=[];if(cfg.endpoint_type.indexOf('SMB')>=0)eps.push('SMB');if(cfg.cloud_configured)eps.push('Cloud');
+      set('d-ep',eps.length?eps.join(' + '):'None');
+    }
+    set('d-tsync',d.tsync?'Yes':'No');set('d-win',d.inw?'Open':'Closed');
+    set('d-next',d.nu>0?fmt(d.nu)+' from now':'—');
+
+    var a=upHtml(d.ab);
+    set('d-ab-name',a.n);set('d-ab-st',a.st);
+    document.getElementById('d-ab-pb').style.width=a.p+'%';
+    set('d-ab-det',a.t);
+    
+    var iw=document.getElementById('d-ib-wrap');
+    if(d.ib&&d.ib.val){
+      iw.style.display='';
+      var i=upHtml(d.ib);
+      set('d-ib-name',i.n);set('d-ib-st',i.st);
+      document.getElementById('d-ib-pb').style.width=i.p+'%';
+      set('d-ib-det',i.t);
+    }else{iw.style.display='none';}
+
+  }).catch(function(){if(curTab==='dash')set('sub','Disconnected');});
 }
-function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
+function startStatusPoll(){if(!poll)poll=setInterval(fetchStatus,3000);fetchStatus();}
+
+function startLogPoll(){
+  var b=document.getElementById('log-box');b.innerHTML='<em>Loading...</em>';
+  if(!logPoll)logPoll=setInterval(fetchLogs,2000);
+  fetchLogs();
+}
+function stopLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}}
+function fetchLogs(){
+  if(curTab!=='logs')return;
+  fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+    var b=document.getElementById('log-box');
+    var a=b.scrollHeight-b.scrollTop<=b.clientHeight+30;
+    b.textContent=t||'No logs available.';
+    if(a)b.scrollTop=b.scrollHeight;
+  }).catch(function(){});
+}
 
 var cfgLocked=false;
 function _setCfgLockUI(locked){
@@ -347,129 +357,38 @@ function loadRawCfg(){
   var msg=document.getElementById('cfg-raw-msg');
   msg.textContent='Loading...';
   fetch('/api/config-raw',{cache:'no-store'}).then(function(r){
-    if(!r.ok)return r.text().then(function(t){throw new Error(t);});
+    if(!r.ok)throw new Error('HTTP '+r.status);
     return r.text();
   }).then(function(t){
-    document.getElementById('cfg-raw').value=t;
-    cfgRawCount();
-    msg.textContent='';
+    var ta=document.getElementById('cfg-raw');
+    ta.value=t;cfgRawCount();msg.textContent='';
   }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Load failed: '+e.message;});
 }
-function saveRawCfg(){
-  var body=document.getElementById('cfg-raw').value;
-  var msg=document.getElementById('cfg-raw-msg');
-  msg.style.color='#8f98a0';msg.textContent='Saving...';
-  fetch('/api/config-raw',{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store'})
+function saveRawCfg(reboot){
+  var ta=document.getElementById('cfg-raw');
+  if(ta.value.length>4096){alert('Config too large (max 4096 bytes)');return;}
+  var b1=document.getElementById('btn-cfg-save');var b2=document.getElementById('btn-cfg-savereboot');
+  var ob1=b1.textContent,ob2=b2.textContent;
+  b1.textContent='Saving...';b2.textContent='Saving...';b1.disabled=true;b2.disabled=true;
+  var msg=document.getElementById('cfg-raw-msg');msg.style.color='#8f98a0';msg.textContent='Writing to SD...';
+  
+  fetch('/api/config-raw',{method:'POST',headers:{'Content-Type':'text/plain'},body:ta.value,cache:'no-store'})
   .then(function(r){return r.json();})
   .then(function(d){
     if(d.ok){
-      msg.style.color='#57cbde';msg.textContent='\u2713 '+d.message;
-      releaseCfgLock();
-    }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
-  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
-}
-function saveAndReboot(){
-  var body=document.getElementById('cfg-raw').value;
-  var msg=document.getElementById('cfg-raw-msg');
-  msg.style.color='#8f98a0';msg.textContent='Saving...';
-  fetch('/api/config-raw',{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store'})
-  .then(function(r){return r.json();})
-  .then(function(d){
-    if(d.ok){
-      msg.style.color='#57cbde';msg.textContent='Saved. Rebooting...';
-      fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});
-      setTimeout(function(){fetch('/soft-reboot',{cache:'no-store'});},800);
-    }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
-  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
+      msg.style.color='#44ff44';msg.textContent='Saved!';
+      if (d.requires_reinsert) {
+          toast(d.message, 'er'); // Show the critical warning
+      }
+      setTimeout(function(){
+        if(reboot)softReboot();
+        else{releaseCfgLock();loadCfg();}
+      },1000);
+    }else{msg.style.color='#ff6060';msg.textContent='Error: '+(d.error||'?');}
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Save failed: '+e.message;})
+  .finally(function(){b1.textContent=ob1;b2.textContent=ob2;b1.disabled=false;b2.disabled=false;});
 }
 
-// Client-side log buffer — persists across soft-reboots in browser memory
-var logAtBottom=true,clientLogBuf=[],lastSeenLine='',LOG_BUF_MAX=2000;
-function _appendLogs(text){
-  if(!text)return;
-  var lines=text.split('\n');
-  // Detect reboot: scan ALL lines for the boot banner (not just line 0,
-  // because the server prepends a space byte before streaming the buffer).
-  var bootIdx=-1;
-  for(var i=0;i<lines.length;i++){
-    if(lines[i].indexOf('=== CPAP Data Auto-Uploader ===')>=0){bootIdx=i;break;}
-  }
-  var newLines;
-  if(bootIdx>=0){
-    // Boot banner found. Determine if this is genuinely a NEW reboot or the
-    // same boot we already buffered (banner is present in every server response).
-    // A new reboot means lastSeenLine doesn't exist in this response at all, OR
-    // it appears before/at the boot banner (i.e. it belongs to a prior boot).
-    var lastSeenPos=-1;
-    if(lastSeenLine){
-      for(var i=lines.length-1;i>=0;i--){
-        if(lines[i]===lastSeenLine){lastSeenPos=i;break;}
-      }
-    }
-    if(lastSeenPos>bootIdx){
-      // Same boot continuing — treat as normal poll, append only new tail
-      newLines=lines.slice(lastSeenPos+1);
-    } else {
-      // Genuinely new reboot — insert separator and start from boot banner
-      if(clientLogBuf.length>0)clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
-      newLines=lines.slice(bootIdx);
-    }
-  } else {
-    // Normal poll — find the last line we already buffered (search from end)
-    // and only append what comes after it.
-    var startFrom=0;
-    if(lastSeenLine){
-      for(var i=lines.length-1;i>=0;i--){
-        if(lines[i]===lastSeenLine){startFrom=i+1;break;}
-      }
-    }
-    newLines=lines.slice(startFrom);
-  }
-  // Strip trailing empty lines — server responses end with blank lines that
-  // would otherwise be appended as "new" on every poll.
-  while(newLines.length>0&&!newLines[newLines.length-1].trim())newLines.pop();
-  for(var i=0;i<newLines.length;i++){
-    if(newLines[i]!==undefined)clientLogBuf.push(newLines[i]);
-  }
-  // Track the last non-empty line we put into the buffer for next dedup pass
-  for(var i=clientLogBuf.length-1;i>=0;i--){
-    if(clientLogBuf[i]){lastSeenLine=clientLogBuf[i];break;}
-  }
-  if(clientLogBuf.length>LOG_BUF_MAX)clientLogBuf=clientLogBuf.slice(clientLogBuf.length-LOG_BUF_MAX);
-}
-function _renderLogBuf(){
-  var b=document.getElementById('log-box');
-  logAtBottom=(b.scrollHeight-b.scrollTop-b.clientHeight)<60;
-  b.textContent=clientLogBuf.join('\n');
-  if(logAtBottom)b.scrollTop=b.scrollHeight;
-}
-function fetchLogs(){
-  if(curTab!=='logs')return;
-  fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
-    _appendLogs(t);
-    _renderLogBuf();
-    set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');
-  }).catch(function(){set('log-st','Disconnected');});
-}
-function clearLogBuf(){clientLogBuf=[];lastSeenLine='';document.getElementById('log-box').textContent='';}
-function copyLogBuf(){
-  var txt=clientLogBuf.join('\n');
-  if(!txt){return;}
-  if(navigator.clipboard&&navigator.clipboard.writeText){
-    navigator.clipboard.writeText(txt).then(function(){set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');},2000);});
-  } else {
-    var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';
-    document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
-    set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');},2000);
-  }
-}
-document.getElementById('log-box').addEventListener('scroll',function(){
-  var b=this;logAtBottom=(b.scrollHeight-b.scrollTop-b.clientHeight)<60;
-});
-function startLogPoll(){if(!logPoll){fetchLogs();logPoll=setInterval(fetchLogs,4000);}}
-function stopLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}}
-
-function startMon(){
 function startMon(){
   fetch('/api/monitor-start',{cache:'no-store'});
   document.getElementById('btn-mst').style.display='none';
@@ -486,7 +405,7 @@ function stopMon(){
 function fetchMon(){
   if(curTab!=='mon')return;
   fetch('/api/sd-activity',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
-    set('m-phase',d.samples.length>0?'Profiling':'Waiting');
+    set('m-phase',d.samples&&d.samples.length>0?'Profiling':'Waiting');
     set('m-i',(d.consecutive_idle_ms/1000).toFixed(1)+'s');
     set('m-l',(d.longest_idle_ms/1000).toFixed(1)+'s');
     set('m-r',d.total_active_samples+' samples');
@@ -495,15 +414,16 @@ function fetchMon(){
     if(d.samples&&d.samples.length){
       var h='';
       d.samples.forEach(function(s){
-        var w=Math.min(Math.max(s.p/10,1),100);
-        var sec=s.t%3600,m=Math.floor(sec/60),ss=sec%60;
+        var w=Math.min(Math.max(s.pulseCount/10,1),100);
+        var sec=s.timestamp%3600,m=Math.floor(sec/60),ss=sec%60;
         var l=String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');
-        h+='<div class=br2><span class=bl2>'+l+'</span><div class=bt><div class="bf '+(s.a?'a':'i')+'" style="width:'+w+'%"></div></div></div>';
+        h+='<div class=br2><span class=bl2>'+l+'</span><div class=bt><div class="bf '+(s.active?'a':'i')+'" style="width:'+w+'%"></div></div></div>';
       });
       document.getElementById('m-ch').innerHTML=h;
     }
   }).catch(function(){});
 }
+
 function triggerUpload(){
   var b=document.getElementById('btn-up');
   if(b._busy)return;b._busy=1;b.textContent='Triggering...';
