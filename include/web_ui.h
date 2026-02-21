@@ -3,7 +3,7 @@
 
 // Auto-served from flash via server->send_P() — zero heap allocation.
 // All rendering is client-side JS. ESP32 only serves this once per page load,
-// then the browser polls /api/status, /api/logs, /api/config, /api/sd-activity.
+// then the browser polls /api/status, /api/logs, /api/config, /api/profiler/status.
 
 static const char WEB_UI_HTML[] PROGMEM = R"HTMLEOF(<!DOCTYPE html><html><head>
 <title>CPAP Uploader</title><meta charset=utf-8>
@@ -162,21 +162,21 @@ nav button:hover:not(.act){background:#3a5a7e}
 
 <!-- MONITOR -->
 <div id=mon class=page>
-<div class=card style="margin-bottom:10px"><h2>SD Activity Monitor <span id=mon-dot class="dot idle"></span></h2>
-<p style="font-size:.85em;color:#c7d5e0;line-height:1.5;margin-bottom:10px">Monitors SD card bus activity. Use when CPAP machine is on. Red = CPAP writing, Green = safe to upload.</p>
+<div class=card style="margin-bottom:10px"><h2>CPAP Profiler Wizard <span id=mon-dot class="dot idle"></span></h2>
+<p style="font-size:.85em;color:#c7d5e0;line-height:1.5;margin-bottom:10px">Empirically measure your CPAP machine's SD card writing behavior to tune upload settings.</p>
 <div class=actions>
-<button id=btn-mst class="btn bp" onclick=startMon()>Start Monitoring</button>
+<button id=btn-mst class="btn bp" onclick=startMon()>Start Profiling</button>
 <button id=btn-msp class="btn bd" onclick=stopMon() style=display:none>Stop</button>
 <button class="btn bs" onclick="tab('dash')">&#8592; Dashboard</button>
 </div>
 </div>
 <div class=stats-grid>
-<div class=stat-box><span class=sl>Pulse Count (1s)</span><span class=sv id=m-p>--</span></div>
+<div class=stat-box><span class=sl>Phase</span><span class=sv id=m-phase>--</span></div>
 <div class=stat-box><span class=sl>Consecutive Idle</span><span class=sv id=m-i>--</span></div>
 <div class=stat-box><span class=sl>Longest Idle</span><span class=sv id=m-l>--</span></div>
-<div class=stat-box><span class=sl>Active/Idle</span><span class=sv id=m-r>--</span></div>
+<div class=stat-box><span class=sl>Total Active</span><span class=sv id=m-r>--</span></div>
 </div>
-<div class=card><h2>Activity Timeline (Last 60s)</h2>
+<div class=card><h2>Activity Timeline</h2>
 <div class=chart id=m-ch><em>Waiting for data...</em></div>
 </div>
 </div>
@@ -222,7 +222,7 @@ function tab(t){
   });
   curTab=t;
   if(t==='logs'){startLogPoll();}else{stopLogPoll();}
-  if(t==='mon'){startMon();}else{stopMon();}
+  if(t==='mon'){if(!monPoll)monPoll=setInterval(fetchMon,2000);fetchMon();}else{if(monPoll){clearInterval(monPoll);monPoll=null;}}
   if(t==='cfg'){loadCfg();}
 }
 function toast(msg,mode){
@@ -471,25 +471,25 @@ function startLogPoll(){if(!logPoll){fetchLogs();logPoll=setInterval(fetchLogs,4
 function stopLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}}
 
 function startMon(){
-  fetch('/api/monitor-start',{cache:'no-store'});
+  fetch('/api/profiler/start',{method:'POST',cache:'no-store'});
   document.getElementById('btn-mst').style.display='none';
   document.getElementById('btn-msp').style.display='inline-flex';
   if(!monPoll)monPoll=setInterval(fetchMon,2000);
   fetchMon();
 }
 function stopMon(){
-  fetch('/api/monitor-stop',{cache:'no-store'});
+  fetch('/api/profiler/stop',{method:'POST',cache:'no-store'});
   document.getElementById('btn-mst').style.display='inline-flex';
   document.getElementById('btn-msp').style.display='none';
   if(monPoll){clearInterval(monPoll);monPoll=null;}
 }
 function fetchMon(){
   if(curTab!=='mon')return;
-  fetch('/api/sd-activity',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
-    set('m-p',d.last_pulse_count);
+  fetch('/api/profiler/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    set('m-phase',d.sample_count>0?'Profiling':'Waiting');
     set('m-i',(d.consecutive_idle_ms/1000).toFixed(1)+'s');
     set('m-l',(d.longest_idle_ms/1000).toFixed(1)+'s');
-    set('m-r',d.total_active_samples+'/'+d.total_idle_samples);
+    set('m-r',d.total_active_samples+' samples');
     var dot=document.getElementById('mon-dot');
     dot.className='dot '+(d.is_busy?'busy':'idle');
     if(d.samples&&d.samples.length){
