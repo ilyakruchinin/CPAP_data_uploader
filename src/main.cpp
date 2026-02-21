@@ -281,7 +281,8 @@ void setup() {
             resetPrefs.putBool("reset_state", false);
             resetPrefs.end();
             
-            // Delete all known state file paths: per-backend (current) + old default (legacy)
+            // Delete all known state/summary files from SPIFFS (internal flash).
+            // These were previously on the SD card; as of v0.9.2 they live in SPIFFS.
             static const char* STATE_FILES[] = {
                 "/.upload_state.v2.smb",
                 "/.upload_state.v2.smb.log",
@@ -289,10 +290,12 @@ void setup() {
                 "/.upload_state.v2.cloud.log",
                 "/.upload_state.v2",        // legacy: pre-split single-manager path
                 "/.upload_state.v2.log",
+                "/.backend_summary.smb",
+                "/.backend_summary.cloud",
             };
             bool removedAny = false;
             for (const char* path : STATE_FILES) {
-                if (sdManager.getFS().remove(path)) {
+                if (SPIFFS.remove(path)) {
                     LOGF("Deleted state file: %s", path);
                     removedAny = true;
                 }
