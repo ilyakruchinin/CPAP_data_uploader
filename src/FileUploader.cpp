@@ -1145,6 +1145,12 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         if (directStream) {
             sdManager->releaseControl();
         }
+
+        // Per-batch state flush: persist queued journal events to SPIFFS now so that
+        // a mid-session power failure cannot cause already-uploaded files to be
+        // re-uploaded from scratch.  flushJournal() is a lightweight append-only
+        // SPIFFS write (~25 bytes per entry) — not a full snapshot rewrite.
+        smbStateManager->save();
     }
 
     if (isRescan) {
@@ -1420,6 +1426,12 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         if (directStream) {
             sdManager->releaseControl();
         }
+
+        // Per-batch state flush: persist queued journal events to SPIFFS now so that
+        // a mid-session power failure cannot cause already-uploaded files to be
+        // re-uploaded from scratch.  flushJournal() is a lightweight append-only
+        // SPIFFS write (~25 bytes per entry) — not a full snapshot rewrite.
+        cloudStateManager->save();
     }
 
     if (isRescan) {

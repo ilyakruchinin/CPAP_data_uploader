@@ -70,12 +70,13 @@ Because the SD card is released to the CPAP *during* the network upload of buffe
 ### Phase 3: Hybrid Buffering Engine
 1.  Create `BufferManager` class to handle SPIFFS `/buffer/` lifecycle (including the pre-session purge).
 2.  Modify `FileUploader::uploadDatalogFolderSmb()` and `uploadDatalogFolderCloud()` to utilize the Greedy Buffer.
-3.  Implement the `PendingUploadState` struct.
-4.  Update the logic loop: 
-    *   Lock -> Scan sizes -> Copy to SPIFFS -> Snapshot State -> Release
-    *   Upload from SPIFFS -> Delete from SPIFFS -> Commit State Snapshot to permanent JSON.
-    *   `Smart Wait` -> Repeat until folder is complete.
+3.  Implement the `PendingUploadState` struct (`BufferedFile`: `sourcePath`, `bufferPath`, `size`).
+4.  Update the logic loop:
+    *   Lock -> Scan sizes -> Copy to SPIFFS -> Snapshot Size in RAM (`BufferedFile.size`) -> Release
+    *   Upload from SPIFFS -> Delete from SPIFFS -> `markFileUploaded()` using frozen size -> **`stateManager->save()` (per-batch journal flush)**
+    *   `Smart Wait` -> Re-acquire -> Repeat until folder is complete.
 5.  Implement the >800KB direct stream fallback.
+6.  **Per-batch state durability:** `markFileUploaded()` queues a `JournalEvent` in RAM only (`queueEvent()`). It does **not** write to SPIFFS until `save()` → `flushJournal()` is explicitly called. `flushJournal()` is a lightweight append-only SPIFFS write (~25 bytes per file entry). Calling `save()` once per completed batch (not per file, not per folder) gives per-batch crash recovery with minimal SPIFFS wear: if power fails mid-session, at most one batch of already-uploaded files is re-uploaded on the next session.
 
 ### Phase 4: Web UI Diagnostics
 1.  Remove `CPAPMonitor.cpp/h` and associated frontend code.

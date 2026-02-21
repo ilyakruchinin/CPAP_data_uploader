@@ -159,6 +159,10 @@ bool CpapWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleSdActivity();
     });
+    // CPAP Profiler Wizard canonical endpoints (design spec §3.6)
+    server->on("/api/profiler/start",  HTTP_POST, [this]() { this->handleMonitorStart(); });
+    server->on("/api/profiler/stop",   HTTP_POST, [this]() { this->handleMonitorStop(); });
+    server->on("/api/profiler/status", HTTP_GET,  [this]() { this->handleSdActivity(); });
     server->on("/reset-state", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleResetState();

@@ -482,7 +482,7 @@ GMT_OFFSET_HOURS = 0
 1. Device reads `config.txt` from SD card
 2. Connects to WiFi network
 3. Synchronizes time with internet (NTP)
-4. Loads upload history from `.upload_state.v2` + `.upload_state.v2.log` (if present)
+4. Loads upload history from `.upload_state.v2.smb`/`.cloud` snapshots + journals stored on the ESP32's **internal SPIFFS flash** (not the SD card)
 
 ### Daily Upload Cycle
 1. Waits for upload eligibility based on configured mode (`UPLOAD_MODE`)
@@ -498,9 +498,9 @@ GMT_OFFSET_HOURS = 0
    - **Cloud**: DATALOG folders first (newest first), then Root/SETTINGS files (only if DATALOG files uploaded)
 6. **SMB:** Automatically creates directories on remote share
    **Cloud:** Associates data with your SleepHQ account (OAuth only if needed)
-7. Releases SD card after session or time budget exhausted
+7. Releases SD card after **each buffered batch** (typically 2–10 seconds of hold time); re-acquires only when the next batch is ready
 8. **Automatic heap recovery** reboots if memory fragmented (seamless fast-boot)
-9. Saves progress to separate state files for each backend (`.upload_state.v2.smb`/`.cloud` + journals)
+9. Saves progress to ESP32 internal SPIFFS after every batch (per-batch journal flush); the SD card is never written to during uploads
 
 ### Smart File Tracking
 - **DATALOG folders**: Tracks completion (all files uploaded = done)
@@ -724,10 +724,10 @@ In scheduled mode the uploader **only runs during the configured window** (e.g. 
 - Check logs for specific errors
 
 **Same files uploading repeatedly**
-- Check `.upload_state.v2` exists on SD card
-- Check `.upload_state.v2.log` is writable
-- Verify SD card has write permission
-- Try reset state via web interface
+- Upload state is stored on the ESP32's **internal SPIFFS flash**, not the SD card
+- Use the web interface Reset State button to clear upload history and force a full re-upload
+- Check logs for journal replay errors at startup
+- Verify SPIFFS is not full (check free heap and SPIFFS usage in logs)
 
 ### Time Sync Issues
 
@@ -759,8 +759,9 @@ http://<device-ip>/logs
 ```
 
 **Check Upload State**
-- Look for `.upload_state.v2.smb`/`.cloud` and their `.log` files on SD card
-- Contains upload history, retry counts, and incremental journal updates for each backend
+- Upload state lives on the ESP32's **internal SPIFFS flash** (not the SD card): `/upload_state.v2.smb`, `/upload_state.v2.smb.log`, `/upload_state.v2.cloud`, `/upload_state.v2.cloud.log`
+- Contains upload history, per-file size fingerprints, retry counts, and incremental per-batch journal entries
+- System logs are also stored on SPIFFS: `/syslog.A.txt` and `/syslog.B.txt` (A/B ping-pong rotation, 20KB each)
 
 ---
 
@@ -770,10 +771,6 @@ http://<device-ip>/logs
 ```
 /
 ├── config.txt               # Your configuration (you create this)
-├── .upload_state.v2.smb     # SMB upload tracking (auto-created)
-├── .upload_state.v2.smb.log # SMB upload journal (auto-created)
-├── .upload_state.v2.cloud   # Cloud upload tracking (auto-created)
-├── .upload_state.v2.cloud.log # Cloud upload journal (auto-created)
 ├── Identification.json      # ResMed 11 identification (if present)
 ├── Identification.crc       # Identification checksum (if present)
 ├── Identification.tgt       # ResMed 9/10 identification (if present)
@@ -786,6 +783,20 @@ http://<device-ip>/logs
 └── SETTINGS/                # Settings folder
     ├── CurrentSettings.json
     └── CurrentSettings.crc
+```
+
+### On ESP32 Internal Flash (SPIFFS)
+Files managed automatically by the firmware — **never on the SD card**:
+```
+/
+├── upload_state.v2.smb         # SMB upload snapshot (auto-created)
+├── upload_state.v2.smb.log     # SMB per-batch journal (auto-created)
+├── upload_state.v2.cloud       # Cloud upload snapshot (auto-created)
+├── upload_state.v2.cloud.log   # Cloud per-batch journal (auto-created)
+├── syslog.A.txt                # Active system log (20KB max, then rotates)
+├── syslog.B.txt                # Previous system log (20KB max)
+└── buffer/                     # Temporary upload buffer (purged each session)
+    └── <filename>.edf          # Files staged here briefly before network upload
 ```
 
 ### On Network Share
