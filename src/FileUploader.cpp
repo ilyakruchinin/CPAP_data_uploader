@@ -107,7 +107,7 @@ bool FileUploader::begin(fs::FS &sd) {
     }
 
     // ── Backend cycling: select which backend runs this session ───────────────
-    activeBackend = selectActiveBackend(sd);
+    activeBackend = selectActiveBackend();
     const char* abName = (activeBackend == UploadBackend::SMB)   ? "SMB"  :
                          (activeBackend == UploadBackend::CLOUD) ? "CLOUD" : "NONE";
     LOGF("[FileUploader] Active backend this session: %s", abName);
@@ -122,7 +122,7 @@ bool FileUploader::begin(fs::FS &sd) {
         (activeBackend == UploadBackend::CLOUD && smbStateManager)   ? UploadBackend::SMB   :
         UploadBackend::NONE;
     if (inactiveBackend != UploadBackend::NONE) {
-        BackendSummary ibSum = readBackendSummary(sd, inactiveBackend);
+        BackendSummary ibSum = readBackendSummary(inactiveBackend);
         const char* ibName  = (inactiveBackend == UploadBackend::SMB) ? "SMB" : "CLOUD";
         strncpy(g_inactiveBackendStatus.name, ibName, sizeof(g_inactiveBackendStatus.name) - 1);
         g_inactiveBackendStatus.sessionStartTs = ibSum.sessionStartTs;
@@ -159,11 +159,11 @@ const char* FileUploader::getBackendSummaryPath(UploadBackend backend) {
     return nullptr;
 }
 
-BackendSummary FileUploader::readBackendSummary(fs::FS& sd, UploadBackend backend) const {
+BackendSummary FileUploader::readBackendSummary(UploadBackend backend) const {
     BackendSummary s = {0, 0, 0, 0, false};
     const char* path = getBackendSummaryPath(backend);
     if (!path) return s;
-    File f = sd.open(path, FILE_READ);
+    File f = SPIFFS.open(path, FILE_READ);
     if (!f) return s;
     char buf[80] = {0};
     f.readBytesUntil('\n', buf, sizeof(buf) - 1);
@@ -180,10 +180,10 @@ BackendSummary FileUploader::readBackendSummary(fs::FS& sd, UploadBackend backen
     return s;
 }
 
-void FileUploader::writeBackendSummaryStart(fs::FS& sd, UploadBackend backend, uint32_t sessionTs) {
+void FileUploader::writeBackendSummaryStart(UploadBackend backend, uint32_t sessionTs) {
     const char* path = getBackendSummaryPath(backend);
     if (!path) return;
-    File f = sd.open(path, FILE_WRITE);
+    File f = SPIFFS.open(path, FILE_WRITE);
     if (!f) { LOGF("[FileUploader] Cannot write backend summary: %s", path); return; }
     char buf[64];
     snprintf(buf, sizeof(buf), "ts=%lu,done=0,total=0,empty=0", (unsigned long)sessionTs);
@@ -191,11 +191,11 @@ void FileUploader::writeBackendSummaryStart(fs::FS& sd, UploadBackend backend, u
     f.close();
 }
 
-void FileUploader::writeBackendSummaryFull(fs::FS& sd, UploadBackend backend, uint32_t sessionTs,
+void FileUploader::writeBackendSummaryFull(UploadBackend backend, uint32_t sessionTs,
                                             int done, int total, int empty) {
     const char* path = getBackendSummaryPath(backend);
     if (!path) return;
-    File f = sd.open(path, FILE_WRITE);
+    File f = SPIFFS.open(path, FILE_WRITE);
     if (!f) { LOGF("[FileUploader] Cannot write backend summary: %s", path); return; }
     char buf[80];
     snprintf(buf, sizeof(buf), "ts=%lu,done=%d,total=%d,empty=%d",
@@ -206,7 +206,7 @@ void FileUploader::writeBackendSummaryFull(fs::FS& sd, UploadBackend backend, ui
          path, (unsigned long)sessionTs, done, total, empty);
 }
 
-UploadBackend FileUploader::selectActiveBackend(fs::FS& sd) const {
+UploadBackend FileUploader::selectActiveBackend() const {
     bool hasSMB   = (smbStateManager   != nullptr);
     bool hasCloud = (cloudStateManager != nullptr);
     if (!hasSMB && !hasCloud) return UploadBackend::NONE;
@@ -215,8 +215,8 @@ UploadBackend FileUploader::selectActiveBackend(fs::FS& sd) const {
 
     // Both configured: pick the backend with the OLDEST session start timestamp.
     // A backend that has never run (no summary file) has ts=0, so it runs first.
-    BackendSummary smbSum   = readBackendSummary(sd, UploadBackend::SMB);
-    BackendSummary cloudSum = readBackendSummary(sd, UploadBackend::CLOUD);
+    BackendSummary smbSum   = readBackendSummary(UploadBackend::SMB);
+    BackendSummary cloudSum = readBackendSummary(UploadBackend::CLOUD);
     uint32_t smbTs   = smbSum.valid   ? smbSum.sessionStartTs   : 0;
     uint32_t cloudTs = cloudSum.valid ? cloudSum.sessionStartTs : 0;
     if (smbTs <= cloudTs) {
@@ -403,13 +403,13 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     // the backend pointer advances even if the session is interrupted.
     time_t nowTs; time(&nowTs);
     uint32_t sessionTs = (uint32_t)nowTs;
-    writeBackendSummaryStart(sd, activeBackend, sessionTs);
+    writeBackendSummaryStart(activeBackend, sessionTs);
     // If we redirected away from originalBackend, advance its timestamp too so
     // cycling doesn't permanently select the no-work backend every boot.
     if (originalBackend != activeBackend) {
         LOGF("[FileUploader] Pre-flight: also advancing %s timestamp to keep cycling balanced",
              (originalBackend == UploadBackend::SMB) ? "SMB" : "CLOUD");
-        writeBackendSummaryStart(sd, originalBackend, sessionTs);
+        writeBackendSummaryStart(originalBackend, sessionTs);
     }
 
     cloudImportCreated = false;
@@ -596,7 +596,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     int sessionDone  = sm ? sm->getCompletedFoldersCount() : 0;
     int sessionEmpty = sm ? sm->getPendingFoldersCount()   : 0;
     int sessionTotal = sessionDone + (sm ? sm->getIncompleteFoldersCount() : 0);
-    writeBackendSummaryFull(sd, activeBackend, sessionTs, sessionDone, sessionTotal, sessionEmpty);
+    writeBackendSummaryFull(activeBackend, sessionTs, sessionDone, sessionTotal, sessionEmpty);
 
     // ── Determine result ──────────────────────────────────────────────────────
     unsigned long elapsed = millis() - sessionStart;
@@ -1277,6 +1277,12 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
     return true;
 #else
     if (!sleephqUploader || !cloudStateManager) return false;
+
+    // SD may have been released before cloud auth in shared mode; re-acquire before any SD access.
+    if (!reacquireSdCard(sdManager)) {
+        LOG_ERROR("[FileUploader] [Cloud] Cannot re-acquire SD for folder scan");
+        return false;
+    }
     fs::FS &sd = sdManager->getFS();
 
     LOGF("[FileUploader] [Cloud] Uploading DATALOG folder: %s", folderName.c_str());

@@ -107,11 +107,11 @@ private:
     bool cloudImportFailed;
     int  cloudDatalogFilesUploaded;  // DATALOG files uploaded this cloud pass; 0 = skip finalize
 
-    // Backend cycling helpers
-    UploadBackend selectActiveBackend(fs::FS& sd) const;
-    BackendSummary readBackendSummary(fs::FS& sd, UploadBackend backend) const;
-    void writeBackendSummaryStart(fs::FS& sd, UploadBackend backend, uint32_t sessionTs);
-    void writeBackendSummaryFull(fs::FS& sd, UploadBackend backend, uint32_t sessionTs,
+    // Backend cycling helpers — summaries stored in SPIFFS, NOT on the SD card
+    UploadBackend selectActiveBackend() const;
+    BackendSummary readBackendSummary(UploadBackend backend) const;
+    void writeBackendSummaryStart(UploadBackend backend, uint32_t sessionTs);
+    void writeBackendSummaryFull(UploadBackend backend, uint32_t sessionTs,
                                  int done, int total, int empty);
     static const char* getBackendSummaryPath(UploadBackend backend);
 
