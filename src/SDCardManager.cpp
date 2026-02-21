@@ -3,7 +3,7 @@
 #include "pins_config.h"
 #include <SD_MMC.h>
 
-SDCardManager::SDCardManager() : initialized(false), espHasControl(false), isReadOnly(true) {}
+SDCardManager::SDCardManager() : initialized(false), espHasControl(false), isReadOnly(true), takeControlAt(0) {}
 
 void SDCardManager::setControlPin(bool espControl) {
     digitalWrite(SD_SWITCH_PIN, espControl ? SD_SWITCH_ESP_VALUE : SD_SWITCH_CPAP_VALUE);
@@ -134,6 +134,7 @@ bool SDCardManager::takeControl(bool readOnly) {
 
     LOGF("SD card mounted successfully (Mode: %s)", isReadOnly ? "Read-Only" : "Read/Write");
     initialized = true;
+    takeControlAt = millis();
     return true;
 }
 
@@ -176,7 +177,9 @@ void SDCardManager::releaseControl() {
     setControlPin(false);
     espHasControl = false;
     isReadOnly = true; // Reset to default safe state
-    LOG("SD card control released to CPAP machine");
+    unsigned long heldMs = (takeControlAt > 0) ? (millis() - takeControlAt) : 0;
+    takeControlAt = 0;
+    LOGF("SD card control released to CPAP machine (held %lums)", heldMs);
 }
 
 bool SDCardManager::hasControl() const { return espHasControl; }

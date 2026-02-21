@@ -55,6 +55,7 @@ private:
     
     // Upload FSM settings
     String uploadMode;             // "scheduled" or "smart"
+    String accessMode;             // "shared" (hybrid buffer) or "exclusive" (hold SD entire session)
     int uploadStartHour;           // 0-23, start of upload window
     int uploadEndHour;             // 0-23, end of upload window
     int inactivitySeconds;         // Z: seconds of bus silence before upload
@@ -140,6 +141,7 @@ public:
     
     // Upload FSM getters
     const String& getUploadMode() const;
+    const String& getAccessMode() const;
     int getUploadStartHour() const;
     int getUploadEndHour() const;
     int getInactivitySeconds() const;
@@ -147,6 +149,7 @@ public:
     int getExclusiveAccessMinutes() const;
     int getCooldownMinutes() const;
     bool isSmartMode() const;
+    bool isSharedMode() const;
     
     // Power management getters
     int getCpuSpeedMhz() const;

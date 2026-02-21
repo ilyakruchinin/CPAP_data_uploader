@@ -20,6 +20,12 @@
 // NTP settle) can be skipped.  Set once in setup() from esp_reset_reason().
 bool g_heapRecoveryBoot = false;
 
+// RTC memory persists across soft resets (ESP_RST_SW) but not power-on.
+// Used to carry a human-readable reboot reason into the next boot log.
+static const uint32_t RTC_REBOOT_MAGIC = 0xC4A9B301;
+RTC_NOINIT_ATTR uint32_t g_rtcRebootMagic;
+RTC_NOINIT_ATTR char     g_rtcRebootReason[80];
+
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
 #endif
@@ -184,6 +190,12 @@ void setup() {
     // Log reset reason for power/stability diagnostics
     esp_reset_reason_t resetReason = esp_reset_reason();
     LOG_INFOF("Reset reason: %s", getResetReasonString(resetReason));
+
+    // If this is a software reset and the previous boot stored a reason, log it
+    if (resetReason == ESP_RST_SW && g_rtcRebootMagic == RTC_REBOOT_MAGIC) {
+        LOG_INFOF("[FSM] Previous session: %s", g_rtcRebootReason);
+    }
+    g_rtcRebootMagic = 0;  // consume — only valid for one boot
     
     // Check for power-related issues
     if (resetReason == ESP_RST_BROWNOUT) {
@@ -720,6 +732,10 @@ void handleReleasing() {
     // The fast-boot path (ESP_RST_SW) skips cold-boot delays.
     LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
          (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    snprintf(g_rtcRebootReason, sizeof(g_rtcRebootReason),
+             "Upload session complete (fh=%u ma=%u)",
+             (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    g_rtcRebootMagic = RTC_REBOOT_MAGIC;
     delay(200);
     esp_restart();
 }

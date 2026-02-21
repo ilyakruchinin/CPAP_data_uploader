@@ -80,7 +80,8 @@ details summary{cursor:pointer;list-style:none;user-select:none}details summary:
 <div class=card><h2>Upload Engine</h2>
 <div class=row><span class=k>State</span><span id=d-st class=v></span></div>
 <div class=row><span class=k>In state</span><span id=d-ins class=v></span></div>
-<div class=row><span class=k>Mode</span><span id=d-mode class=v></span></div>
+<div class=row><span class=k>Upload mode</span><span id=d-mode class=v></span></div>
+<div class=row><span class=k>Access mode</span><span id=d-amode class=v></span></div>
 <div class=row><span class=k>Time synced</span><span id=d-tsync class=v></span></div>
 <div class=row><span class=k>Upload window</span><span id=d-win class=v></span></div>
 <div class=row><span class=k>Next upload</span><span id=d-next class=v></span></div>
@@ -134,25 +135,19 @@ details summary{cursor:pointer;list-style:none;user-select:none}details summary:
 
 <!-- CONFIG -->
 <div id=cfg class=page>
-<div id=cfg-lock-banner style="display:none;background:#2a4a2a;border:1px solid #4a8a4a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#a0e0a0">
-&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume uploads without saving, or <em>Save &amp; Reboot</em> to apply changes.
-</div>
-<div class=card><h2>Configuration</h2>
-<pre id=cfg-box style="font-size:.8em;max-height:300px;overflow-y:auto">Loading...</pre>
-</div>
-<div class=card>
-<h2>Edit config.txt
-<span id=cfg-lock-badge style="display:none;margin-left:8px;background:#4a8a4a;color:#fff;font-size:.65em;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle">LOCKED</span>
+<div class=wb style="margin-bottom:10px"><h3>&#9888; SD Card Must Be Ejected After Saving</h3><p style="font-size:.84em;color:#c7d5e0;line-height:1.5;margin-top:4px">After clicking <strong>Save &amp; Reboot</strong>, wait for the device to restart, then <strong>physically eject and reinsert the SD card</strong>. Skipping this step may cause file system errors.</p></div>
+<div id=cfg-lock-banner style="display:none;background:#2a4a2a;border:1px solid #4a8a4a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#a0e0a0">&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume uploads without saving.</div>
+<div class=card><h2>config.txt
+<span id=cfg-lock-badge style="display:none;margin-left:8px;background:#4a8a4a;color:#fff;font-size:.65em;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle">EDITING</span>
 </h2>
-<p style="font-size:.82em;color:#8f98a0;margin-bottom:8px">Direct editor for the SD card config file. Passwords stored securely in flash appear as <code>***STORED_IN_FLASH***</code> &mdash; leave them unchanged to keep existing credentials. Max 4096 bytes. <strong>Changes take effect after reboot.</strong></p>
-<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> first to pause uploads and enable editing. Uploads resume automatically on Save, Cancel, or after 30&nbsp;min.</p>
-<textarea id=cfg-raw style="width:100%;box-sizing:border-box;height:320px;background:#111820;color:#6a7a8a;border:1px solid #2d3440;border-radius:4px;padding:8px;font-family:monospace;font-size:.8em;resize:vertical" maxlength=4096 oninput=cfgRawCount() placeholder="Click Edit to begin..." readonly></textarea>
+<p style="font-size:.82em;color:#8f98a0;margin-bottom:8px">Raw SD card config file. Passwords stored securely in flash appear as <code>***STORED_IN_FLASH***</code> &mdash; leave unchanged to keep existing credentials. Max 4096 bytes.</p>
+<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> to pause uploads and enable editing. Uploads resume on Save &amp; Reboot, Cancel, or after 30&nbsp;min.</p>
+<textarea id=cfg-raw style="width:100%;box-sizing:border-box;height:320px;background:#111820;color:#6a7a8a;border:1px solid #2d3440;border-radius:4px;padding:8px;font-family:monospace;font-size:.8em;resize:vertical" maxlength=4096 oninput=cfgRawCount() placeholder="Loading..." readonly></textarea>
 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
 <span id=cfg-raw-cnt style="font-size:.8em;color:#8f98a0">0 / 4096 bytes</span>
 <div class=actions style=margin:0>
 <button id=btn-cfg-edit class="btn bp" onclick=acquireCfgLock() style="padding:6px 14px">&#9998; Edit</button>
 <button id=btn-cfg-reload class="btn bs" onclick=loadRawCfg() style="padding:6px 14px;display:none">&#8635; Reload</button>
-<button id=btn-cfg-save class="btn bp" onclick=saveRawCfg() style="padding:6px 14px;display:none">&#128190; Save</button>
 <button id=btn-cfg-savereboot class="btn bd" onclick=saveAndReboot() style="padding:6px 14px;display:none">Save &amp; Reboot</button>
 <button id=btn-cfg-cancel class="btn bs" onclick=releaseCfgLock() style="padding:6px 14px;display:none">&#10005; Cancel</button>
 </div>
@@ -245,7 +240,7 @@ function tab(t){
   curTab=t;
   if(t==='logs'){startLogPoll();}else{stopLogPoll();}
   if(t==='mon'){if(!monPoll)monPoll=setInterval(fetchMon,2000);fetchMon();}else{if(monPoll){clearInterval(monPoll);monPoll=null;}}
-  if(t==='cfg'){loadCfg();}
+  if(t==='cfg'){loadCfg();if(!cfgLocked)loadRawCfg();}
 }
 function toast(msg,mode){
   var el=document.getElementById('toast');
@@ -269,6 +264,7 @@ function renderStatus(d){
   seti('d-st',badgeHtml(d.state||'?'));
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
   set('d-mode',cfg.upload_mode||'—');
+  set('d-amode',cfg.access_mode||'—');
   set('d-tsync',d.time_synced?'Yes':'No');
   var ws=(cfg.upload_start_hour!=null&&cfg.upload_end_hour!=null)?cfg.upload_start_hour+':00 - '+cfg.upload_end_hour+':00':'—';
   set('d-win',ws);
@@ -332,7 +328,6 @@ function _setCfgLockUI(locked){
   ta.style.borderColor=locked?'#3d4450':'#2d3440';
   document.getElementById('btn-cfg-edit').style.display=locked?'none':'';
   document.getElementById('btn-cfg-reload').style.display=locked?'':'none';
-  document.getElementById('btn-cfg-save').style.display=locked?'':'none';
   document.getElementById('btn-cfg-savereboot').style.display=locked?'':'none';
   document.getElementById('btn-cfg-cancel').style.display=locked?'':'none';
 }
@@ -357,9 +352,7 @@ function releaseCfgLock(){
 function loadCfg(){
   fetch('/api/config',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     cfg=d;
-    document.getElementById('cfg-box').textContent=JSON.stringify(d,null,2);
-    renderStatus._cfgLoaded=true;
-  }).catch(function(){document.getElementById('cfg-box').textContent='Failed to load config.';});
+  }).catch(function(){});
   if(!cfgLocked)_setCfgLockUI(false);
 }
 function cfgRawCount(){
@@ -377,19 +370,6 @@ function loadRawCfg(){
     cfgRawCount();
     msg.textContent='';
   }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Load failed: '+e.message;});
-}
-function saveRawCfg(){
-  var body=document.getElementById('cfg-raw').value;
-  var msg=document.getElementById('cfg-raw-msg');
-  msg.style.color='#8f98a0';msg.textContent='Saving...';
-  fetch('/api/config-raw',{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store'})
-  .then(function(r){return r.json();})
-  .then(function(d){
-    if(d.ok){
-      msg.style.color='#57cbde';msg.textContent='\u2713 '+d.message;
-      releaseCfgLock();
-    }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
-  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
 }
 function saveAndReboot(){
   var body=document.getElementById('cfg-raw').value;

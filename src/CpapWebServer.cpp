@@ -619,7 +619,7 @@ void CpapWebServer::initConfigSnapshot() {
     int n = snprintf(buf, sizeof(buf),
         "{\"wifi_ssid\":\"%s\",\"hostname\":\"%s\""
         ",\"endpoint_type\":\"%s\",\"endpoint_user\":\"%s\""
-        ",\"upload_mode\":\"%s\""
+        ",\"upload_mode\":\"%s\",\"access_mode\":\"%s\""
         ",\"upload_start_hour\":%d,\"upload_end_hour\":%d"
         ",\"inactivity_seconds\":%d,\"smart_wait_seconds\":%d"
         ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
@@ -631,6 +631,7 @@ void CpapWebServer::initConfigSnapshot() {
         config->getEndpointType().c_str(),
         config->getEndpointUser().c_str(),
         config->getUploadMode().c_str(),
+        config->getAccessMode().c_str(),
         config->getUploadStartHour(), config->getUploadEndHour(),
         config->getInactivitySeconds(), config->getSmartWaitSeconds(),
         config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),

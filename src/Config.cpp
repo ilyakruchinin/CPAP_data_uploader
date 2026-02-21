@@ -23,10 +23,11 @@ Config::Config() :
     
     // Upload FSM defaults
     uploadMode("smart"),
+    accessMode("shared"),
     uploadStartHour(9),
     uploadEndHour(21),
     inactivitySeconds(62),
-    smartWaitSeconds(5),
+    smartWaitSeconds(3),
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
     
@@ -212,6 +213,8 @@ void Config::setConfigValue(String key, String value) {
         cloudInsecureTls = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "UPLOAD_MODE") {
         uploadMode = value;
+    } else if (key == "ACCESS_MODE") {
+        accessMode = value;
     } else if (key == "UPLOAD_START_HOUR") {
         uploadStartHour = value.toInt();
     } else if (key == "UPLOAD_END_HOUR") {
@@ -523,6 +526,9 @@ bool Config::loadFromSD(fs::FS &sd) {
     
     if (uploadMode != "scheduled" && uploadMode != "smart") { uploadMode = "smart"; }
     
+    accessMode.toLowerCase();
+    if (accessMode != "exclusive" && accessMode != "shared") { accessMode = "shared"; }
+    
     if (uploadStartHour < 0 || uploadStartHour > 23) { uploadStartHour = 9; }
     if (uploadEndHour < 0 || uploadEndHour > 23) { uploadEndHour = 21; }
     
@@ -598,6 +604,7 @@ WifiPowerSaving Config::getWifiPowerSaving() const { return wifiPowerSaving; }
 
 // Upload FSM getters
 const String& Config::getUploadMode() const { return uploadMode; }
+const String& Config::getAccessMode() const { return accessMode; }
 int Config::getUploadStartHour() const { return uploadStartHour; }
 int Config::getUploadEndHour() const { return uploadEndHour; }
 int Config::getInactivitySeconds() const { return inactivitySeconds; }
@@ -605,6 +612,7 @@ int Config::getSmartWaitSeconds() const { return smartWaitSeconds; }
 int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
 int Config::getCooldownMinutes() const { return cooldownMinutes; }
 bool Config::isSmartMode() const { return uploadMode == "smart"; }
+bool Config::isSharedMode() const { return accessMode == "shared"; }
 
 // Helper methods for enum conversion
 WifiTxPower Config::parseWifiTxPower(const String& str) {

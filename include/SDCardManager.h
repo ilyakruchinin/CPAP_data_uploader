@@ -9,6 +9,7 @@ private:
     bool initialized;
     bool espHasControl;
     bool isReadOnly;
+    unsigned long takeControlAt;
 
     void setControlPin(bool espControl);
     void sendCMD0();

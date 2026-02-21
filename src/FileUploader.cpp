@@ -238,9 +238,6 @@ UploadBackend FileUploader::selectActiveBackend(fs::FS& sd) const {
 UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, int maxMinutes, DataFilter filter) {
     fs::FS &sd = sdManager->getFS();
     unsigned long sessionStart = millis();
-    if (bufferManager) {
-        bufferManager->purge();
-    }
     unsigned long maxMs = (unsigned long)maxMinutes * 60UL * 1000UL;
 
     const char* abName = (activeBackend == UploadBackend::SMB)   ? "SMB"  :
@@ -335,19 +332,14 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                         }
                     }
                     if (completed && recent) {
-                        // Recently completed but CPAP may have extended or added files.
-                        // hasFileChanged needs FULL paths — scanFolderFiles returns bare
-                        // filenames so we must prepend the folder path here.
-                        String folderPath = "/DATALOG/" + name;
-                        auto files = scanFolderFiles(sd, folderPath);
-                        for (const String& fp : files) {
-                            String fullPath = folderPath + "/" + fp;
-                            if (sm->hasFileChanged(sd, fullPath)) {
-                                LOGF("[FileUploader] Pre-flight: WORK — file changed: %s",
-                                     fullPath.c_str());
-                                entry.close(); root.close(); return true;
-                            }
-                        }
+                        // Recently completed but CPAP may have appended new files.
+                        // Skip per-file hasFileChanged() here — opening every file on the
+                        // SD card while it is held is what causes the multi-second delay.
+                        // The actual per-file check runs inside uploadDatalogFolder* which
+                        // already does this correctly, without holding the SD card.
+                        LOGF("[FileUploader] Pre-flight: WORK — recent completed folder %s (re-scan on upload)",
+                             name.c_str());
+                        entry.close(); root.close(); return true;
                     }
                 }
                 entry.close();
@@ -398,8 +390,13 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             }
         }
 
-        LOGF("[FileUploader] Pre-flight: smb_work=%d cloud_work=%d — proceeding with %s",
-             smbWork, cloudWork, abName);
+        LOGF("[FileUploader] Pre-flight: smb_work=%d cloud_work=%d — proceeding with %s (scan took %lums)",
+             smbWork, cloudWork, abName, millis() - sessionStart);
+    }
+
+    // Purge SPIFFS buffer orphans now that pre-flight confirms there is work to do
+    if (bufferManager) {
+        bufferManager->purge();
     }
 
     // Record session start timestamp immediately — written before any work so
@@ -1034,7 +1031,9 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         LOG_DEBUGF("[FileUploader] [SMB] Skipping %d unchanged files", skippedUnchanged);
     }
 
-    // Process files using Hybrid Buffering (Greedy Buffer)
+    // Process files — shared mode: buffer to SPIFFS, release SD between batches;
+    // exclusive mode: stream directly from SD, card held for the entire folder.
+    bool sharedMode = config->isSharedMode();
     size_t fileIdx = 0;
     while (fileIdx < filesToUpload.size()) {
         if (!reacquireSdCard(sdManager)) {
@@ -1043,55 +1042,72 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         }
 
         std::vector<BufferedFile> batch;
-        bool directStream = false;
+        bool directStream = !sharedMode; // exclusive: always stream directly from SD
 
-        // Try to build a batch of small files
-        while (fileIdx < filesToUpload.size()) {
+        if (sharedMode) {
+            // Shared mode: try to build a batch of small files for SPIFFS buffering
+            while (fileIdx < filesToUpload.size()) {
+                const String& fileName = filesToUpload[fileIdx];
+                String localPath = folderPath + "/" + fileName;
+
+                File f = sd.open(localPath, FILE_READ);
+                if (!f) {
+                    LOG_ERRORF("[FileUploader] [SMB] Cannot open for sizing: %s", localPath.c_str());
+                    fileIdx++;
+                    continue;
+                }
+                size_t fileSize = f.size();
+                f.close();
+
+                // If a single file is too large for the buffer, and the batch is empty, direct stream it
+                if (!bufferManager || !bufferManager->hasSpaceFor(fileSize)) {
+                    if (batch.empty()) {
+                        directStream = true;
+                        BufferedFile bf;
+                        bf.sourcePath = localPath;
+                        bf.size = fileSize;
+                        batch.push_back(bf);
+                        fileIdx++;
+                    }
+                    break; // Stop building batch, buffer is full or file is too large
+                }
+
+                // Copy to buffer
+                BufferedFile bf;
+                if (bufferManager->copyToBuffer(sd, localPath, bf)) {
+                    batch.push_back(bf);
+                    fileIdx++;
+                } else {
+                    LOG_ERRORF("[FileUploader] [SMB] Failed to buffer: %s", localPath.c_str());
+                    if (batch.empty()) {
+                        directStream = true;
+                        bf.sourcePath = localPath;
+                        bf.size = fileSize;
+                        batch.push_back(bf);
+                        fileIdx++;
+                    }
+                    break;
+                }
+            }
+        } else {
+            // Exclusive mode: stream one file at a time directly from SD
             const String& fileName = filesToUpload[fileIdx];
             String localPath = folderPath + "/" + fileName;
-
             File f = sd.open(localPath, FILE_READ);
             if (!f) {
                 LOG_ERRORF("[FileUploader] [SMB] Cannot open for sizing: %s", localPath.c_str());
                 fileIdx++;
                 continue;
             }
-            size_t fileSize = f.size();
-            f.close();
-
-            // If a single file is too large for the buffer, and the batch is empty, direct stream it
-            if (!bufferManager || !bufferManager->hasSpaceFor(fileSize)) {
-                if (batch.empty()) {
-                    directStream = true;
-                    BufferedFile bf;
-                    bf.sourcePath = localPath;
-                    bf.size = fileSize;
-                    batch.push_back(bf);
-                    fileIdx++;
-                }
-                break; // Stop building batch, buffer is full or file is too large
-            }
-
-            // Copy to buffer
             BufferedFile bf;
-            if (bufferManager->copyToBuffer(sd, localPath, bf)) {
-                batch.push_back(bf);
-                fileIdx++;
-            } else {
-                LOG_ERRORF("[FileUploader] [SMB] Failed to buffer: %s", localPath.c_str());
-                // If it fails to buffer despite having space, we could try direct stream
-                if (batch.empty()) {
-                    directStream = true;
-                    bf.sourcePath = localPath;
-                    bf.size = fileSize;
-                    batch.push_back(bf);
-                    fileIdx++;
-                }
-                break;
-            }
+            bf.sourcePath = localPath;
+            bf.size = f.size();
+            f.close();
+            batch.push_back(bf);
+            fileIdx++;
         }
 
-        // Release SD card if we are not direct streaming
+        // Shared mode only: release SD before uploading the buffered batch
         if (!directStream) {
             sdManager->releaseControl();
         }
@@ -1105,7 +1121,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
                 if (!smbUploader->begin()) {
                     LOG_ERROR("[FileUploader] [SMB] Failed to connect");
                     smbStateManager->save();
-                    if (directStream) sdManager->releaseControl();
+                    if (directStream && sharedMode) sdManager->releaseControl();
                     return false;
                 }
             }
@@ -1119,7 +1135,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
                 LOG_ERRORF("[FileUploader] [SMB] Upload failed: %s", bf.sourcePath.c_str());
                 LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
                 smbStateManager->save();
-                if (directStream) sdManager->releaseControl();
+                if (directStream && sharedMode) sdManager->releaseControl();
                 return false;
             }
 
@@ -1141,8 +1157,8 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
 #endif
         }
 
-        // Release SD card if we were direct streaming
-        if (directStream) {
+        // Shared mode only: release SD after direct-streaming a batch
+        if (directStream && sharedMode) {
             sdManager->releaseControl();
         }
 
@@ -1315,7 +1331,9 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         LOG_DEBUGF("[FileUploader] [Cloud] Skipping %d unchanged files", skippedUnchanged);
     }
 
-    // Process files using Hybrid Buffering (Greedy Buffer)
+    // Process files — shared mode: buffer to SPIFFS, release SD between batches;
+    // exclusive mode: stream directly from SD, card held for the entire folder.
+    bool sharedMode = config->isSharedMode();
     size_t fileIdx = 0;
     while (fileIdx < filesToUpload.size()) {
         if (!reacquireSdCard(sdManager)) {
@@ -1324,55 +1342,72 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         }
 
         std::vector<BufferedFile> batch;
-        bool directStream = false;
+        bool directStream = !sharedMode; // exclusive: always stream directly from SD
 
-        // Try to build a batch of small files
-        while (fileIdx < filesToUpload.size()) {
+        if (sharedMode) {
+            // Shared mode: try to build a batch of small files for SPIFFS buffering
+            while (fileIdx < filesToUpload.size()) {
+                const String& fileName = filesToUpload[fileIdx];
+                String localPath = folderPath + "/" + fileName;
+
+                File f = sd.open(localPath, FILE_READ);
+                if (!f) {
+                    LOG_ERRORF("[FileUploader] [Cloud] Cannot open for sizing: %s", localPath.c_str());
+                    fileIdx++;
+                    continue;
+                }
+                size_t fileSize = f.size();
+                f.close();
+
+                // If a single file is too large for the buffer, and the batch is empty, direct stream it
+                if (!bufferManager || !bufferManager->hasSpaceFor(fileSize)) {
+                    if (batch.empty()) {
+                        directStream = true;
+                        BufferedFile bf;
+                        bf.sourcePath = localPath;
+                        bf.size = fileSize;
+                        batch.push_back(bf);
+                        fileIdx++;
+                    }
+                    break; // Stop building batch, buffer is full or file is too large
+                }
+
+                // Copy to buffer
+                BufferedFile bf;
+                if (bufferManager->copyToBuffer(sd, localPath, bf)) {
+                    batch.push_back(bf);
+                    fileIdx++;
+                } else {
+                    LOG_ERRORF("[FileUploader] [Cloud] Failed to buffer: %s", localPath.c_str());
+                    if (batch.empty()) {
+                        directStream = true;
+                        bf.sourcePath = localPath;
+                        bf.size = fileSize;
+                        batch.push_back(bf);
+                        fileIdx++;
+                    }
+                    break;
+                }
+            }
+        } else {
+            // Exclusive mode: stream one file at a time directly from SD
             const String& fileName = filesToUpload[fileIdx];
             String localPath = folderPath + "/" + fileName;
-
             File f = sd.open(localPath, FILE_READ);
             if (!f) {
                 LOG_ERRORF("[FileUploader] [Cloud] Cannot open for sizing: %s", localPath.c_str());
                 fileIdx++;
                 continue;
             }
-            size_t fileSize = f.size();
-            f.close();
-
-            // If a single file is too large for the buffer, and the batch is empty, direct stream it
-            if (!bufferManager || !bufferManager->hasSpaceFor(fileSize)) {
-                if (batch.empty()) {
-                    directStream = true;
-                    BufferedFile bf;
-                    bf.sourcePath = localPath;
-                    bf.size = fileSize;
-                    batch.push_back(bf);
-                    fileIdx++;
-                }
-                break; // Stop building batch, buffer is full or file is too large
-            }
-
-            // Copy to buffer
             BufferedFile bf;
-            if (bufferManager->copyToBuffer(sd, localPath, bf)) {
-                batch.push_back(bf);
-                fileIdx++;
-            } else {
-                LOG_ERRORF("[FileUploader] [Cloud] Failed to buffer: %s", localPath.c_str());
-                // If it fails to buffer despite having space, we could try direct stream
-                if (batch.empty()) {
-                    directStream = true;
-                    bf.sourcePath = localPath;
-                    bf.size = fileSize;
-                    batch.push_back(bf);
-                    fileIdx++;
-                }
-                break;
-            }
+            bf.sourcePath = localPath;
+            bf.size = f.size();
+            f.close();
+            batch.push_back(bf);
+            fileIdx++;
         }
 
-        // Release SD card if we are not direct streaming
+        // Shared mode only: release SD before uploading the buffered batch
         if (!directStream) {
             sdManager->releaseControl();
         }
@@ -1385,7 +1420,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
             if (!sleephqUploader->isConnected() && !sleephqUploader->begin()) {
                 LOG_ERROR("[FileUploader] [Cloud] Connection failed");
                 cloudStateManager->save();
-                if (directStream) sdManager->releaseControl();
+                if (directStream && sharedMode) sdManager->releaseControl();
                 return false;
             }
             
@@ -1399,7 +1434,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
                 LOG_ERRORF("[FileUploader] [Cloud] Upload failed: %s", bf.sourcePath.c_str());
                 LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
                 cloudStateManager->save();
-                if (directStream) sdManager->releaseControl();
+                if (directStream && sharedMode) sdManager->releaseControl();
                 return false;
             }
 
@@ -1422,8 +1457,8 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
 #endif
         }
 
-        // Release SD card if we were direct streaming
-        if (directStream) {
+        // Shared mode only: release SD after direct-streaming a batch
+        if (directStream && sharedMode) {
             sdManager->releaseControl();
         }
 

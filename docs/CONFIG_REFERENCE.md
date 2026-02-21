@@ -60,7 +60,8 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 | Key | Default | Range | Description |
 |---|---|---|---|
 | `INACTIVITY_SECONDS` | `62` | 10–3600 | Seconds of consecutive SD bus silence required before the device attempts to take SD card control. Must exceed the longest idle gap observed during active CPAP therapy — use the Monitor → CPAP Profiler Wizard to measure this. |
-| `SMART_WAIT_SECONDS` | `5` | 1–60 | Seconds of SD bus silence required immediately before (re-)acquiring the SD card — both at the start of each upload session and between upload batches. Acts as a short final check that the bus is clear. Should be shorter than `INACTIVITY_SECONDS`. |
+| `ACCESS_MODE` | `shared` | `shared`, `exclusive` | SD card access strategy during uploads. `shared` (default) buffers small files to internal flash, releases the SD card between batches so the CPAP machine can access it. `exclusive` holds the SD card for the entire upload session, streaming files directly — matches the behaviour prior to v0.9. Use `exclusive` if `shared` mode causes issues with your CPAP model. |
+| `SMART_WAIT_SECONDS` | `3` | 1–60 | Seconds of SD bus silence required immediately before (re-)acquiring the SD card — both at the start of each upload session and between upload batches. Acts as a short final check that the bus is clear. Should be shorter than `INACTIVITY_SECONDS`. |
 | `EXCLUSIVE_ACCESS_MINUTES` | `5` | 1–30 | Maximum minutes the device holds exclusive SD card control per upload session. The session ends early if all work is done. |
 | `COOLDOWN_MINUTES` | `10` | 1–60 | Minutes to wait (SD card released) between upload cycles before starting the next inactivity check. |
 
