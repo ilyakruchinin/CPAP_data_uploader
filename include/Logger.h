@@ -9,13 +9,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <FS.h>
+#include <SPIFFS.h>
 #else
 // Mock FreeRTOS types for native testing
 typedef void* SemaphoreHandle_t;
 #endif
-
-// Forward declaration for SDCardManager
-class SDCardManager;
 
 // Compile-time configuration for circular buffer size
 #ifndef LOG_BUFFER_SIZE
@@ -32,7 +30,7 @@ static_assert(LOG_BUFFER_SIZE > 0, "LOG_BUFFER_SIZE must be greater than zero");
  * Designed for ESP32 dual-core operation with FreeRTOS mutex protection.
  * 
  * Features:
- * - Dual output: Serial + Circular Buffer
+ * - Dual output: Serial + Circular Buffer (and SPIFFS for persistence)
  * - Thread-safe for dual-core ESP32
  * - Automatic buffer overflow handling (overwrites oldest data)
  * - Lost data tracking for buffer overflow scenarios
@@ -100,7 +98,8 @@ public:
 
     /**
      * Print all logs to a Print destination (e.g., Serial or WebServer)
-     * Writes directly from buffer to output without intermediate String allocation.
+     * This streams the full history from SPIFFS (syslog.old.txt + syslog.txt)
+     * and finally any unflushed logs in the RAM buffer.
      * Thread-safe.
      * 
      * @param output The Print destination to write logs to
@@ -111,6 +110,7 @@ public:
     /**
      * Print only the newest tail of logs to a Print destination.
      * Useful for web polling paths where full-buffer dumps are too expensive.
+     * Pulls exclusively from the fast RAM buffer.
      * Thread-safe.
      *
      * @param output The Print destination to write logs to
@@ -120,37 +120,31 @@ public:
     size_t printLogsTail(Print& output, size_t maxBytes);
 
     /**
-     * Enable or disable SD card logging
-     * WARNING: SD card logging is for debugging only and can cause conflicts
-     * when accessing the SD card for CPAP data uploads. Use with caution.
+     * Enable or disable SPIFFS logging persistence
      * 
-     * When enabled, logs are dumped to SD card periodically (every 10 seconds)
-     * by calling dumpLogsToSDCardPeriodic() from the main loop.
+     * When enabled, logs are dumped to SPIFFS periodically (e.g. every 10s)
+     * by calling flushSpiffsBuffer() from the main loop. Uses an A/B rotation
+     * strategy bounded to 40KB total to prevent flash exhaustion.
      * 
-     * @param enable True to enable SD card logging, false to disable
-     * @param sdFS Pointer to SD card filesystem (required when enabling)
+     * @param enable True to enable SPIFFS logging, false to disable
      */
-    void enableSdCardLogging(bool enable, fs::FS* sdFS = nullptr);
+    void enableSpiffsLogging(bool enable);
     
     /**
-     * Periodic SD card log dump (call from main loop every 10 seconds)
+     * Periodic SPIFFS log dump (call from main loop every 10 seconds)
      * Only dumps if there are new logs since last dump.
-     * Safe to call when SD card is in use - will skip dump if unavailable.
      * 
-     * @param sdManager Pointer to SDCardManager for safe SD card access
      * @return true if logs were dumped, false if skipped or failed
      */
-    bool dumpLogsToSDCardPeriodic(class SDCardManager* sdManager);
+    bool flushSpiffsBuffer();
 
     /**
-     * Dump current logs to SD card for critical failures
-     * This method handles SD card control internally and is safe to call
-     * from any context. It creates a timestamped debug log file.
+     * Dump a critical error directly to the logs and flush to SPIFFS
      * 
-     * @param reason Description of why logs are being dumped (e.g., "wifi_connection_failed")
-     * @return true if logs were successfully dumped, false otherwise
+     * @param reason Description of the critical error
+     * @return true if logs were successfully flushed, false otherwise
      */
-    bool dumpLogsToSDCard(const String& reason);
+    bool dumpCriticalLogToSpiffs(const String& reason);
 
     /**
      * Check if logger is properly initialized
@@ -189,11 +183,10 @@ protected:
     void writeToBuffer(const char* data, size_t len);
 
     /**
-     * Write data to SD card log file (debugging only)
-     * WARNING: Can cause conflicts with CPAP data access
+     * Write data to SPIFFS log file
      * Virtual to allow mocking in tests
      */
-    virtual void writeToSdCard(const char* data, size_t len);
+    virtual void writeToSpiffs(const char* data, size_t len);
 
     /**
      * Track bytes lost due to buffer overflow
@@ -218,13 +211,13 @@ protected:
     // Initialization state
     bool initialized;
 
-    // SD card logging (debugging only)
-    bool sdCardLoggingEnabled;
-    fs::FS* sdFileSystem;
+    // SPIFFS logging
+    bool spiffsLoggingEnabled;
     String logFileName;
+    String logFileNameOld;
     
-    // Periodic SD dump tracking
-    volatile uint32_t lastDumpedBytes;  // Track bytes already dumped to SD
+    // Periodic SPIFFS dump tracking
+    volatile uint32_t lastDumpedBytes;  // Track bytes already dumped to SPIFFS
 };
 
 // Runtime debug mode flag — set from config DEBUG=true after config load.

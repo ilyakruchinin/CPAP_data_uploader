@@ -26,7 +26,6 @@ bool g_heapRecoveryBoot = false;
 
 #ifdef ENABLE_WEBSERVER
 #include "CpapWebServer.h"
-#include "CPAPMonitor.h"
 #endif
 
 // ============================================================================
@@ -44,7 +43,6 @@ OTAManager otaManager;
 
 #ifdef ENABLE_WEBSERVER
 CpapWebServer* webServer = nullptr;
-CPAPMonitor* cpapMonitor = nullptr;
 #endif
 
 // ============================================================================
@@ -165,6 +163,11 @@ void setup() {
     // Initialize serial port
     Serial.begin(115200);
     
+    // Mount SPIFFS (format if it fails)
+    if (!SPIFFS.begin(true)) {
+        Serial.println("SPIFFS mount failed! Logs and state cannot be saved.");
+    }
+
     // CRITICAL: Immediately release SD card control to CPAP machine
     // This must happen before any delays to prevent CPAP machine errors
     // Initialize control pins
@@ -208,26 +211,21 @@ void setup() {
     g_heapRecoveryBoot = (esp_reset_reason() == ESP_RST_SW);
     bool fastBoot = g_heapRecoveryBoot;
 
-    // Smart Wait constants — same values for both cold and soft-reboot.
-    // 5 s of continuous SD bus silence required; give up after 45 s max.
-    const unsigned long SMART_WAIT_MAX_MS      = 45000;
-    const unsigned long SMART_WAIT_REQUIRED_MS =  5000;
+    // Smart Wait constants
+    // Requires continuous SD bus silence. 
+    // Wait indefinitely (or rather, the watchdog will catch us if it hangs forever,
+    // but we NEVER force a hostile takeover if CPAP is active).
+    const unsigned long SMART_WAIT_REQUIRED_MS = (unsigned long)config.getSmartWaitSeconds() * 1000UL;
 
     auto runSmartWait = [&]() {
         LOG("Checking for CPAP SD card activity (Smart Wait)...");
-        unsigned long waitStart = millis();
-        bool busIsQuiet = false;
-        while (millis() - waitStart < SMART_WAIT_MAX_MS) {
+        while (true) {
             trafficMonitor.update();
             delay(10);
             if (trafficMonitor.isIdleFor(SMART_WAIT_REQUIRED_MS)) {
                 LOGF("Smart Wait: %lums of bus silence — CPAP is idle", SMART_WAIT_REQUIRED_MS);
-                busIsQuiet = true;
                 break;
             }
-        }
-        if (!busIsQuiet) {
-            LOG_WARN("Smart Wait timed out — bus still active, proceeding anyway");
         }
     };
 
@@ -304,10 +302,10 @@ void setup() {
         
         sdManager.releaseControl();
         
-        // Dump logs to SD card for configuration failures
-        bool dumped = Logger::getInstance().dumpLogsToSDCard("config_load_failed");
+        // Dump logs to SPIFFS for configuration failures
+        bool dumped = Logger::getInstance().dumpCriticalLogToSpiffs("config_load_failed");
         if (!dumped) {
-            LOG_WARN("Failed to dump logs to SD card (config_load_failed)");
+            LOG_WARN("Failed to dump logs to SPIFFS (config_load_failed)");
         }
 
         // Fail-safe: always force SD switch back to CPAP before aborting setup
@@ -328,7 +326,7 @@ void setup() {
     if (config.getLogToSdCard()) {
         LOG_WARN("Enabling SD card logging - DEBUGGING ONLY - may block CPAP SD access; use scheduled mode outside therapy times");
         LOG_WARN("Logs will be dumped every 10 seconds");
-        Logger::getInstance().enableSdCardLogging(true, &sdManager.getFS());
+        Logger::getInstance().enableSpiffsLogging(true);
     }
 
     // Release SD card back to CPAP machine
@@ -360,7 +358,7 @@ void setup() {
     LOG("WiFi power management settings applied");
 
     // Initialize uploader
-    uploader = new FileUploader(&config, &wifiManager);
+    uploader = new FileUploader(&config, &wifiManager, &trafficMonitor);
     
     // Take control of SD card to initialize uploader components
     LOG("Initializing uploader...");
@@ -405,12 +403,9 @@ void setup() {
     // Initialize CPAP monitor
 #ifdef ENABLE_CPAP_MONITOR
     LOG("Initializing CPAP SD card usage monitor...");
-    cpapMonitor = new CPAPMonitor();
-    cpapMonitor->begin();
     LOG("CPAP monitor started - tracking SD card usage every 10 minutes");
 #else
     LOG("CPAP monitor disabled (CS_SENSE hardware issue)");
-    cpapMonitor = new CPAPMonitor();  // Use stub implementation
 #endif
     
     // Initialize web server
@@ -418,10 +413,9 @@ void setup() {
     
     // Create web server with references to uploader's internal components
     webServer = new CpapWebServer(&config, 
-                                      uploader->getStateManager(),
-                                      uploader->getScheduleManager(),
-                                      &wifiManager,
-                                      cpapMonitor);
+                                  uploader->getStateManager(),
+                                  uploader->getScheduleManager(),
+                                  &wifiManager);
     
     if (webServer->begin()) {
         LOG("Web server started successfully");
@@ -804,8 +798,8 @@ void loop() {
     if (config.getLogToSdCard() && !uploadTaskRunning) {
         unsigned long currentTime = millis();
         if (currentTime - lastLogDumpTime >= LOG_DUMP_INTERVAL_MS) {
-            if (Logger::getInstance().dumpLogsToSDCardPeriodic(&sdManager)) {
-                LOG_DEBUG("Periodic log dump to SD card completed");
+            if (Logger::getInstance().flushSpiffsBuffer()) {
+                LOG_DEBUG("Periodic log dump to SPIFFS completed");
             }
             lastLogDumpTime = currentTime;
         }
@@ -821,8 +815,6 @@ void loop() {
 #ifdef ENABLE_WEBSERVER
     // Update CPAP monitor
 #ifdef ENABLE_CPAP_MONITOR
-    if (cpapMonitor) {
-        cpapMonitor->update();
     }
 #endif
     

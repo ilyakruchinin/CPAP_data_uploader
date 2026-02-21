@@ -38,7 +38,7 @@ public:
     void resetIdleTracking();         // Reset silence counter (e.g., on state transition)
     
     // Sample buffer for SD Activity Monitor web UI
-    static const int MAX_SAMPLES = 300;  // 5 minutes at 1 sample/sec
+    static const int MAX_SAMPLES = 1200; // 20 minutes at 1 sample/sec
     const ActivitySample* getSampleBuffer() const;
     int getSampleCount() const;
     int getSampleHead() const;        // Circular buffer head index

@@ -9,6 +9,8 @@
 #include "ScheduleManager.h"
 #include "WiFiManager.h"
 #include "SDCardManager.h"
+#include "BufferManager.h"
+#include "TrafficMonitor.h"
 
 // Forward declaration to avoid circular dependency
 #ifdef ENABLE_WEBSERVER
@@ -62,6 +64,8 @@ private:
     UploadStateManager* cloudStateManager;  // tracks Cloud-only uploads
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
+    BufferManager* bufferManager;
+    TrafficMonitor* trafficMonitor;
     UploadBackend activeBackend;
 
 #ifdef ENABLE_WEBSERVER
@@ -120,10 +124,12 @@ private:
     }
 
 public:
-    FileUploader(Config* cfg, WiFiManager* wifi);
+    FileUploader(Config* cfg, WiFiManager* wifi, TrafficMonitor* monitor);
     ~FileUploader();
 
     bool begin(fs::FS &sd);
+
+    bool reacquireSdCard(class SDCardManager* sdManager);
 
     // FSM-driven exclusive access upload
     UploadResult uploadWithExclusiveAccess(class SDCardManager* sdManager, int maxMinutes,

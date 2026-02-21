@@ -1,7 +1,6 @@
 #include "Logger.h"
 
 #ifndef UNIT_TEST
-#include "SDCardManager.h"
 #include <WiFi.h>
 
 #ifdef ENABLE_LOG_RESOURCE_SUFFIX
@@ -53,9 +52,9 @@ Logger::Logger()
     , totalBytesLost(0)
     , mutex(nullptr)
     , initialized(false)
-    , sdCardLoggingEnabled(false)
-    , sdFileSystem(nullptr)
-    , logFileName("/debug_log.txt")
+    , spiffsLoggingEnabled(false)
+    , logFileName("/syslog.A.txt")
+    , logFileNameOld("/syslog.B.txt")
     , lastDumpedBytes(0)
 {
     // Allocate circular buffer
@@ -154,8 +153,7 @@ void Logger::log(const char* message) {
         writeToBuffer(finalMsg, len);
     }
     
-    // Note: SD card logging is now handled by periodic dump task
-    // See dumpLogsToSDCardPeriodic() which should be called from main loop
+    // SPIFFS logging is handled by periodic dump task flushSpiffsBuffer()
 }
 
 // Log an Arduino String message
@@ -331,21 +329,65 @@ Logger::LogData Logger::retrieveLogs() {
     return result;
 }
 
-// Print all logs to a Print destination without intermediate String allocation
+// Print all logs to a Print destination
 size_t Logger::printLogs(Print& output) {
+    size_t bytesWritten = 0;
+
+#ifndef UNIT_TEST
+    // 1. Stream from old SPIFFS log file
+    if (SPIFFS.exists(logFileNameOld)) {
+        File f = SPIFFS.open(logFileNameOld, FILE_READ);
+        if (f) {
+            char chunk[256];
+            while (f.available()) {
+                size_t n = f.readBytes(chunk, sizeof(chunk));
+                if (n > 0) {
+                    output.write((const uint8_t*)chunk, n);
+                    bytesWritten += n;
+                    yield();
+                }
+            }
+            f.close();
+        }
+    }
+
+    // 2. Stream from current SPIFFS log file
+    if (SPIFFS.exists(logFileName)) {
+        File f = SPIFFS.open(logFileName, FILE_READ);
+        if (f) {
+            char chunk[256];
+            while (f.available()) {
+                size_t n = f.readBytes(chunk, sizeof(chunk));
+                if (n > 0) {
+                    output.write((const uint8_t*)chunk, n);
+                    bytesWritten += n;
+                    yield();
+                }
+            }
+            f.close();
+        }
+    }
+#endif
+
+    // 3. Stream unflushed RAM buffer
     if (!initialized || buffer == nullptr || mutex == nullptr) {
-        return 0;
+        return bytesWritten;
     }
 
     // Acquire mutex for thread-safe buffer access
     if (xSemaphoreTake(mutex, portMAX_DELAY) != pdTRUE) {
-        return 0;
+        return bytesWritten;
     }
 
-    size_t bytesWritten = 0;
-
     // Calculate available data to read (from tail to head)
-    uint32_t availableBytes = headIndex - tailIndex;
+    // But since SPIFFS already has data up to lastDumpedBytes,
+    // we only want to print from max(tailIndex, lastDumpedBytes) to headIndex
+    uint32_t currentTail = tailIndex;
+    if (lastDumpedBytes > currentTail && lastDumpedBytes <= headIndex) {
+        currentTail = lastDumpedBytes;
+    }
+    
+    uint32_t availableBytes = headIndex - currentTail;
     
     if (availableBytes > bufferSize) {
         availableBytes = bufferSize;
@@ -353,9 +395,9 @@ size_t Logger::printLogs(Print& output) {
 
     // Find start of first valid line if we had overflow
     uint32_t startOffset = 0;
-    if (totalBytesLost > 0 && availableBytes > 0) {
+    if (totalBytesLost > 0 && availableBytes > 0 && currentTail == tailIndex) {
         for (uint32_t i = 0; i < availableBytes && i < 100; i++) {
-            uint32_t logicalIndex = tailIndex + i;
+            uint32_t logicalIndex = currentTail + i;
             size_t physicalPos = logicalIndex % bufferSize;
             if (buffer[physicalPos] == '[') {
                 startOffset = i;
@@ -364,10 +406,10 @@ size_t Logger::printLogs(Print& output) {
         }
     }
 
-    // Release mutex temporarily to avoid holding it during slow I/O
-    // We make a copy of indices
-    uint32_t currentTail = tailIndex + startOffset;
+    currentTail += startOffset;
     uint32_t currentHead = headIndex;
+    
+    // Release mutex temporarily to avoid holding it during slow I/O
     xSemaphoreGive(mutex);
 
     char chunk[128];
@@ -496,35 +538,29 @@ size_t Logger::printLogsTail(Print& output, size_t maxBytes) {
     return bytesWritten;
 }
 
-// Enable or disable SD card logging (debugging only)
-void Logger::enableSdCardLogging(bool enable, fs::FS* sdFS) {
-    if (enable && sdFS == nullptr) {
-        // Cannot enable without valid filesystem
-        return;
-    }
-    
-    sdCardLoggingEnabled = enable;
-    sdFileSystem = enable ? sdFS : nullptr;
+// Enable or disable SPIFFS logging (A/B rotation)
+void Logger::enableSpiffsLogging(bool enable) {
+    spiffsLoggingEnabled = enable;
     
     if (enable) {
         // Reset dump tracking when enabling
-        lastDumpedBytes = 0;
+        lastDumpedBytes = tailIndex; // Start from whatever we currently have
         
-        // Log a warning message about debugging use
-        String warningMsg = getTimestamp() + "[WARN] SD card logging enabled - DEBUGGING ONLY - Logs will be dumped periodically\n";
-        writeToSerial(warningMsg.c_str(), warningMsg.length());
+        // Log a message about logging
+        String msg = getTimestamp() + "[INFO] SPIFFS logging enabled\n";
+        writeToSerial(msg.c_str(), msg.length());
         if (initialized && buffer != nullptr) {
-            writeToBuffer(warningMsg.c_str(), warningMsg.length());
+            writeToBuffer(msg.c_str(), msg.length());
         }
     }
 }
 
-// Periodic SD card log dump (call from main loop every 10 seconds)
-bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
+// Periodic SPIFFS log dump (call from main loop every 10 seconds)
+bool Logger::flushSpiffsBuffer() {
 #ifdef UNIT_TEST
     return false; // Not supported in unit tests
 #else
-    if (!sdCardLoggingEnabled || sdFileSystem == nullptr || sdManager == nullptr) {
+    if (!spiffsLoggingEnabled) {
         return false;
     }
     
@@ -542,6 +578,14 @@ bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
     uint32_t currentBytes = headIndex;
     uint32_t newBytes = currentBytes - lastDumpedBytes;
     
+    // Calculate available data in buffer
+    // Check if we've lost data since last dump
+    if (lastDumpedBytes < tailIndex) {
+        // Some logs were overwritten before we could dump them
+        lastDumpedBytes = tailIndex;
+        newBytes = currentBytes - lastDumpedBytes;
+    }
+    
     // Release mutex immediately after reading
     xSemaphoreGive(mutex);
     
@@ -550,44 +594,23 @@ bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
         return false;
     }
     
-    // Try to take control of SD card (non-blocking)
-    if (!sdManager->takeControl()) {
-        // SD card in use by CPAP - skip this dump
-        return false;
-    }
-    
-    // Calculate how much data to dump
-    // We need to read from lastDumpedBytes to currentBytes
-    // But we need to be careful about buffer wrapping
-    
-    // Acquire mutex again for reading buffer content
-    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        sdManager->releaseControl();
-        return false;
-    }
-    
-    // Calculate available data in buffer
-    uint32_t availableBytes = headIndex - tailIndex;
-    
-    // Check if we've lost data since last dump
-    if (lastDumpedBytes < tailIndex) {
-        // Some logs were overwritten before we could dump them
-        // Start from tail (oldest available data)
-        lastDumpedBytes = tailIndex;
-    }
-    
     // Calculate how much we can actually dump
-    uint32_t bytesToDump = headIndex - lastDumpedBytes;
+    uint32_t bytesToDump = newBytes;
     
     // Safety check
     if (bytesToDump > bufferSize) {
         bytesToDump = bufferSize;
-        lastDumpedBytes = headIndex - bufferSize;
+        lastDumpedBytes = currentBytes - bufferSize;
     }
     
     // Build string with new log data
     String logContent;
     logContent.reserve(bytesToDump);
+    
+    // Acquire mutex again for reading buffer content
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
     
     for (uint32_t i = 0; i < bytesToDump; i++) {
         uint32_t logicalIndex = lastDumpedBytes + i;
@@ -596,127 +619,71 @@ bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
     }
     
     // Update lastDumpedBytes before releasing mutex
-    lastDumpedBytes = headIndex;
+    lastDumpedBytes = currentBytes;
     
     // Release mutex
     xSemaphoreGive(mutex);
     
-    // Write to SD card
-    File logFile = sdFileSystem->open(logFileName, FILE_APPEND);
+    // File rotation logic: max 20KB per file
+    const size_t MAX_LOG_FILE_SIZE = 20 * 1024;
+    
+    File logFile = SPIFFS.open(logFileName, FILE_APPEND);
     if (!logFile) {
-        // Try to create file if it doesn't exist
-        logFile = sdFileSystem->open(logFileName, FILE_WRITE);
-        if (!logFile) {
-            sdManager->releaseControl();
-            return false;
-        }
+        logFile = SPIFFS.open(logFileName, FILE_WRITE);
+        if (!logFile) return false;
+    }
+    
+    size_t currentSize = logFile.size();
+    
+    if (currentSize + bytesToDump > MAX_LOG_FILE_SIZE) {
+        logFile.close();
+        // Rotate A -> B
+        SPIFFS.remove(logFileNameOld);
+        SPIFFS.rename(logFileName, logFileNameOld);
+        
+        // Open new A
+        logFile = SPIFFS.open(logFileName, FILE_WRITE);
+        if (!logFile) return false;
     }
     
     // Write log content
     logFile.print(logContent);
     logFile.close();
     
-    // Release SD card
-    sdManager->releaseControl();
-    
     return true;
 #endif
 }
 
-// Write data to SD card log file (debugging only) - DEPRECATED
-// This method is no longer used - SD logging is now handled by dumpLogsToSDCardPeriodic()
-void Logger::writeToSdCard(const char* data, size_t len) {
-    // This method is deprecated and no longer used
-    // SD card logging is now handled by periodic dump task
-    // Kept for interface compatibility
-}
-// Dump current logs to SD card for critical failures
-bool Logger::dumpLogsToSDCard(const String& reason) {
+// Dump current logs to SPIFFS for critical failures
+bool Logger::dumpCriticalLogToSpiffs(const String& reason) {
 #ifdef UNIT_TEST
     return false; // Not supported in unit tests
 #else
-    // Create a temporary SD card manager to dump logs
-    SDCardManager tempSDManager;
+    // Flush any pending logs first
+    flushSpiffsBuffer();
     
-    if (!tempSDManager.begin()) {
-        // Try to log error, but don't recurse into SD dump
-        String errorMsg = getTimestamp() + "[ERROR] Failed to initialize SD card for log dump\n";
-        writeToSerial(errorMsg.c_str(), errorMsg.length());
-        if (initialized && buffer != nullptr) {
-            writeToBuffer(errorMsg.c_str(), errorMsg.length());
-        }
-        return false;
-    }
+    // Write reason to end of log
+    String msg = "\n===== CRITICAL FAILURE: " + reason + " =====\n";
+    msg += "Timestamp: " + String(millis()) + "ms\n";
+    msg += "Free heap: " + String(ESP.getFreeHeap()) + " bytes\n";
+    msg += "WiFi status: " + String(WiFi.status()) + "\n";
+    msg += "========================================\n\n";
     
-    if (!tempSDManager.takeControl()) {
-        // Try to log error, but don't recurse into SD dump
-        String errorMsg = getTimestamp() + "[ERROR] Cannot dump logs - SD card in use by CPAP\n";
-        writeToSerial(errorMsg.c_str(), errorMsg.length());
-        if (initialized && buffer != nullptr) {
-            writeToBuffer(errorMsg.c_str(), errorMsg.length());
-        }
-        return false;
-    }
-    
-    // Get current logs from logger
-    LogData logData = retrieveLogs();
-    
-    if (logData.content.isEmpty()) {
-        String warnMsg = getTimestamp() + "[WARN] No logs available to dump\n";
-        writeToSerial(warnMsg.c_str(), warnMsg.length());
-        if (initialized && buffer != nullptr) {
-            writeToBuffer(warnMsg.c_str(), warnMsg.length());
-        }
-        tempSDManager.releaseControl();
-        return false;
-    }
-    
-    // Use the existing logFileName for debug logs
-    String filename = logFileName;
-    
-    // Write logs to SD card (append mode to preserve previous dumps)
-    File logFile = tempSDManager.getFS().open(filename, FILE_APPEND);
+    File logFile = SPIFFS.open(logFileName, FILE_APPEND);
     if (!logFile) {
-        // If file doesn't exist, create it
-        logFile = tempSDManager.getFS().open(filename, FILE_WRITE);
-        if (!logFile) {
-            String errorMsg = getTimestamp() + "[ERROR] Failed to create log dump file: " + filename + "\n";
-            writeToSerial(errorMsg.c_str(), errorMsg.length());
-            if (initialized && buffer != nullptr) {
-                writeToBuffer(errorMsg.c_str(), errorMsg.length());
-            }
-            tempSDManager.releaseControl();
-            return false;
-        }
+        logFile = SPIFFS.open(logFileName, FILE_WRITE);
     }
     
-    // Write separator and reason header
-    logFile.println("\n===== REASON: " + reason + " =====");
-    logFile.println("Timestamp: " + String(millis()) + "ms");
-    logFile.println("Free heap: " + String(ESP.getFreeHeap()) + " bytes");
-    logFile.println("WiFi status: " + String(WiFi.status()));
-    if (logData.bytesLost > 0) {
-        logFile.println("WARNING: " + String(logData.bytesLost) + " bytes of logs were lost due to buffer overflow");
-    }
-    logFile.println("Buffer retention: Logs always retained in circular buffer");
-    logFile.println("=== Log Content ===");
-    
-    // Write log content
-    logFile.print(logData.content);
-    
-    // Write end separator
-    logFile.println("=== End of Log Dump ===\n");
-    
-    logFile.close();
-    tempSDManager.releaseControl();
-    
-    // Log success message
-    String successMsg = getTimestamp() + "[INFO] Debug logs dumped to SD card: " + filename + " (reason: " + reason + ")\n";
-    writeToSerial(successMsg.c_str(), successMsg.length());
-    if (initialized && buffer != nullptr) {
-        writeToBuffer(successMsg.c_str(), successMsg.length());
+    if (logFile) {
+        logFile.print(msg);
+        logFile.close();
+        return true;
     }
     
-    return true;
+    return false;
 #endif
+}
+
+void Logger::writeToSpiffs(const char* data, size_t len) {
+    // Deprecated. We use the flushSpiffsBuffer method now.
 }

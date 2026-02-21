@@ -26,6 +26,7 @@ Config::Config() :
     uploadStartHour(9),
     uploadEndHour(21),
     inactivitySeconds(62),
+    smartWaitSeconds(5),
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
     
@@ -217,6 +218,8 @@ void Config::setConfigValue(String key, String value) {
         uploadEndHour = value.toInt();
     } else if (key == "INACTIVITY_SECONDS") {
         inactivitySeconds = value.toInt();
+    } else if (key == "SMART_WAIT_SECONDS") {
+        smartWaitSeconds = value.toInt();
     } else if (key == "EXCLUSIVE_ACCESS_MINUTES") {
         exclusiveAccessMinutes = value.toInt();
     } else if (key == "COOLDOWN_MINUTES") {
@@ -598,6 +601,7 @@ const String& Config::getUploadMode() const { return uploadMode; }
 int Config::getUploadStartHour() const { return uploadStartHour; }
 int Config::getUploadEndHour() const { return uploadEndHour; }
 int Config::getInactivitySeconds() const { return inactivitySeconds; }
+int Config::getSmartWaitSeconds() const { return smartWaitSeconds; }
 int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
 int Config::getCooldownMinutes() const { return cooldownMinutes; }
 bool Config::isSmartMode() const { return uploadMode == "smart"; }

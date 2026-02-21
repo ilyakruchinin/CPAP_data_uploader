@@ -73,14 +73,13 @@ void sendUploadRateLimitResponse(WebServer* server,
 // Constructor
 CpapWebServer::CpapWebServer(Config* cfg, UploadStateManager* state,
                              ScheduleManager* schedule, 
-                             WiFiManager* wifi, CPAPMonitor* monitor)
+                             WiFiManager* wifi)
     : server(nullptr),
       config(cfg),
       stateManager(state),
       smbStateManager(nullptr),
       scheduleManager(schedule),
       wifiManager(wifi),
-      cpapMonitor(monitor),
       trafficMonitor(nullptr),
       sdManager(nullptr)
 #ifdef ENABLE_OTA_UPDATES
@@ -618,7 +617,7 @@ void CpapWebServer::initConfigSnapshot() {
         ",\"endpoint_type\":\"%s\",\"endpoint_user\":\"%s\""
         ",\"upload_mode\":\"%s\""
         ",\"upload_start_hour\":%d,\"upload_end_hour\":%d"
-        ",\"inactivity_seconds\":%d"
+        ",\"inactivity_seconds\":%d,\"smart_wait_seconds\":%d"
         ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
         ",\"gmt_offset_hours\":%d,\"max_days\":%d"
         ",\"cloud_configured\":%s"
@@ -629,7 +628,7 @@ void CpapWebServer::initConfigSnapshot() {
         config->getEndpointUser().c_str(),
         config->getUploadMode().c_str(),
         config->getUploadStartHour(), config->getUploadEndHour(),
-        config->getInactivitySeconds(),
+        config->getInactivitySeconds(), config->getSmartWaitSeconds(),
         config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),
         config->getGmtOffsetHours(), config->getMaxDays(),
         hasCloud ? "true" : "false",
@@ -722,14 +721,21 @@ void CpapWebServer::handleApiConfigRawPost() {
         return;
     }
 
-    // Borrow SD control
+    // Borrow SD control and remount as Read/Write for config save
     bool tookControl = false;
     if (!sdManager->hasControl()) {
-        if (!sdManager->takeControl()) {
+        // Not holding card - take it directly in R/W mode
+        if (!sdManager->takeControl(false)) { // false = Read/Write
             server->send(503, "application/json", "{\"error\":\"SD unavailable — CPAP may be using it\"}");
             return;
         }
         tookControl = true;
+    } else {
+        // Already holding card (likely in R/O mode) - remount as R/W
+        if (!sdManager->remount(false)) { // false = Read/Write
+            server->send(503, "application/json", "{\"error\":\"Failed to remount SD card for writing\"}");
+            return;
+        }
     }
 
     const String& body = server->arg("plain");
@@ -740,6 +746,7 @@ void CpapWebServer::handleApiConfigRawPost() {
     File f = sd.open("/config.txt.tmp", FILE_WRITE);
     if (!f) {
         if (tookControl) sdManager->releaseControl();
+        else sdManager->remount(true); // Restore R/O mode if we were already holding it
         server->send(500, "application/json", "{\"error\":\"Failed to open temp file for writing\"}");
         return;
     }
@@ -749,6 +756,7 @@ void CpapWebServer::handleApiConfigRawPost() {
     if (written != bodyLen) {
         sd.remove("/config.txt.tmp");
         if (tookControl) sdManager->releaseControl();
+        else sdManager->remount(true);
         server->send(500, "application/json", "{\"error\":\"Write incomplete\"}");
         return;
     }
@@ -756,13 +764,23 @@ void CpapWebServer::handleApiConfigRawPost() {
     sd.remove("/config.txt");
     if (!sd.rename("/config.txt.tmp", "/config.txt")) {
         if (tookControl) sdManager->releaseControl();
+        else sdManager->remount(true);
         server->send(500, "application/json", "{\"error\":\"Rename failed\"}");
         return;
     }
 
-    if (tookControl) sdManager->releaseControl();
+    // Restore safe Read-Only mode immediately after write
+    if (tookControl) {
+        sdManager->releaseControl();
+    } else {
+        sdManager->remount(true); // true = Read-Only
+    }
+    
     LOG("[WebServer] config.txt updated via web UI");
-    server->send(200, "application/json", "{\"ok\":true,\"message\":\"Saved. Reboot to apply.\"}");
+    
+    // Set a flag or send a specific message that the UI will use to show the critical warning
+    // about physically reinserting the SD card to clear the CPAP's FAT cache.
+    server->send(200, "application/json", "{\"ok\":true,\"message\":\"Saved. CRITICAL: You MUST physically remove and reinsert the SD card into your CPAP machine now to prevent data corruption!\",\"requires_reinsert\":true}");
 }
 
 // ---------------------------------------------------------------------------

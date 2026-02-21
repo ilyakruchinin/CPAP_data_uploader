@@ -10,19 +10,18 @@
 #endif
 
 // Constructor
-FileUploader::FileUploader(Config* cfg, WiFiManager* wifi) 
-    : config(cfg),
+FileUploader::FileUploader(Config* config, WiFiManager* wifiManager, TrafficMonitor* monitor)
+    : config(config),
       smbStateManager(nullptr),
       cloudStateManager(nullptr),
       scheduleManager(nullptr),
-      wifiManager(wifi),
-      activeBackend(UploadBackend::NONE),
+      wifiManager(wifiManager),
+      bufferManager(new BufferManager("/buffer")),
+      trafficMonitor(monitor),
+      activeBackend(UploadBackend::NONE)
 #ifdef ENABLE_WEBSERVER
-      webServer(nullptr),
+      , webServer(nullptr)
 #endif
-      cloudImportCreated(false),
-      cloudImportFailed(false),
-      cloudDatalogFilesUploaded(0)
 #ifdef ENABLE_SMB_UPLOAD
       , smbUploader(nullptr)
 #endif
@@ -34,14 +33,15 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
 
 // Destructor
 FileUploader::~FileUploader() {
-    if (smbStateManager)   delete smbStateManager;
-    if (cloudStateManager) delete cloudStateManager;
-    if (scheduleManager)   delete scheduleManager;
+    if (smbStateManager)    delete smbStateManager;
+    if (cloudStateManager)  delete cloudStateManager;
+    if (scheduleManager)    delete scheduleManager;
+    if (bufferManager)      delete bufferManager;
 #ifdef ENABLE_SMB_UPLOAD
-    if (smbUploader) delete smbUploader;
+    if (smbUploader)        delete smbUploader;
 #endif
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (sleephqUploader) delete sleephqUploader;
+    if (sleephqUploader)    delete sleephqUploader;
 #endif
 }
 
@@ -79,7 +79,7 @@ bool FileUploader::begin(fs::FS &sd) {
 
         smbStateManager = new UploadStateManager();
         smbStateManager->setPaths("/.upload_state.v2.smb", "/.upload_state.v2.smb.log");
-        if (!smbStateManager->begin(sd)) {
+        if (!smbStateManager->begin()) {
             LOG("[FileUploader] WARNING: SMB state load failed, starting fresh");
         }
         anyBackendCreated = true;
@@ -94,7 +94,7 @@ bool FileUploader::begin(fs::FS &sd) {
 
         cloudStateManager = new UploadStateManager();
         cloudStateManager->setPaths("/.upload_state.v2.cloud", "/.upload_state.v2.cloud.log");
-        if (!cloudStateManager->begin(sd)) {
+        if (!cloudStateManager->begin()) {
             LOG("[FileUploader] WARNING: Cloud state load failed, starting fresh");
         }
         anyBackendCreated = true;
@@ -238,6 +238,9 @@ UploadBackend FileUploader::selectActiveBackend(fs::FS& sd) const {
 UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, int maxMinutes, DataFilter filter) {
     fs::FS &sd = sdManager->getFS();
     unsigned long sessionStart = millis();
+    if (bufferManager) {
+        bufferManager->purge();
+    }
     unsigned long maxMs = (unsigned long)maxMinutes * 60UL * 1000UL;
 
     const char* abName = (activeBackend == UploadBackend::SMB)   ? "SMB"  :
@@ -325,7 +328,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                             if (currentTime >= 1000000000 &&
                                     sm->shouldPromotePendingToCompleted(name, currentTime)) {
                                 sm->promotePendingToCompleted(name);
-                                sm->save(sd);
+                                sm->save();
                                 LOGF("[FileUploader] Pre-flight: empty folder %s pending 7+ days — promoted to completed",
                                      name.c_str());
                             }
@@ -492,7 +495,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             }
             if (smbUploader->isConnected()) smbUploader->end();
         }
-        smbStateManager->save(sd);
+        smbStateManager->save();
 
         g_smbSessionStatus.uploadActive     = false;
         g_smbSessionStatus.filesUploaded    = 0;
@@ -500,6 +503,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
         g_smbSessionStatus.currentFolder[0] = '\0';
     }
 #endif
+
 
     // ═══════════════════════════════════════════════════════════════════════
     // CLOUD SESSION — single backend, full heap available (no SMB buffer).
@@ -573,7 +577,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 }
             }
         }
-        cloudStateManager->save(sd);
+        cloudStateManager->save();
 
         g_cloudSessionStatus.uploadActive     = false;
         g_cloudSessionStatus.filesUploaded    = 0;
@@ -597,19 +601,42 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     if (timerExpired && hasIncompleteFolders()) {
         LOG("[FileUploader] Timer expired with incomplete folders (TIMEOUT)");
         return UploadResult::TIMEOUT;
-    }
-
-    if (!hasIncompleteFolders()) {
-        time_t endNow; time(&endNow);
-        if (sm) sm->setLastUploadTimestamp((unsigned long)endNow);
-        if (scheduleManager) scheduleManager->markDayCompleted();
-        LOG("[FileUploader] All folders complete — session done");
+    } else {
+        LOG("[FileUploader] Session COMPLETE");
         return UploadResult::COMPLETE;
     }
-
-    return UploadResult::TIMEOUT;
 }
 
+
+// Helper to reacquire SD card control with Smart Wait
+bool FileUploader::reacquireSdCard(SDCardManager* sdManager) {
+    if (sdManager->hasControl()) return true;
+
+    unsigned long smartWaitMs = (unsigned long)config->getSmartWaitSeconds() * 1000UL;
+    LOGF("[FileUploader] Re-acquiring SD card (Smart Wait: %lu ms)...", smartWaitMs);
+
+    while (true) {
+        if (trafficMonitor) {
+            trafficMonitor->update();
+            delay(10);
+            if (trafficMonitor->isIdleFor(smartWaitMs)) {
+                break;
+            }
+        } else {
+            // Fallback if no traffic monitor (shouldn't happen)
+            delay(smartWaitMs);
+            break;
+        }
+    }
+
+    if (sdManager->takeControl()) {
+        LOG("[FileUploader] SD card re-acquired successfully");
+        return true;
+    }
+    
+    LOG_ERROR("[FileUploader] Failed to re-acquire SD card");
+    return false;
+}
 
 // Scan DATALOG folders and sort by date (newest first)
 std::vector<String> FileUploader::scanDatalogFolders(fs::FS &sd, UploadStateManager* sm,
@@ -932,11 +959,11 @@ static bool handleFolderScan(fs::FS &sd, const String& folderName, const String&
         if (sm->isPendingFolder(folderName)) {
             if (sm->shouldPromotePendingToCompleted(folderName, currentTime)) {
                 sm->promotePendingToCompleted(folderName);
-                sm->save(sd);
+                sm->save();
             }
         } else {
             sm->markFolderPending(folderName, currentTime);
-            sm->save(sd);
+            sm->save();
         }
         return true;  // "done" for this folder (empty)
     }
@@ -977,46 +1004,147 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
     int skippedUnchanged = 0;
     int skippedEmpty     = 0;
 
+    // Filter files that actually need uploading
+    std::vector<String> filesToUpload;
     for (const String& fileName : files) {
-        String localPath  = folderPath + "/" + fileName;
+        String localPath = folderPath + "/" + fileName;
         if (isRescan) {
-            if (!smbStateManager->hasFileChanged(sd, localPath)) { skippedUnchanged++; continue; }
-            LOG_DEBUGF("[FileUploader] [SMB] File changed: %s", fileName.c_str());
+            if (!smbStateManager->hasFileChanged(sd, localPath)) {
+                skippedUnchanged++;
+                continue;
+            }
         }
-        File f = sd.open(localPath);
-        if (!f) { LOG_ERRORF("[FileUploader] [SMB] Cannot open: %s", localPath.c_str()); continue; }
+        File f = sd.open(localPath, FILE_READ);
+        if (!f) {
+            LOG_ERRORF("[FileUploader] [SMB] Cannot open: %s", localPath.c_str());
+            continue;
+        }
         unsigned long fileSize = f.size();
+        f.close();
+        
         if (fileSize == 0) {
-            f.close();
             smbStateManager->markFileUploaded(localPath, "empty_file", 0);
             skippedEmpty++;
             continue;
         }
-        f.close();
+        filesToUpload.push_back(fileName);
+    }
 
-        LOGF("[FileUploader] Uploading file: %s (%lu bytes)", fileName.c_str(), fileSize);
+    if (isRescan && skippedUnchanged > 0) {
+        LOG_DEBUGF("[FileUploader] [SMB] Skipping %d unchanged files", skippedUnchanged);
+    }
 
-        if (!smbUploader->isConnected()) {
-            if (!smbUploader->begin()) {
-                LOG_ERROR("[FileUploader] [SMB] Failed to connect");
-                smbStateManager->save(sd);
-                return false;
+    // Process files using Hybrid Buffering (Greedy Buffer)
+    size_t fileIdx = 0;
+    while (fileIdx < filesToUpload.size()) {
+        if (!reacquireSdCard(sdManager)) {
+            LOG_ERROR("[FileUploader] [SMB] Aborting folder upload due to SD card re-acquire failure");
+            break;
+        }
+
+        std::vector<BufferedFile> batch;
+        bool directStream = false;
+
+        // Try to build a batch of small files
+        while (fileIdx < filesToUpload.size()) {
+            const String& fileName = filesToUpload[fileIdx];
+            String localPath = folderPath + "/" + fileName;
+
+            File f = sd.open(localPath, FILE_READ);
+            if (!f) {
+                LOG_ERRORF("[FileUploader] [SMB] Cannot open for sizing: %s", localPath.c_str());
+                fileIdx++;
+                continue;
+            }
+            size_t fileSize = f.size();
+            f.close();
+
+            // If a single file is too large for the buffer, and the batch is empty, direct stream it
+            if (!bufferManager || !bufferManager->hasSpaceFor(fileSize)) {
+                if (batch.empty()) {
+                    directStream = true;
+                    BufferedFile bf;
+                    bf.sourcePath = localPath;
+                    bf.size = fileSize;
+                    batch.push_back(bf);
+                    fileIdx++;
+                }
+                break; // Stop building batch, buffer is full or file is too large
+            }
+
+            // Copy to buffer
+            BufferedFile bf;
+            if (bufferManager->copyToBuffer(sd, localPath, bf)) {
+                batch.push_back(bf);
+                fileIdx++;
+            } else {
+                LOG_ERRORF("[FileUploader] [SMB] Failed to buffer: %s", localPath.c_str());
+                // If it fails to buffer despite having space, we could try direct stream
+                if (batch.empty()) {
+                    directStream = true;
+                    bf.sourcePath = localPath;
+                    bf.size = fileSize;
+                    batch.push_back(bf);
+                    fileIdx++;
+                }
+                break;
             }
         }
-        unsigned long smbBytes = 0;
-        if (!smbUploader->upload(localPath, localPath, sd, smbBytes)) {
-            LOG_ERRORF("[FileUploader] [SMB] Upload failed: %s", localPath.c_str());
-            LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
-            smbStateManager->save(sd);
-            return false;
+
+        // Release SD card if we are not direct streaming
+        if (!directStream) {
+            sdManager->releaseControl();
         }
-        if (isRecent) smbStateManager->markFileUploaded(localPath, "", fileSize);
-        uploadedCount++;
-        g_smbSessionStatus.filesUploaded = uploadedCount;
-        LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), smbBytes);
+
+        // Upload the batch
+        for (const BufferedFile& bf : batch) {
+            LOGF("[FileUploader] [SMB] Uploading file: %s (%lu bytes)%s", 
+                 bf.sourcePath.c_str(), (unsigned long)bf.size, directStream ? " [DIRECT]" : " [BUFFERED]");
+
+            if (!smbUploader->isConnected()) {
+                if (!smbUploader->begin()) {
+                    LOG_ERROR("[FileUploader] [SMB] Failed to connect");
+                    smbStateManager->save();
+                    if (directStream) sdManager->releaseControl();
+                    return false;
+                }
+            }
+            
+            unsigned long smbBytes = 0;
+            // Use bufferPath if buffered, otherwise sourcePath (direct stream)
+            String uploadSource = directStream ? bf.sourcePath : bf.bufferPath;
+            fs::FS& uploadFS = directStream ? sd : SPIFFS;
+
+            if (!smbUploader->upload(uploadSource, bf.sourcePath, uploadFS, smbBytes)) {
+                LOG_ERRORF("[FileUploader] [SMB] Upload failed: %s", bf.sourcePath.c_str());
+                LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
+                smbStateManager->save();
+                if (directStream) sdManager->releaseControl();
+                return false;
+            }
+
+            if (isRecent) {
+                // Update state using the Point-in-Time size captured during buffering
+                smbStateManager->markFileUploaded(bf.sourcePath, "", bf.size);
+            }
+            
+            uploadedCount++;
+            g_smbSessionStatus.filesUploaded = uploadedCount;
+            LOGF("[FileUploader] Uploaded: %s (%lu bytes)", bf.sourcePath.c_str(), smbBytes);
+            
+            if (!directStream) {
+                bufferManager->deleteBufferedFile(bf.bufferPath);
+            }
+
 #ifdef ENABLE_WEBSERVER
-        if (webServer) webServer->handleClient();
+            if (webServer) webServer->handleClient();
 #endif
+        }
+
+        // Release SD card if we were direct streaming
+        if (directStream) {
+            sdManager->releaseControl();
+        }
     }
 
     if (isRescan) {
@@ -1044,7 +1172,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         smbStateManager->markFolderCompleted(folderName);
     }
 
-    smbStateManager->save(sd);
+    smbStateManager->save();
     return uploadSuccess;
 #endif
 }
@@ -1106,7 +1234,7 @@ bool FileUploader::uploadMandatoryFilesSmb(SDCardManager* sdManager, fs::FS &sd)
     for (const String& fp : settingsFiles) {
         uploadSingleFileSmb(sdManager, fp, false);
     }
-    if (smbStateManager) smbStateManager->save(sd);
+    if (smbStateManager) smbStateManager->save();
     return true;
 #endif
 }
@@ -1151,45 +1279,147 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         return true;
     }
 
+    // Filter files that actually need uploading
+    std::vector<String> filesToUpload;
     for (const String& fileName : files) {
         String localPath = folderPath + "/" + fileName;
         if (isRescan) {
-            if (!cloudStateManager->hasFileChanged(sd, localPath)) { skippedUnchanged++; continue; }
-            LOG_DEBUGF("[FileUploader] [Cloud] File changed: %s", fileName.c_str());
+            if (!cloudStateManager->hasFileChanged(sd, localPath)) {
+                skippedUnchanged++;
+                continue;
+            }
         }
-        File f = sd.open(localPath);
-        if (!f) { LOG_ERRORF("[FileUploader] [Cloud] Cannot open: %s", localPath.c_str()); continue; }
+        File f = sd.open(localPath, FILE_READ);
+        if (!f) {
+            LOG_ERRORF("[FileUploader] [Cloud] Cannot open: %s", localPath.c_str());
+            continue;
+        }
         unsigned long fileSize = f.size();
         f.close();
+        
         if (fileSize == 0) {
             cloudStateManager->markFileUploaded(localPath, "empty_file", 0);
             skippedEmpty++;
             continue;
         }
+        filesToUpload.push_back(fileName);
+    }
 
-        LOGF("[FileUploader] Uploading file: %s (%lu bytes)", fileName.c_str(), fileSize);
+    if (isRescan && skippedUnchanged > 0) {
+        LOG_DEBUGF("[FileUploader] [Cloud] Skipping %d unchanged files", skippedUnchanged);
+    }
 
-        if (!sleephqUploader->isConnected() && !sleephqUploader->begin()) {
-            LOG_ERROR("[FileUploader] [Cloud] Connection failed");
-            cloudStateManager->save(sd);
-            return false;
+    // Process files using Hybrid Buffering (Greedy Buffer)
+    size_t fileIdx = 0;
+    while (fileIdx < filesToUpload.size()) {
+        if (!reacquireSdCard(sdManager)) {
+            LOG_ERROR("[FileUploader] [Cloud] Aborting folder upload due to SD card re-acquire failure");
+            break;
         }
-        unsigned long cloudBytes = 0;
-        String cloudChecksum = "";
-        if (!sleephqUploader->upload(localPath, localPath, sd, cloudBytes, cloudChecksum)) {
-            LOG_ERRORF("[FileUploader] [Cloud] Upload failed: %s", localPath.c_str());
-            LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
-            cloudStateManager->save(sd);
-            return false;
+
+        std::vector<BufferedFile> batch;
+        bool directStream = false;
+
+        // Try to build a batch of small files
+        while (fileIdx < filesToUpload.size()) {
+            const String& fileName = filesToUpload[fileIdx];
+            String localPath = folderPath + "/" + fileName;
+
+            File f = sd.open(localPath, FILE_READ);
+            if (!f) {
+                LOG_ERRORF("[FileUploader] [Cloud] Cannot open for sizing: %s", localPath.c_str());
+                fileIdx++;
+                continue;
+            }
+            size_t fileSize = f.size();
+            f.close();
+
+            // If a single file is too large for the buffer, and the batch is empty, direct stream it
+            if (!bufferManager || !bufferManager->hasSpaceFor(fileSize)) {
+                if (batch.empty()) {
+                    directStream = true;
+                    BufferedFile bf;
+                    bf.sourcePath = localPath;
+                    bf.size = fileSize;
+                    batch.push_back(bf);
+                    fileIdx++;
+                }
+                break; // Stop building batch, buffer is full or file is too large
+            }
+
+            // Copy to buffer
+            BufferedFile bf;
+            if (bufferManager->copyToBuffer(sd, localPath, bf)) {
+                batch.push_back(bf);
+                fileIdx++;
+            } else {
+                LOG_ERRORF("[FileUploader] [Cloud] Failed to buffer: %s", localPath.c_str());
+                // If it fails to buffer despite having space, we could try direct stream
+                if (batch.empty()) {
+                    directStream = true;
+                    bf.sourcePath = localPath;
+                    bf.size = fileSize;
+                    batch.push_back(bf);
+                    fileIdx++;
+                }
+                break;
+            }
         }
-        if (isRecent) cloudStateManager->markFileUploaded(localPath, "", fileSize);
-        uploadedCount++;
-        cloudDatalogFilesUploaded++;
-        g_cloudSessionStatus.filesUploaded = uploadedCount;
-        LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), cloudBytes);
+
+        // Release SD card if we are not direct streaming
+        if (!directStream) {
+            sdManager->releaseControl();
+        }
+
+        // Upload the batch
+        for (const BufferedFile& bf : batch) {
+            LOGF("[FileUploader] [Cloud] Uploading file: %s (%lu bytes)%s", 
+                 bf.sourcePath.c_str(), (unsigned long)bf.size, directStream ? " [DIRECT]" : " [BUFFERED]");
+
+            if (!sleephqUploader->isConnected() && !sleephqUploader->begin()) {
+                LOG_ERROR("[FileUploader] [Cloud] Connection failed");
+                cloudStateManager->save();
+                if (directStream) sdManager->releaseControl();
+                return false;
+            }
+            
+            unsigned long cloudBytes = 0;
+            String cloudChecksum = "";
+            // Use bufferPath if buffered, otherwise sourcePath (direct stream)
+            String uploadSource = directStream ? bf.sourcePath : bf.bufferPath;
+            fs::FS& uploadFS = directStream ? sd : SPIFFS;
+
+            if (!sleephqUploader->upload(uploadSource, bf.sourcePath, uploadFS, cloudBytes, cloudChecksum)) {
+                LOG_ERRORF("[FileUploader] [Cloud] Upload failed: %s", bf.sourcePath.c_str());
+                LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
+                cloudStateManager->save();
+                if (directStream) sdManager->releaseControl();
+                return false;
+            }
+
+            if (isRecent) {
+                // Update state using the Point-in-Time size captured during buffering
+                cloudStateManager->markFileUploaded(bf.sourcePath, "", bf.size);
+            }
+            
+            uploadedCount++;
+            cloudDatalogFilesUploaded++;
+            g_cloudSessionStatus.filesUploaded = uploadedCount;
+            LOGF("[FileUploader] Uploaded: %s (%lu bytes)", bf.sourcePath.c_str(), cloudBytes);
+            
+            if (!directStream) {
+                bufferManager->deleteBufferedFile(bf.bufferPath);
+            }
+
 #ifdef ENABLE_WEBSERVER
-        if (webServer) webServer->handleClient();
+            if (webServer) webServer->handleClient();
 #endif
+        }
+
+        // Release SD card if we were direct streaming
+        if (directStream) {
+            sdManager->releaseControl();
+        }
     }
 
     if (isRescan) {
@@ -1210,7 +1440,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         cloudStateManager->markFolderCompleted(folderName);
     }
 
-    cloudStateManager->save(sd);
+    cloudStateManager->save();
     return uploadSuccess;
 #endif
 }

@@ -98,19 +98,19 @@ UploadStateManager::UploadStateManager()
     clearState();
 }
 
-bool UploadStateManager::begin(fs::FS &sd) {
+bool UploadStateManager::begin() {
     LOG("[UploadStateManager] Initializing...");
     
     // Try to load existing state
-    bool loadedState = loadState(sd);
+    bool loadedState = loadState();
     if (!loadedState) {
         LOG("[UploadStateManager] WARNING: No existing state file or failed to load");
         LOG("[UploadStateManager] Starting with empty state - all files will be considered new");
         clearState();
     }
 
-    if (loadedState && shouldCompact(sd)) {
-        compactState(sd);
+    if (loadedState && shouldCompact()) {
+        compactState();
     }
     
     return true;  // Always return true - we can operate with empty state
@@ -669,8 +669,8 @@ void UploadStateManager::setLastUploadTimestamp(unsigned long timestamp) {
     setTimestampInternal((UnixTs)timestamp, true);
 }
 
-bool UploadStateManager::save(fs::FS &sd) {
-    return saveState(sd);
+bool UploadStateManager::save() {
+    return saveState();
 }
 
 bool UploadStateManager::upsertFileEntry(PathHash pathHash,
@@ -807,12 +807,12 @@ bool UploadStateManager::appendJournalLine(File& file, const JournalEvent& event
     return file.println(line) > 0;
 }
 
-bool UploadStateManager::flushJournal(fs::FS &sd) {
+bool UploadStateManager::flushJournal() {
     if (journalEventCount == 0) {
         return true;
     }
 
-    File file = sd.open(stateJournalPath, FILE_APPEND);
+    File file = SPIFFS.open(stateJournalPath, FILE_APPEND);
     if (!file) {
         LOGF("[UploadStateManager] ERROR: Failed to open journal file for append: %s", stateJournalPath.c_str());
         return false;
@@ -1021,8 +1021,8 @@ bool UploadStateManager::applyJournalLine(const char* line) {
     return false;
 }
 
-bool UploadStateManager::replayJournal(fs::FS &sd) {
-    File file = sd.open(stateJournalPath, FILE_READ);
+bool UploadStateManager::replayJournal() {
+    File file = SPIFFS.open(stateJournalPath, FILE_READ);
     if (!file) {
         journalLineCount = 0;
         return false;
@@ -1051,12 +1051,12 @@ bool UploadStateManager::replayJournal(fs::FS &sd) {
     return lines > 0;
 }
 
-bool UploadStateManager::shouldCompact(fs::FS &sd) const {
+bool UploadStateManager::shouldCompact() const {
     if (forceCompaction) {
         return true;
     }
 
-    if (!sd.exists(stateSnapshotPath)) {
+    if (!SPIFFS.exists(stateSnapshotPath)) {
         return true;
     }
 
@@ -1064,8 +1064,8 @@ bool UploadStateManager::shouldCompact(fs::FS &sd) const {
         return true;
     }
 
-    if (sd.exists(stateJournalPath)) {
-        File file = sd.open(stateJournalPath, FILE_READ);
+    if (SPIFFS.exists(stateJournalPath)) {
+        File file = SPIFFS.open(stateJournalPath, FILE_READ);
         if (file) {
             size_t journalSize = file.size();
             file.close();
@@ -1078,9 +1078,9 @@ bool UploadStateManager::shouldCompact(fs::FS &sd) const {
     return false;
 }
 
-bool UploadStateManager::compactState(fs::FS &sd) {
+bool UploadStateManager::compactState() {
     String tempPath = stateSnapshotPath + ".tmp";
-    File file = sd.open(tempPath, FILE_WRITE);
+    File file = SPIFFS.open(tempPath, FILE_WRITE);
     if (!file) {
         LOGF("[UploadStateManager] ERROR: Failed to open temp snapshot file: %s", tempPath.c_str());
         return false;
@@ -1090,7 +1090,7 @@ bool UploadStateManager::compactState(fs::FS &sd) {
     snprintf(line, sizeof(line), "U2|2|%lu", (unsigned long)lastUploadTimestamp);
     if (file.println(line) == 0) {
         file.close();
-        sd.remove(tempPath);
+        SPIFFS.remove(tempPath);
         return false;
     }
 
@@ -1099,7 +1099,7 @@ bool UploadStateManager::compactState(fs::FS &sd) {
     snprintf(line, sizeof(line), "R|%s|%u", retryDay, (unsigned)currentRetryCount);
     if (file.println(line) == 0) {
         file.close();
-        sd.remove(tempPath);
+        SPIFFS.remove(tempPath);
         return false;
     }
 
@@ -1109,7 +1109,7 @@ bool UploadStateManager::compactState(fs::FS &sd) {
         snprintf(line, sizeof(line), "C|%s", dayText);
         if (file.println(line) == 0) {
             file.close();
-            sd.remove(tempPath);
+            SPIFFS.remove(tempPath);
             return false;
         }
     }
@@ -1120,7 +1120,7 @@ bool UploadStateManager::compactState(fs::FS &sd) {
         snprintf(line, sizeof(line), "P|%s|%lu", dayText, (unsigned long)pendingFolders[i].firstSeenTs);
         if (file.println(line) == 0) {
             file.close();
-            sd.remove(tempPath);
+            SPIFFS.remove(tempPath);
             return false;
         }
     }
@@ -1146,37 +1146,37 @@ bool UploadStateManager::compactState(fs::FS &sd) {
                  md5Hex);
         if (file.println(line) == 0) {
             file.close();
-            sd.remove(tempPath);
+            SPIFFS.remove(tempPath);
             return false;
         }
     }
 
     file.close();
 
-    File verify = sd.open(tempPath, FILE_READ);
+    File verify = SPIFFS.open(tempPath, FILE_READ);
     if (!verify) {
-        sd.remove(tempPath);
+        SPIFFS.remove(tempPath);
         return false;
     }
 
     size_t verifySize = verify.size();
     verify.close();
     if (verifySize == 0) {
-        sd.remove(tempPath);
+        SPIFFS.remove(tempPath);
         return false;
     }
 
-    if (sd.exists(stateSnapshotPath)) {
-        sd.remove(stateSnapshotPath);
+    if (SPIFFS.exists(stateSnapshotPath)) {
+        SPIFFS.remove(stateSnapshotPath);
     }
 
-    if (!sd.rename(tempPath, stateSnapshotPath)) {
-        sd.remove(tempPath);
+    if (!SPIFFS.rename(tempPath, stateSnapshotPath)) {
+        SPIFFS.remove(tempPath);
         return false;
     }
 
-    if (sd.exists(stateJournalPath)) {
-        sd.remove(stateJournalPath);
+    if (SPIFFS.exists(stateJournalPath)) {
+        SPIFFS.remove(stateJournalPath);
     }
 
     journalEventCount = 0;
@@ -1186,13 +1186,13 @@ bool UploadStateManager::compactState(fs::FS &sd) {
     return true;
 }
 
-bool UploadStateManager::loadState(fs::FS &sd) {
+bool UploadStateManager::loadState() {
     clearState();
 
     bool loadedSnapshot = false;
 
-    if (sd.exists(stateSnapshotPath)) {
-        File file = sd.open(stateSnapshotPath, FILE_READ);
+    if (SPIFFS.exists(stateSnapshotPath)) {
+        File file = SPIFFS.open(stateSnapshotPath, FILE_READ);
         if (!file) {
             LOGF("[UploadStateManager] ERROR: Failed to open snapshot file: %s", stateSnapshotPath.c_str());
             return false;
@@ -1229,7 +1229,7 @@ bool UploadStateManager::loadState(fs::FS &sd) {
         loadedSnapshot = true;
     }
 
-    bool replayedJournal = replayJournal(sd);
+    bool replayedJournal = replayJournal();
 
     if (!loadedSnapshot && !replayedJournal) {
         LOG("[UploadStateManager] State snapshot/journal not found - will create on first save");
@@ -1249,13 +1249,13 @@ bool UploadStateManager::loadState(fs::FS &sd) {
     return true;
 }
 
-bool UploadStateManager::saveState(fs::FS &sd) {
-    if (!flushJournal(sd)) {
+bool UploadStateManager::saveState() {
+    if (!flushJournal()) {
         return false;
     }
 
-    if (shouldCompact(sd)) {
-        if (!compactState(sd)) {
+    if (shouldCompact()) {
+        if (!compactState()) {
             LOG("[UploadStateManager] ERROR: Failed to compact state snapshot");
             return false;
         }

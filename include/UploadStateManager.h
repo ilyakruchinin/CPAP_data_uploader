@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <FS.h>
+#include <SPIFFS.h>
 #include <stdint.h>
 #include <vector>
 
@@ -104,25 +105,25 @@ private:
     void setTimestampInternal(UnixTs ts, bool queue);
 
     void queueEvent(const JournalEvent& event);
-    bool flushJournal(fs::FS &sd);
+    bool flushJournal();
     bool appendJournalLine(File& file, const JournalEvent& event);
     bool applySnapshotLine(const char* line);
     bool applyJournalLine(const char* line);
-    bool shouldCompact(fs::FS &sd) const;
-    bool compactState(fs::FS &sd);
-    bool replayJournal(fs::FS &sd);
+    bool shouldCompact() const;
+    bool compactState();
+    bool replayJournal();
 
-    bool loadState(fs::FS &sd);
-    bool saveState(fs::FS &sd);
+    bool loadState();
+    bool saveState();
 
 public:
     String calculateChecksum(fs::FS &sd, const String& filePath);
     UploadStateManager();
     void setPaths(const String& snapshotPath, const String& journalPath);
     
-    bool begin(fs::FS &sd);
+    bool begin();
     
-    // Checksum-based tracking for root/SETTINGS files
+    // Checksum-based tracking for root/SETTINGS files (needs SD card access to read files)
     bool hasFileChanged(fs::FS &sd, const String& filePath);
     void markFileUploaded(const String& filePath, const String& checksum, unsigned long fileSize = 0);
     
@@ -154,8 +155,8 @@ public:
     unsigned long getLastUploadTimestamp();
     void setLastUploadTimestamp(unsigned long timestamp);
     
-    // Persistence
-    bool save(fs::FS &sd);
+    // Persistence (writes to SPIFFS)
+    bool save();
 };
 
 #endif // UPLOAD_STATE_MANAGER_H

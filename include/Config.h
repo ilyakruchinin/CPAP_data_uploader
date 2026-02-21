@@ -58,6 +58,7 @@ private:
     int uploadStartHour;           // 0-23, start of upload window
     int uploadEndHour;             // 0-23, end of upload window
     int inactivitySeconds;         // Z: seconds of bus silence before upload
+    int smartWaitSeconds;          // Seconds of silence required before taking card (boot/inter-file)
     int exclusiveAccessMinutes;    // X: max minutes of exclusive SD access
     int cooldownMinutes;           // Y: minutes to release SD between upload cycles
     
@@ -142,6 +143,7 @@ public:
     int getUploadStartHour() const;
     int getUploadEndHour() const;
     int getInactivitySeconds() const;
+    int getSmartWaitSeconds() const;
     int getExclusiveAccessMinutes() const;
     int getCooldownMinutes() const;
     bool isSmartMode() const;
