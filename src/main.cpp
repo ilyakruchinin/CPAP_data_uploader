@@ -324,11 +324,11 @@ void setup() {
     LOG_DEBUGF("WiFi SSID: %s", config.getWifiSSID().c_str());
     LOG_DEBUGF("Endpoint: %s", config.getEndpoint().c_str());
 
-    // Configure SD card logging if enabled (debugging only; can block CPAP SD access)
+    // Configure internal logging if enabled (debugging only)
     if (config.getLogToSdCard()) {
-        LOG_WARN("Enabling SD card logging - DEBUGGING ONLY - may block CPAP SD access; use scheduled mode outside therapy times");
-        LOG_WARN("Logs will be dumped every 10 seconds");
-        Logger::getInstance().enableSdCardLogging(true, &sdManager.getFS());
+        LOG_WARN("Enabling persistent logging - DEBUGGING ONLY");
+        LOG_WARN("Logs will be dumped every 10 seconds to internal flash");
+        Logger::getInstance().enableSdCardLogging(true, &LittleFS);
     }
 
     // Release SD card back to CPAP machine
