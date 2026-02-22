@@ -139,10 +139,10 @@ bool SleepHQUploader::authenticate() {
     String tokenPath = "/oauth/token";
     
     // Build OAuth request body
-    String body = "grant_type=password";
-    body += "&client_id=" + config->getCloudClientId();
-    body += "&client_secret=" + config->getCloudClientSecret();
-    body += "&scope=read+write";
+    char bodyBuf[256];
+    snprintf(bodyBuf, sizeof(bodyBuf), "grant_type=password&client_id=%s&client_secret=%s&scope=read+write", 
+             config->getCloudClientId().c_str(), config->getCloudClientSecret().c_str());
+    String body(bodyBuf);
     
     String responseBody;
     int httpCode;
@@ -159,7 +159,7 @@ bool SleepHQUploader::authenticate() {
     }
     
     // Parse response
-    DynamicJsonDocument doc(1024);
+    StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, responseBody);
     if (error) {
         LOG_ERRORF("[SleepHQ] Failed to parse OAuth response: %s", error.c_str());
@@ -450,7 +450,7 @@ bool SleepHQUploader::createImport() {
     }
     
     // Parse import_id from response
-    DynamicJsonDocument doc(2048);
+    StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, responseBody);
     if (error) {
         LOG_ERRORF("[SleepHQ] Failed to parse import response: %s", error.c_str());

@@ -7,7 +7,6 @@
 #include "UploadStateManager.h"
 #include "ScheduleManager.h"
 #include "WiFiManager.h"
-#include "CPAPMonitor.h"
 #include "TrafficMonitor.h"
 #include "WebStatus.h"
 #include "SDCardManager.h"
@@ -35,7 +34,6 @@ private:
     UploadStateManager* smbStateManager;  // SMB state manager (may be null)
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
-    CPAPMonitor* cpapMonitor;
     TrafficMonitor* trafficMonitor;
     SDCardManager* sdManager;
     
@@ -58,6 +56,7 @@ private:
     void handleMonitorStart();
     void handleMonitorStop();
     void handleSdActivity();
+    void handleApiDiagnostics();
     void handleMonitorPage();
     void handleApiConfigRawGet();   // GET /api/config-raw
     void handleApiConfigRawPost();  // POST /api/config-raw
@@ -86,7 +85,7 @@ private:
 public:
     CpapWebServer(Config* cfg, UploadStateManager* state, 
                   ScheduleManager* schedule, 
-                  WiFiManager* wifi = nullptr, CPAPMonitor* monitor = nullptr);
+                  WiFiManager* wifi = nullptr);
     ~CpapWebServer();
     
     bool begin();

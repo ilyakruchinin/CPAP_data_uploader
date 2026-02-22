@@ -2,6 +2,7 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <Preferences.h>
+#include <LittleFS.h>
 
 #include "Config.h"
 #include "SDCardManager.h"
@@ -26,7 +27,6 @@ bool g_heapRecoveryBoot = false;
 
 #ifdef ENABLE_WEBSERVER
 #include "CpapWebServer.h"
-#include "CPAPMonitor.h"
 #endif
 
 // ============================================================================
@@ -44,7 +44,6 @@ OTAManager otaManager;
 
 #ifdef ENABLE_WEBSERVER
 CpapWebServer* webServer = nullptr;
-CPAPMonitor* cpapMonitor = nullptr;
 #endif
 
 // ============================================================================
@@ -194,6 +193,13 @@ void setup() {
         LOG_WARN("System reset due to watchdog timeout - possible hang or power issue");
     }
 
+    // Initialize LittleFS for state and internal logs
+    if (!LittleFS.begin(true)) {
+        LOG_ERROR("Failed to mount LittleFS - state and logs cannot be saved!");
+    } else {
+        LOG("LittleFS mounted successfully");
+    }
+
     // Initialize SD card control
     if (!sdManager.begin()) {
         LOG("Failed to initialize SD card manager");
@@ -209,25 +215,19 @@ void setup() {
     bool fastBoot = g_heapRecoveryBoot;
 
     // Smart Wait constants — same values for both cold and soft-reboot.
-    // 5 s of continuous SD bus silence required; give up after 45 s max.
-    const unsigned long SMART_WAIT_MAX_MS      = 45000;
-    const unsigned long SMART_WAIT_REQUIRED_MS =  5000;
+    // 5 s of continuous SD bus silence required before taking control.
+    // The previous 45s hostile takeover timeout has been removed to prevent filesystem corruption.
+    const unsigned long SMART_WAIT_REQUIRED_MS = 5000;
 
     auto runSmartWait = [&]() {
         LOG("Checking for CPAP SD card activity (Smart Wait)...");
-        unsigned long waitStart = millis();
-        bool busIsQuiet = false;
-        while (millis() - waitStart < SMART_WAIT_MAX_MS) {
+        while (true) {
             trafficMonitor.update();
             delay(10);
             if (trafficMonitor.isIdleFor(SMART_WAIT_REQUIRED_MS)) {
                 LOGF("Smart Wait: %lums of bus silence — CPAP is idle", SMART_WAIT_REQUIRED_MS);
-                busIsQuiet = true;
                 break;
             }
-        }
-        if (!busIsQuiet) {
-            LOG_WARN("Smart Wait timed out — bus still active, proceeding anyway");
         }
     };
 
@@ -402,17 +402,6 @@ void setup() {
     }
 
 #ifdef ENABLE_WEBSERVER
-    // Initialize CPAP monitor
-#ifdef ENABLE_CPAP_MONITOR
-    LOG("Initializing CPAP SD card usage monitor...");
-    cpapMonitor = new CPAPMonitor();
-    cpapMonitor->begin();
-    LOG("CPAP monitor started - tracking SD card usage every 10 minutes");
-#else
-    LOG("CPAP monitor disabled (CS_SENSE hardware issue)");
-    cpapMonitor = new CPAPMonitor();  // Use stub implementation
-#endif
-    
     // Initialize web server
     LOG("Initializing web server...");
     
@@ -420,8 +409,7 @@ void setup() {
     webServer = new CpapWebServer(&config, 
                                       uploader->getStateManager(),
                                       uploader->getScheduleManager(),
-                                      &wifiManager,
-                                      cpapMonitor);
+                                      &wifiManager);
     
     if (webServer->begin()) {
         LOG("Web server started successfully");
@@ -819,13 +807,6 @@ void loop() {
     }
 
 #ifdef ENABLE_WEBSERVER
-    // Update CPAP monitor
-#ifdef ENABLE_CPAP_MONITOR
-    if (cpapMonitor) {
-        cpapMonitor->update();
-    }
-#endif
-    
     // Handle web server requests
     if (webServer) {
         webServer->handleClient();

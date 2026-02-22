@@ -60,6 +60,7 @@ private:
     int inactivitySeconds;         // Z: seconds of bus silence before upload
     int exclusiveAccessMinutes;    // X: max minutes of exclusive SD access
     int cooldownMinutes;           // Y: minutes to release SD between upload cycles
+    bool enableSdCmd0Reset;        // Whether to force a CMD0 reset when releasing SD card
     
     // Cached endpoint type flags (computed once during loadFromSD)
     bool _hasSmbEndpoint;
@@ -144,6 +145,7 @@ public:
     int getInactivitySeconds() const;
     int getExclusiveAccessMinutes() const;
     int getCooldownMinutes() const;
+    bool getEnableSdCmd0Reset() const;
     bool isSmartMode() const;
     
     // Power management getters
