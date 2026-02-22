@@ -83,8 +83,8 @@ void UploadStateManager::setPaths(const String& snapshotPath, const String& jour
 }
 
 UploadStateManager::UploadStateManager() 
-    : stateSnapshotPath("/.upload_state.v2"),
-      stateJournalPath("/.upload_state.v2.log"),
+    : stateSnapshotPath("/littlefs/.upload_state.v2"),
+      stateJournalPath("/littlefs/.upload_state.v2.log"),
       lastUploadTimestamp(0),
       completedCount(0),
       pendingCount(0),

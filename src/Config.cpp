@@ -221,6 +221,8 @@ void Config::setConfigValue(String key, String value) {
         exclusiveAccessMinutes = value.toInt();
     } else if (key == "COOLDOWN_MINUTES") {
         cooldownMinutes = value.toInt();
+    } else if (key == "ENABLE_SD_CMD0_RESET") {
+        enableSdCmd0Reset = (value.equalsIgnoreCase("true") || value == "1");
     } else if (key == "CPU_SPEED_MHZ") {
         cpuSpeedMhz = value.toInt();
     } else if (key == "WIFI_TX_PWR") {
@@ -600,6 +602,7 @@ int Config::getUploadEndHour() const { return uploadEndHour; }
 int Config::getInactivitySeconds() const { return inactivitySeconds; }
 int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
 int Config::getCooldownMinutes() const { return cooldownMinutes; }
+bool Config::getEnableSdCmd0Reset() const { return enableSdCmd0Reset; }
 bool Config::isSmartMode() const { return uploadMode == "smart"; }
 
 // Helper methods for enum conversion

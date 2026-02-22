@@ -10,12 +10,12 @@
 #endif
 
 // Constructor
-FileUploader::FileUploader(Config* cfg, WiFiManager* wifi) 
+FileUploader::FileUploader(Config* cfg, WiFiManager* wifiManager) 
     : config(cfg),
       smbStateManager(nullptr),
       cloudStateManager(nullptr),
       scheduleManager(nullptr),
-      wifiManager(wifi),
+      wifiManager(wifiManager),
       activeBackend(UploadBackend::NONE),
 #ifdef ENABLE_WEBSERVER
       webServer(nullptr),

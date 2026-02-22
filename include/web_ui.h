@@ -290,13 +290,22 @@ function renderStatus(d){
   set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
 }
 
-var statusTimer=null;
+var statusTimer=null,diagTimer=null;
 function pollStatus(){
   fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     renderStatus(d);
   }).catch(function(){set('d-st','Offline');});
 }
 function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
+
+function pollDiag(){
+  fetch('/api/diagnostics',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    set('d-fh',d.free_heap?Math.round(d.free_heap/1024)+' KB':'—');
+    set('d-ma',d.max_alloc?Math.round(d.max_alloc/1024)+' KB':'—');
+  }).catch(function(){});
+}
+function startDiagPoll(){if(!diagTimer){pollDiag();diagTimer=setInterval(pollDiag,2000);}}
+startDiagPoll();
 
 var cfgLocked=false;
 function _setCfgLockUI(locked){
@@ -502,7 +511,32 @@ function fetchMon(){
       });
       document.getElementById('m-ch').innerHTML=h;
     }
+    if(profActive){
+      var li=d.longest_idle_ms/1000;
+      if(li>profMaxIdle)profMaxIdle=li;
+      document.getElementById('prof-max-idle').textContent=profMaxIdle.toFixed(1)+'s';
+      if(profMaxIdle>0){
+        document.getElementById('prof-rec-box').style.display='block';
+        document.getElementById('prof-rec-val').textContent=Math.ceil(profMaxIdle+5)+'';
+      }
+    }
   }).catch(function(){});
+}
+
+var profActive=false,profMaxIdle=0;
+function startProfiler(){
+  if(profActive){
+    profActive=false;
+    document.getElementById('btn-prof-start').textContent='Start Profiling';
+    document.getElementById('btn-prof-start').style.background='#aa66ff';
+    return;
+  }
+  profActive=true;profMaxIdle=0;
+  document.getElementById('prof-max-idle').textContent='0.0s';
+  document.getElementById('prof-rec-box').style.display='none';
+  document.getElementById('btn-prof-start').textContent='Stop Profiling';
+  document.getElementById('btn-prof-start').style.background='#e04030';
+  startMon();
 }
 
 function triggerUpload(){
