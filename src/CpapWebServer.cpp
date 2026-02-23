@@ -14,6 +14,9 @@ volatile bool g_softRebootFlag = false;
 
 // Monitoring trigger flags
 volatile bool g_monitorActivityFlag = false;
+
+// Cooperative upload abort flag — set when config lock is requested during an active upload
+volatile bool g_abortUploadFlag = false;
 volatile bool g_stopMonitorFlag = false;
 
 // External FSM state (defined in main.cpp)
@@ -813,8 +816,9 @@ void CpapWebServer::handleApiConfigLock() {
     }
 
     if (lock && isUploadInProgress()) {
-        server->send(409, "application/json",
-                     "{\"error\":\"Upload in progress — cannot lock config now\",\"locked\":false}");
+        g_abortUploadFlag = true;
+        LOG("[WebServer] Config lock requested during upload — signalling cooperative abort");
+        server->send(200, "application/json", "{\"ok\":false,\"aborting\":true}");
         return;
     }
 
