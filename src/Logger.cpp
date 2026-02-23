@@ -594,8 +594,8 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
     
     // Write to internal LittleFS (rotating A/B files)
     // For simplicity, we just append to the active file, and truncate if it gets too large
-    String activeLogFile = "/littlefs/syslog.A.txt";
-    String inactiveLogFile = "/littlefs/syslog.B.txt";
+    String activeLogFile = "/syslog.A.txt";
+    String inactiveLogFile = "/syslog.B.txt";
     
     File logFile = logFileSystem->open(activeLogFile, FILE_APPEND);
     if (!logFile) {

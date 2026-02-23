@@ -272,22 +272,15 @@ void setup() {
             resetPrefs.end();
             
             // Delete all known state/summary paths from internal LittleFS only.
+            // Paths are relative to the LittleFS mount — do NOT include /littlefs/ prefix.
             static const char* STATE_FILES[] = {
-                "/littlefs/.upload_state.v2.smb",
-                "/littlefs/.upload_state.v2.smb.log",
-                "/littlefs/.upload_state.v2.cloud",
-                "/littlefs/.upload_state.v2.cloud.log",
-                "/littlefs/.backend_summary.smb",
-                "/littlefs/.backend_summary.cloud",
-                "/littlefs/.upload_state.v2",      // legacy: pre-split single-manager path
-                "/littlefs/.upload_state.v2.log",
-                "/.upload_state.v2.smb",           // legacy files in LittleFS root
+                "/.upload_state.v2.smb",
                 "/.upload_state.v2.smb.log",
                 "/.upload_state.v2.cloud",
                 "/.upload_state.v2.cloud.log",
                 "/.backend_summary.smb",
                 "/.backend_summary.cloud",
-                "/.upload_state.v2",
+                "/.upload_state.v2",      // legacy: pre-split single-manager path
                 "/.upload_state.v2.log",
             };
             bool removedAny = false;
@@ -950,6 +943,7 @@ void loop() {
     if (monitoringRequested) {
         if (currentState != UploadState::UPLOADING) {
             monitoringRequested = false;
+            stopMonitoringRequested = false;  // discard any stale stop from before monitoring began
             if (currentState == UploadState::ACQUIRING && sdManager.hasControl()) {
                 sdManager.releaseControl();
             }

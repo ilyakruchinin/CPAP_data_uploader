@@ -115,6 +115,12 @@ nav button:hover:not(.act){background:#3a5a7e}
 <button id=btn-rst class="btn bd" onclick=resetState()>Reset State</button>
 </div>
 </div>
+<div class=card style="margin-bottom:14px"><h2>Memory Diagnostics <span style="font-size:.7em;color:#8f98a0;font-weight:400">(live, 2s)</span></h2>
+<div class=stats-grid>
+<div class=stat-box><span class=sl>Free Heap</span><span class=sv id=hd-fh style="color:#66c0f4">—</span></div>
+<div class=stat-box><span class=sl>Max Contiguous</span><span class=sv id=hd-ma style="color:#66c0f4">—</span></div>
+</div>
+</div>
 </div>
 
 <!-- LOGS -->
@@ -134,17 +140,14 @@ nav button:hover:not(.act){background:#3a5a7e}
 <!-- CONFIG -->
 <div id=cfg class=page>
 <div id=cfg-lock-banner style="display:none;background:#2a4a2a;border:1px solid #4a8a4a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#a0e0a0">
-&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume uploads without saving, or <em>Save &amp; Reboot</em> to apply changes.
-</div>
-<div class=card><h2>Configuration</h2>
-<pre id=cfg-box style="font-size:.8em;max-height:300px;overflow-y:auto">Loading...</pre>
+&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume without saving, or <em>Save &amp; Reboot</em> to apply changes. After reboot, if the CPAP shows SD card errors, physically eject and reinsert its SD card.
 </div>
 <div class=card>
 <h2>Edit config.txt
 <span id=cfg-lock-badge style="display:none;margin-left:8px;background:#4a8a4a;color:#fff;font-size:.65em;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle">LOCKED</span>
 </h2>
 <p style="font-size:.82em;color:#8f98a0;margin-bottom:8px">Direct editor for the SD card config file. Passwords stored securely in flash appear as <code>***STORED_IN_FLASH***</code> &mdash; leave them unchanged to keep existing credentials. Max 4096 bytes. <strong>Changes take effect after reboot.</strong></p>
-<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> first to pause uploads and enable editing. Uploads resume automatically on Save, Cancel, or after 30&nbsp;min.</p>
+<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> to pause uploads and enable editing. After saving, a <strong>reboot is required</strong> for changes to take effect. If the CPAP shows SD card errors after reboot, physically eject and reinsert its SD card.</p>
 <textarea id=cfg-raw style="width:100%;box-sizing:border-box;height:320px;background:#111820;color:#6a7a8a;border:1px solid #2d3440;border-radius:4px;padding:8px;font-family:monospace;font-size:.8em;resize:vertical" maxlength=4096 oninput=cfgRawCount() placeholder="Click Edit to begin..." readonly></textarea>
 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
 <span id=cfg-raw-cnt style="font-size:.8em;color:#8f98a0">0 / 4096 bytes</span>
@@ -248,7 +251,7 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 </div>
 
 <script>
-var cfg={},monPoll=null,logPoll=null,curTab='dash';
+var cfg={},monPoll=null,logPoll=null,curTab='dash',monActive=false;
 function tab(t){
   ['dash','logs','cfg','mon','ota'].forEach(function(x){
     document.getElementById(x).classList.toggle('on',x===t);
@@ -334,8 +337,10 @@ function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval
 
 function pollDiag(){
   fetch('/api/diagnostics',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
-    set('d-fh',d.free_heap?Math.round(d.free_heap/1024)+' KB':'—');
-    set('d-ma',d.max_alloc?Math.round(d.max_alloc/1024)+' KB':'—');
+    var fh=d.free_heap?Math.round(d.free_heap/1024)+' KB':'\u2014';
+    var ma=d.max_alloc?Math.round(d.max_alloc/1024)+' KB':'\u2014';
+    set('d-fh',fh);set('d-ma',ma);
+    set('hd-fh',fh);set('hd-ma',ma);
   }).catch(function(){});
 }
 function startDiagPoll(){if(!diagTimer){pollDiag();diagTimer=setInterval(pollDiag,2000);}}
@@ -378,10 +383,8 @@ function releaseCfgLock(){
 function loadCfg(){
   fetch('/api/config',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     cfg=d;
-    document.getElementById('cfg-box').textContent=JSON.stringify(d,null,2);
-    renderStatus._cfgLoaded=true;
-  }).catch(function(){document.getElementById('cfg-box').textContent='Failed to load config.';});
-  if(!cfgLocked)_setCfgLockUI(false);
+  }).catch(function(){});
+  if(!cfgLocked){_setCfgLockUI(false);loadRawCfg();}
 }
 function cfgRawCount(){
   var t=document.getElementById('cfg-raw');
@@ -407,7 +410,7 @@ function saveRawCfg(){
   .then(function(r){return r.json();})
   .then(function(d){
     if(d.ok){
-      msg.style.color='#57cbde';msg.textContent='\u2713 '+d.message;
+      msg.style.color='#57cbde';msg.innerHTML='\u2713 Saved \u2014 <strong>reboot required</strong> for changes to take effect.';
       releaseCfgLock();
     }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
   }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
@@ -514,6 +517,7 @@ function startLogPoll(){if(!logPoll){fetchLogs();logPoll=setInterval(fetchLogs,4
 function stopLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}}
 
 function startMon(){
+  monActive=true;
   fetch('/api/monitor-start',{cache:'no-store'});
   document.getElementById('btn-mst').style.display='none';
   document.getElementById('btn-msp').style.display='inline-flex';
@@ -521,7 +525,10 @@ function startMon(){
   fetchMon();
 }
 function stopMon(){
-  fetch('/api/monitor-stop',{cache:'no-store'});
+  if(monActive){
+    monActive=false;
+    fetch('/api/monitor-stop',{cache:'no-store'});
+  }
   document.getElementById('btn-mst').style.display='inline-flex';
   document.getElementById('btn-msp').style.display='none';
   if(monPoll){clearInterval(monPoll);monPoll=null;}

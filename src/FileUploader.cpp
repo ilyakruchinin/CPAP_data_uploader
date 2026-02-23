@@ -82,7 +82,7 @@ bool FileUploader::begin(fs::FS &sd) {
         }
 
         smbStateManager = new UploadStateManager();
-        smbStateManager->setPaths("/littlefs/.upload_state.v2.smb", "/littlefs/.upload_state.v2.smb.log");
+        smbStateManager->setPaths("/.upload_state.v2.smb", "/.upload_state.v2.smb.log");
         if (!smbStateManager->begin(stateFs)) {
             LOG("[FileUploader] WARNING: SMB state load failed, starting fresh");
         }
@@ -97,7 +97,7 @@ bool FileUploader::begin(fs::FS &sd) {
         LOG("[FileUploader] SleepHQUploader created (will connect during upload)");
 
         cloudStateManager = new UploadStateManager();
-        cloudStateManager->setPaths("/littlefs/.upload_state.v2.cloud", "/littlefs/.upload_state.v2.cloud.log");
+        cloudStateManager->setPaths("/.upload_state.v2.cloud", "/.upload_state.v2.cloud.log");
         if (!cloudStateManager->begin(stateFs)) {
             LOG("[FileUploader] WARNING: Cloud state load failed, starting fresh");
         }
@@ -158,8 +158,8 @@ bool FileUploader::begin(fs::FS &sd) {
 // ============================================================================
 
 const char* FileUploader::getBackendSummaryPath(UploadBackend backend) {
-    if (backend == UploadBackend::SMB)   return "/littlefs/.backend_summary.smb";
-    if (backend == UploadBackend::CLOUD) return "/littlefs/.backend_summary.cloud";
+    if (backend == UploadBackend::SMB)   return "/.backend_summary.smb";
+    if (backend == UploadBackend::CLOUD) return "/.backend_summary.cloud";
     return nullptr;
 }
 
