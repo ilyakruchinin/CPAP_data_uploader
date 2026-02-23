@@ -753,11 +753,6 @@ void CpapWebServer::handleApiConfigRawPost() {
         server->send(503, "application/json", "{\"error\":\"SD manager unavailable\"}");
         return;
     }
-    if (isUploadInProgress()) {
-        server->send(409, "application/json", "{\"error\":\"Upload in progress — cannot edit config now\"}");
-        return;
-    }
-
     size_t bodyLen = server->arg("plain").length();
     if (bodyLen == 0) {
         server->send(400, "application/json", "{\"error\":\"Empty body\"}");
