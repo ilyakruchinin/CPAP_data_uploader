@@ -6,6 +6,7 @@
 #include "WebStatus.h"
 #include <time.h>
 #include <SD_MMC.h>
+#include <LittleFS.h>
 
 // Global trigger flags
 volatile bool g_triggerUploadFlag = false;
@@ -178,6 +179,10 @@ bool CpapWebServer::begin() {
     server->on("/api/config-raw",  HTTP_GET,  [this]() { this->handleApiConfigRawGet(); });
     server->on("/api/config-raw",  HTTP_POST, [this]() { this->handleApiConfigRawPost(); });
     server->on("/api/config-lock", HTTP_POST, [this]() { this->handleApiConfigLock(); });
+    server->on("/api/logs/saved", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsSaved();
+    });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -507,6 +512,36 @@ void CpapWebServer::handleApiLogs() {
         Logger::getInstance().printLogs(chunkedOutput);
     }
 
+    server->sendContent("");
+}
+
+// GET /api/logs/saved — stream syslog.B.txt (older) + syslog.A.txt (newer) from LittleFS
+void CpapWebServer::handleApiLogsSaved() {
+    addCorsHeaders(server);
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/plain; charset=utf-8", " ");
+    ChunkedPrint chunked(server);
+
+    const char* files[] = {"/syslog.B.txt", "/syslog.A.txt"};
+    bool anyFound = false;
+    for (int i = 0; i < 2; i++) {
+        File f = LittleFS.open(files[i], FILE_READ);
+        if (!f) continue;
+        anyFound = true;
+        chunked.print("\n=== ");
+        chunked.print(files[i]);
+        chunked.print(" ===\n");
+        uint8_t buf[256];
+        while (f.available()) {
+            size_t n = f.read(buf, sizeof(buf));
+            if (n > 0) chunked.write(buf, n);
+            yield();
+        }
+        f.close();
+    }
+    if (!anyFound) {
+        chunked.print("[No saved log files found — enable SAVE_LOGS=true in config.txt to persist logs]\n");
+    }
     server->sendContent("");
 }
 

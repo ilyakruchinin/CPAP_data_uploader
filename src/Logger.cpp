@@ -644,7 +644,7 @@ bool Logger::dumpSavedLogs(const String& reason) {
     }
     
     // Write logs to internal FS
-    String filename = "/littlefs/crash_log.txt";
+    String filename = "/crash_log.txt";
     
     // Write logs to FS (append mode to preserve previous dumps)
     File logFile = logFileSystem->open(filename, FILE_APPEND);

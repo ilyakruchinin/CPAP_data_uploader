@@ -94,7 +94,7 @@ unsigned long lastSdCardRetry = 0;
 
 // Persistent log flush timing
 unsigned long lastLogFlushTime = 0;
-const unsigned long LOG_FLUSH_INTERVAL_MS = 10 * 1000;  // 10 seconds
+const unsigned long LOG_FLUSH_INTERVAL_MS = 5 * 1000;   // 5 seconds
 
 // Runtime debug mode: set from config DEBUG=true after config load.
 // Gates [res fh= ma= fd=] heap suffix on all log lines and verbose pre-flight output.
@@ -687,6 +687,7 @@ void handleReleasing() {
     // The fast-boot path (ESP_RST_SW) skips cold-boot delays.
     LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
          (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
     delay(200);
     esp_restart();
 }
@@ -760,8 +761,9 @@ void handleMonitoring() {
 void loop() {
     // ── Always-on tasks ──
     
-    // Periodic persisted-log flush (every 10 seconds when enabled)
-    if (config.getSaveLogs() && !uploadTaskRunning) {
+    // Periodic persisted-log flush (every 5 seconds when enabled)
+    // Runs unconditionally — LittleFS is independent of SD_MMC / upload task
+    if (config.getSaveLogs()) {
         unsigned long currentTime = millis();
         if (currentTime - lastLogFlushTime >= LOG_FLUSH_INTERVAL_MS) {
             if (Logger::getInstance().dumpSavedLogsPeriodic(&sdManager)) {
@@ -809,6 +811,7 @@ void loop() {
             vTaskDelete(uploadTaskHandle);
         }
         
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         delay(300);
         esp_restart();
     }
@@ -840,6 +843,7 @@ void loop() {
         
         // Immediate reboot — state files deleted on next clean boot
         LOG("Rebooting for clean state reset...");
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         delay(300);  // Brief pause for web response to send
         esp_restart();
     }
@@ -848,6 +852,7 @@ void loop() {
     if (g_softRebootFlag) {
         LOG("=== Soft Reboot Triggered via Web Interface ===");
         g_softRebootFlag = false;
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         delay(300);
         esp_restart();
     }

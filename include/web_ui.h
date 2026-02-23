@@ -124,6 +124,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
 <h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
 <div style="display:flex;gap:6px">
+<button class="btn bs" onclick=loadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Load previously saved log files from device flash">&#128194; Saved Logs</button>
 <button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
 <button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
 </div>
@@ -567,6 +568,21 @@ function fetchLogs(){
   }).catch(function(){set('log-st','Disconnected');});
 }
 function clearLogBuf(){clientLogBuf=[];lastSeenLine='';document.getElementById('log-box').textContent='';}
+function loadSavedLogs(){
+  set('log-st','Loading saved logs...');
+  fetch('/api/logs/saved',{cache:'no-store'}).then(function(r){return r.text();})
+  .then(function(t){
+    if(!t||!t.trim()){
+      set('log-st','No saved logs on device');return;
+    }
+    var lines=t.split('\n');
+    var sep=['\u2500\u2500\u2500 SAVED LOGS (flash) \u2500\u2500\u2500'];
+    clientLogBuf=sep.concat(lines).concat(['\u2500\u2500\u2500 END SAVED LOGS \u2500\u2500\u2500','']).concat(clientLogBuf);
+    if(clientLogBuf.length>LOG_BUF_MAX)clientLogBuf=clientLogBuf.slice(clientLogBuf.length-LOG_BUF_MAX);
+    _renderLogBuf();
+    set('log-st','Saved logs loaded \u2022 '+clientLogBuf.length+' lines');
+  }).catch(function(e){set('log-st','Failed: '+e.message);});
+}
 function copyLogBuf(){
   var txt=clientLogBuf.join('\n');
   if(!txt){return;}
