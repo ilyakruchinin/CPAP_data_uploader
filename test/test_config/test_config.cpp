@@ -99,7 +99,7 @@ void test_config_load_with_defaults() {
     TEST_ASSERT_EQUAL(5, config.getExclusiveAccessMinutes());
     TEST_ASSERT_EQUAL(10, config.getCooldownMinutes());
     TEST_ASSERT_EQUAL(0, config.getGmtOffsetHours());  // Default UTC
-    TEST_ASSERT_FALSE(config.getLogToSdCard());  // Default false (no SD logging)
+    TEST_ASSERT_FALSE(config.getSaveLogs());  // Default false (no persisted logs)
 }
 
 // Test loading configuration with missing SSID (should fail)
@@ -282,7 +282,7 @@ void test_config_boot_delay_and_logging() {
     std::string configContent = 
         "WIFI_SSID = TestNetwork\n"
         "ENDPOINT = //server/share\n"
-        "LOG_TO_SD_CARD = true\n";
+        "SAVE_LOGS = true\n";
     
     mockSD.addFile("/config.txt", configContent);
     
@@ -290,7 +290,7 @@ void test_config_boot_delay_and_logging() {
     bool loaded = config.loadFromSD(mockSD);
     
     TEST_ASSERT_TRUE(loaded);
-    TEST_ASSERT_TRUE(config.getLogToSdCard());
+    TEST_ASSERT_TRUE(config.getSaveLogs());
 }
 
 // Test configuration with all FSM timing fields
@@ -304,7 +304,7 @@ void test_config_all_fsm_timing_fields() {
         "INACTIVITY_SECONDS = 180\n"
         "EXCLUSIVE_ACCESS_MINUTES = 6\n"
         "COOLDOWN_MINUTES = 9\n"
-        "LOG_TO_SD_CARD = false\n";
+        "SAVE_LOGS = false\n";
     
     mockSD.addFile("/config.txt", configContent);
     
@@ -318,7 +318,7 @@ void test_config_all_fsm_timing_fields() {
     TEST_ASSERT_EQUAL(180, config.getInactivitySeconds());
     TEST_ASSERT_EQUAL(6, config.getExclusiveAccessMinutes());
     TEST_ASSERT_EQUAL(9, config.getCooldownMinutes());
-    TEST_ASSERT_FALSE(config.getLogToSdCard());
+    TEST_ASSERT_FALSE(config.getSaveLogs());
 }
 
 

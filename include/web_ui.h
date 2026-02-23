@@ -167,6 +167,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=actions>
 <button id=btn-mst class="btn bp" onclick=startMon()>Start Monitoring</button>
 <button id=btn-msp class="btn bd" onclick=stopMon() style=display:none>Stop</button>
+<button class="btn bs" onclick=openProfilerWizard()>&#9881; Profiler Wizard</button>
 <button class="btn bs" onclick="tab('dash')">&#8592; Dashboard</button>
 </div>
 </div>
@@ -178,6 +179,39 @@ nav button:hover:not(.act){background:#3a5a7e}
 </div>
 <div class=card><h2>Activity Timeline (Last 60s)</h2>
 <div class=chart id=m-ch><em>Waiting for data...</em></div>
+</div>
+</div>
+
+
+<!-- PROFILER WIZARD MODAL -->
+<div id="prof-wiz" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;display:none;align-items:center;justify-content:center">
+<div style="background:#1b2838;border:1px solid #66c0f4;border-radius:12px;padding:25px;max-width:550px;width:90%;box-shadow:0 10px 40px rgba(102,192,244,0.2)">
+<h2 style="color:#fff;margin-bottom:10px;font-size:1.4em">&#9881; CPAP Profiler Wizard</h2>
+<p style="font-size:0.9em;color:#c7d5e0;line-height:1.5;margin-bottom:20px">
+This tool will measure your CPAP machine's specific SD card writing behavior to help you tune <strong style="color:#66c0f4">INACTIVITY_SECONDS</strong> (SMART_WAIT).
+</p>
+<div style="background:#0f1923;padding:15px;border-radius:8px;margin-bottom:20px;border:1px solid #2a475e">
+<ol style="font-size:0.85em;color:#8f98a0;padding-left:20px;line-height:1.6">
+<li>Ensure the CPAP machine is <strong>turned ON</strong> and actively blowing air.</li>
+<li>Ensure the SD card is physically inserted into the CPAP.</li>
+<li>Click Start Profiling.</li>
+<li>Wait 2-3 minutes. The wizard will record the longest continuous silence between SD writes.</li>
+</ol>
+</div>
+<div style="text-align:center;margin-bottom:20px">
+<div style="font-size:1.1em;color:#8f98a0;margin-bottom:5px">Longest measured silence:</div>
+<div id="prof-max-idle" style="font-size:2.8em;color:#44ff44;font-family:monospace;font-weight:bold">0.0s</div>
+</div>
+<div id="prof-rec-box" style="display:none;background:#1a3a1a;border:1px solid #2f8f57;padding:12px;border-radius:6px;margin-bottom:20px">
+<div style="font-size:0.9em;color:#c7d5e0">
+Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id="prof-rec-val" style="font-weight:bold;font-size:1.2em;color:#fff">--</span>
+</div>
+<div style="font-size:0.75em;color:#8f98a0;margin-top:4px">(Longest silence + 5 second safety margin)</div>
+</div>
+<div style="display:flex;gap:10px;justify-content:flex-end">
+<button id="btn-prof-cancel" class="btn bs" onclick="document.getElementById('prof-wiz').style.display='none'">Close</button>
+<button id="btn-prof-start" class="btn bp" onclick="startProfiler()" style="background:#aa66ff;color:#fff">Start Profiling</button>
+</div>
 </div>
 </div>
 
@@ -222,7 +256,7 @@ function tab(t){
   });
   curTab=t;
   if(t==='logs'){startLogPoll();}else{stopLogPoll();}
-  if(t==='mon'){startMon();}else{stopMon();}
+  if(t!=='mon'){stopMon();}
   if(t==='cfg'){loadCfg();}
 }
 function toast(msg,mode){
@@ -524,6 +558,9 @@ function fetchMon(){
 }
 
 var profActive=false,profMaxIdle=0;
+function openProfilerWizard(){
+  document.getElementById('prof-wiz').style.display='flex';
+}
 function startProfiler(){
   if(profActive){
     profActive=false;

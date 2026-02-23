@@ -7,7 +7,7 @@ The Logging System (`Logger.cpp/.h`) provides structured logging capabilities fo
 
 ### Log Destinations
 - **Serial output**: Primary logging to USB serial
-- **SD card**: Optional file logging (`/debug.log`)
+- **LittleFS storage**: Optional persisted logging (`/littlefs/syslog.A.txt` / `/littlefs/syslog.B.txt`)
 - **Circular buffer**: In-memory buffer for web interface
 - **Conditional compilation**: Feature flags for different builds
 
@@ -54,16 +54,16 @@ private:
 
 ### Log Settings
 - **LOG_LEVEL**: Minimum log level to output (default: INFO)
-- **LOG_TO_SD_CARD**: Enable SD card logging (default: false)
+- **SAVE_LOGS**: Enable persisted internal logging (default: false)
 - **SERIAL_BAUD**: Serial baud rate (default: 115200)
 - **BUFFER_SIZE**: Circular buffer size (8KB)
 
-### SD Card Logging
+### Persistent Log Saving
 ```ini
-# Enable debug logging to SD card (use with caution)
-LOG_TO_SD_CARD = true
+# Enable persisted debug logging (use with caution)
+SAVE_LOGS = true
 
-# Can interfere with CPAP SD card access
+# Debugging-focused feature; enable only when needed
 # Recommended only for scheduled mode outside therapy times
 ```
 
@@ -90,9 +90,9 @@ void log(LogLevel level, const char* format, ...) {
     // Add to circular buffer
     addToBuffer(timestamp, level, buffer);
     
-    // Write to SD card if enabled
-    if (logToSdCard && level <= LogLevel::LOG_INFO) {
-        writeToSdCard(timestamp, levelStr, buffer);
+    // Persist logs if enabled
+    if (saveLogs && level <= LogLevel::LOG_INFO) {
+        writeToStorage(timestamp, levelStr, buffer);
     }
 }
 ```
@@ -181,12 +181,12 @@ void logPerformance(const char* operation, uint32_t durationMs) {
     logPerformance(#operation, millis() - start);
 ```
 
-## SD Card Logging
+## Persistent Log Saving
 
 ### File Management
 ```cpp
-bool writeToSdCard(uint32_t timestamp, const char* level, const char* message) {
-    File logFile = SD_MMC.open("/debug.log", FILE_APPEND);
+bool writeToStorage(uint32_t timestamp, const char* level, const char* message) {
+    File logFile = LittleFS.open("/littlefs/syslog.A.txt", FILE_APPEND);
     if (!logFile) {
         return false;
     }
@@ -205,15 +205,15 @@ bool writeToSdCard(uint32_t timestamp, const char* level, const char* message) {
 ### Log Rotation
 ```cpp
 void rotateIfNeeded() {
-    File logFile = SD_MMC.open("/debug.log", FILE_READ);
+    File logFile = LittleFS.open("/littlefs/syslog.A.txt", FILE_READ);
     if (logFile && logFile.size() > MAX_LOG_SIZE) {
         logFile.close();
         
         // Rename current log
-        SD_MMC.rename("/debug.log", "/debug.log.old");
+        LittleFS.rename("/littlefs/syslog.A.txt", "/littlefs/syslog.B.txt");
         
         // Delete old log if exists
-        SD_MMC.remove("/debug.log.old");
+        LittleFS.remove("/littlefs/syslog.B.txt");
         
         LOG_INFO("[Logger] Log file rotated");
     }
@@ -237,7 +237,7 @@ void rotateIfNeeded() {
 
 ### Configuration
 - **Log level**: Configurable minimum log level
-- **SD logging**: Optional file-based logging
+- **SAVE_LOGS**: Optional persisted file-based logging
 - **Serial output**: Always enabled for debugging
 - **Buffer size**: Tunable for memory constraints
 
@@ -246,20 +246,20 @@ void rotateIfNeeded() {
 ### Memory Usage
 - **Circular buffer**: 8KB for ~100 log entries
 - **Formatting buffer**: 256 bytes for message formatting
-- **SD logging**: Additional file handle overhead
+- **Persisted logging**: Additional file handle overhead
 - **Serial output**: Minimal memory impact
 
 ### CPU Overhead
 - **String formatting**: snprintf() for message formatting
 - **Buffer management**: Circular index calculations
-- **File I/O**: SD card write operations (optional)
+- **File I/O**: LittleFS write operations (optional)
 - **Serial output**: UART transmission time
 
 ### Optimization Strategies
 - **Conditional compilation**: Exclude debug logs in production
 - **Level filtering**: Early exit for low-priority messages
 - **Buffer sizing**: Tune for memory vs. history tradeoff
-- **Batch writes**: Buffer SD writes for efficiency
+- **Batch writes**: Buffer persisted-log writes for efficiency
 
 ## Security Considerations
 
@@ -270,7 +270,7 @@ void rotateIfNeeded() {
 - **Error messages**: Avoid exposing system internals
 
 ### Log File Protection
-- **Access control**: Log files on SD card
+- **Access control**: Log files on internal LittleFS
 - **Rotation**: Prevent unlimited log growth
 - **Integrity**: Basic log file validation
 - **Privacy**: No personal data in logs
@@ -279,14 +279,14 @@ void rotateIfNeeded() {
 
 ### Common Issues
 - **Missing logs**: Check log level configuration
-- **SD logging failures**: Verify card access permissions
+- **Persisted logging failures**: Verify LittleFS mount and write access
 - **Buffer overflow**: Increase buffer size or reduce log verbosity
 - **Serial issues**: Check baud rate and USB connection
 
 ### Debug Features
 - **Log level testing**: Verify level filtering works
 - **Buffer inspection**: Check circular buffer contents
-- **File verification**: Verify SD log file creation
+- **File verification**: Verify LittleFS log file creation
 - **Performance monitoring**: Measure logging overhead
 
 ## Configuration Examples
@@ -294,19 +294,19 @@ void rotateIfNeeded() {
 ### Production Settings
 ```ini
 LOG_LEVEL = INFO
-LOG_TO_SD_CARD = false
+SAVE_LOGS = false
 ```
 
 ### Debug Settings
 ```ini
 LOG_LEVEL = DEBUG
-LOG_TO_SD_CARD = true
+SAVE_LOGS = true
 ```
 
 ### Minimal Settings
 ```ini
 LOG_LEVEL = ERROR
-LOG_TO_SD_CARD = false
+SAVE_LOGS = false
 ```
 
 ## Future Enhancements

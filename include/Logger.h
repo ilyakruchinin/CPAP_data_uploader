@@ -120,37 +120,35 @@ public:
     size_t printLogsTail(Print& output, size_t maxBytes);
 
     /**
-     * Enable or disable SD card logging
-     * WARNING: SD card logging is for debugging only and can cause conflicts
-     * when accessing the SD card for CPAP data uploads. Use with caution.
+     * Enable or disable persistent log saving.
      * 
-     * When enabled, logs are dumped to SD card periodically (every 10 seconds)
-     * by calling dumpLogsToSDCardPeriodic() from the main loop.
+     * Logs are saved to the provided filesystem (LittleFS in production) and
+     * should only be enabled for troubleshooting.
      * 
-     * @param enable True to enable SD card logging, false to disable
-     * @param sdFS Pointer to SD card filesystem (required when enabling)
+     * When enabled, logs are flushed periodically (every 10 seconds)
+     * by calling dumpSavedLogsPeriodic() from the main loop.
+     * 
+     * @param enable True to enable log saving, false to disable
+     * @param logFS Pointer to filesystem used for persisted logs (required when enabling)
      */
-    void enableSdCardLogging(bool enable, fs::FS* sdFS = nullptr);
+    void enableLogSaving(bool enable, fs::FS* logFS = nullptr);
     
     /**
-     * Periodic SD card log dump (call from main loop every 10 seconds)
-     * Only dumps if there are new logs since last dump.
-     * Safe to call when SD card is in use - will skip dump if unavailable.
+     * Periodic persisted-log flush (call from main loop every 10 seconds).
+     * Only flushes if there are new logs since last dump.
      * 
-     * @param sdManager Pointer to SDCardManager for safe SD card access
-     * @return true if logs were dumped, false if skipped or failed
+     * @param sdManager Unused compatibility parameter
+     * @return true if logs were flushed, false if skipped or failed
      */
-    bool dumpLogsToSDCardPeriodic(class SDCardManager* sdManager);
+    bool dumpSavedLogsPeriodic(class SDCardManager* sdManager);
 
     /**
-     * Dump current logs to SD card for critical failures
-     * This method handles SD card control internally and is safe to call
-     * from any context. It creates a timestamped debug log file.
+     * Save current logs to persistent storage for critical failures.
      * 
-     * @param reason Description of why logs are being dumped (e.g., "wifi_connection_failed")
-     * @return true if logs were successfully dumped, false otherwise
+     * @param reason Description of why logs are being saved (e.g., "wifi_connection_failed")
+     * @return true if logs were successfully saved, false otherwise
      */
-    bool dumpLogsToSDCard(const String& reason);
+    bool dumpSavedLogs(const String& reason);
 
     /**
      * Check if logger is properly initialized
@@ -189,11 +187,10 @@ protected:
     void writeToBuffer(const char* data, size_t len);
 
     /**
-     * Write data to SD card log file (debugging only)
-     * WARNING: Can cause conflicts with CPAP data access
+     * Write data to persistent log storage (debugging only)
      * Virtual to allow mocking in tests
      */
-    virtual void writeToSdCard(const char* data, size_t len);
+    virtual void writeToStorage(const char* data, size_t len);
 
     /**
      * Track bytes lost due to buffer overflow
@@ -218,13 +215,13 @@ protected:
     // Initialization state
     bool initialized;
 
-    // SD card logging (debugging only)
-    bool sdCardLoggingEnabled;
-    fs::FS* sdFileSystem;
+    // Persistent log saving (debugging only)
+    bool logSavingEnabled;
+    fs::FS* logFileSystem;
     String logFileName;
     
-    // Periodic SD dump tracking
-    volatile uint32_t lastDumpedBytes;  // Track bytes already dumped to SD
+    // Periodic persisted-log tracking
+    volatile uint32_t lastDumpedBytes;  // Track bytes already flushed
 };
 
 // Runtime debug mode flag — set from config DEBUG=true after config load.

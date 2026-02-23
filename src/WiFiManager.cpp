@@ -156,14 +156,14 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
     // Validate SSID before attempting connection
     if (ssid.isEmpty()) {
         LOG_ERROR("Cannot connect to WiFi: SSID is empty");
-        Logger::getInstance().dumpLogsToSDCard("wifi_config_error");
+        Logger::getInstance().dumpSavedLogs("wifi_config_error");
         return false;
     }
     
     if (ssid.length() > 32) {
         LOG_ERROR("Cannot connect to WiFi: SSID exceeds 32 character limit");
         LOGF("SSID length: %d characters", ssid.length());
-        Logger::getInstance().dumpLogsToSDCard("wifi_config_error");
+        Logger::getInstance().dumpSavedLogs("wifi_config_error");
         return false;
     }
     
@@ -212,8 +212,8 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
                 break;
         }
         
-        // Dump logs to SD card for critical connection failures
-        Logger::getInstance().dumpLogsToSDCard("wifi_connection_failed");
+        // Persist logs for critical connection failures
+        Logger::getInstance().dumpSavedLogs("wifi_connection_failed");
         connected = false;
         return false;
     }

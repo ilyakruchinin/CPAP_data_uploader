@@ -366,9 +366,9 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - Useful for diagnosing upload scheduling issues; disable when not needed
 - Example: `DEBUG = true`
 
-**LOG_TO_SD_CARD** (optional, default: false)
-- Enable logging system messages to `/debug.log` file on SD card
-- **WARNING**: Can prevent the CPAP machine from reliably accessing the SD card
+**SAVE_LOGS** (optional, default: false)
+- Persist logs to internal LittleFS (`/littlefs/syslog.A.txt` / `/littlefs/syslog.B.txt`)
+- **WARNING**: Debug-only feature; disable when not actively troubleshooting
 - Use only temporarily for troubleshooting, and only with `UPLOAD_MODE`=`"scheduled"` and an upload window outside normal therapy times
 - Automatically disabled if file operations fail
 - Example: `true` or `false`
@@ -482,7 +482,7 @@ GMT_OFFSET_HOURS = 0
 1. Device reads `config.txt` from SD card
 2. Connects to WiFi network
 3. Synchronizes time with internet (NTP)
-4. Loads upload history from `.upload_state.v2` + `.upload_state.v2.log` (if present)
+4. Loads upload history from internal LittleFS state files (if present)
 
 ### Daily Upload Cycle
 1. Waits for upload eligibility based on configured mode (`UPLOAD_MODE`)
@@ -500,7 +500,7 @@ GMT_OFFSET_HOURS = 0
    **Cloud:** Associates data with your SleepHQ account (OAuth only if needed)
 7. Releases SD card after session or time budget exhausted
 8. **Automatic heap recovery** reboots if memory fragmented (seamless fast-boot)
-9. Saves progress to separate state files for each backend (`.upload_state.v2.smb`/`.cloud` + journals)
+9. Saves progress to separate internal state files for each backend (`/littlefs/.upload_state.v2.smb`/`.cloud` + journals)
 
 ### Smart File Tracking
 - **DATALOG folders**: Tracks completion (all files uploaded = done)
@@ -724,9 +724,8 @@ In scheduled mode the uploader **only runs during the configured window** (e.g. 
 - Check logs for specific errors
 
 **Same files uploading repeatedly**
-- Check `.upload_state.v2` exists on SD card
-- Check `.upload_state.v2.log` is writable
-- Verify SD card has write permission
+- Check LittleFS is mounted (look for `LittleFS mounted successfully` in logs)
+- Check reset-state was not triggered unexpectedly
 - Try reset state via web interface
 
 ### Time Sync Issues
@@ -759,7 +758,7 @@ http://<device-ip>/logs
 ```
 
 **Check Upload State**
-- Look for `.upload_state.v2.smb`/`.cloud` and their `.log` files on SD card
+- Look for `/littlefs/.upload_state.v2.smb`/`.cloud` and their `.log` files in internal LittleFS
 - Contains upload history, retry counts, and incremental journal updates for each backend
 
 ---
@@ -770,10 +769,6 @@ http://<device-ip>/logs
 ```
 /
 ├── config.txt               # Your configuration (you create this)
-├── .upload_state.v2.smb     # SMB upload tracking (auto-created)
-├── .upload_state.v2.smb.log # SMB upload journal (auto-created)
-├── .upload_state.v2.cloud   # Cloud upload tracking (auto-created)
-├── .upload_state.v2.cloud.log # Cloud upload journal (auto-created)
 ├── Identification.json      # ResMed 11 identification (if present)
 ├── Identification.crc       # Identification checksum (if present)
 ├── Identification.tgt       # ResMed 9/10 identification (if present)
@@ -786,6 +781,19 @@ http://<device-ip>/logs
 └── SETTINGS/                # Settings folder
     ├── CurrentSettings.json
     └── CurrentSettings.crc
+```
+
+### Internal LittleFS (ESP32 flash)
+```
+/littlefs/.upload_state.v2.smb
+/littlefs/.upload_state.v2.smb.log
+/littlefs/.upload_state.v2.cloud
+/littlefs/.upload_state.v2.cloud.log
+/littlefs/.backend_summary.smb
+/littlefs/.backend_summary.cloud
+/littlefs/syslog.A.txt
+/littlefs/syslog.B.txt
+/littlefs/crash_log.txt
 ```
 
 ### On Network Share

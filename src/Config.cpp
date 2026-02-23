@@ -10,7 +10,7 @@ const char* Config::CENSORED_VALUE = "***STORED_IN_FLASH***";
 
 Config::Config() : 
     gmtOffsetHours(0),  // Default: UTC
-    logToSdCard(false),  // Default: do not log to SD card (debugging only)
+    saveLogs(false),  // Default: do not persist logs (debugging only)
     debugMode(false),    // Default: suppress verbose pre-flight and heap stats
     isValid(false),
     
@@ -28,6 +28,7 @@ Config::Config() :
     inactivitySeconds(62),
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
+    enableSdCmd0Reset(true),
     
     _hasSmbEndpoint(false),
     _hasCloudEndpoint(false),
@@ -189,8 +190,9 @@ void Config::setConfigValue(String key, String value) {
         endpointPassword = value;
     } else if (key == "GMT_OFFSET_HOURS") {
         gmtOffsetHours = value.toInt();
-    } else if (key == "LOG_TO_SD_CARD") {
-        logToSdCard = (value.equalsIgnoreCase("true") || value.toInt() == 1);
+    // LOG_TO_SD_CARD is accepted as a backward-compatible alias for SAVE_LOGS.
+    } else if (key == "SAVE_LOGS" || key == "LOG_TO_SD_CARD") {
+        saveLogs = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "DEBUG") {
         debugMode = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "CLOUD_CLIENT_ID") {
@@ -568,7 +570,7 @@ const String& Config::getEndpointType() const { return endpointType; }
 const String& Config::getEndpointUser() const { return endpointUser; }
 const String& Config::getEndpointPassword() const { return endpointPassword; }
 int Config::getGmtOffsetHours() const { return gmtOffsetHours; }
-bool Config::getLogToSdCard() const { return logToSdCard; }
+bool Config::getSaveLogs() const { return saveLogs; }
 bool Config::getDebugMode() const { return debugMode; }
 bool Config::valid() const { return isValid; }
 

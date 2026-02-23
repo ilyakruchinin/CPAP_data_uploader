@@ -211,7 +211,7 @@ bool SleepHQUploader::discoverTeamId() {
     }
     
     // Parse response to get current_team_id
-    DynamicJsonDocument doc(2048);
+    StaticJsonDocument<2048> doc;
     DeserializationError error = deserializeJson(doc, responseBody);
     if (error) {
         LOG_ERRORF("[SleepHQ] Failed to parse /me response: %s", error.c_str());
@@ -397,7 +397,7 @@ bool SleepHQUploader::createImport() {
             
             if (rawHttpCode == 201 || rawHttpCode == 200) {
                 // Parse import_id from JSON response
-                DynamicJsonDocument doc(2048);
+                StaticJsonDocument<2048> doc;
                 DeserializationError err = deserializeJson(doc, respBuf);
                 if (!err) {
                     long importIdVal = 0;
