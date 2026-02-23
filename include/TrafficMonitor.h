@@ -47,7 +47,7 @@ public:
     uint32_t getLongestIdleMs() const;
     uint32_t getTotalActiveSamples() const;
     uint32_t getTotalIdleSamples() const;
-    uint16_t getLastPulseCount() const;
+    uint32_t getLastPulseCount() const;
     
     // Reset statistics (e.g., when entering MONITORING mode)
     void resetStatistics();

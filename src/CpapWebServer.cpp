@@ -5,6 +5,8 @@
 #include "web_ui.h"
 #include "WebStatus.h"
 #include <time.h>
+#include <SD_MMC.h>
+#include <LittleFS.h>
 
 // Global trigger flags
 volatile bool g_triggerUploadFlag = false;
@@ -13,6 +15,9 @@ volatile bool g_softRebootFlag = false;
 
 // Monitoring trigger flags
 volatile bool g_monitorActivityFlag = false;
+
+// Cooperative upload abort flag — set when config lock is requested during an active upload
+volatile bool g_abortUploadFlag = false;
 volatile bool g_stopMonitorFlag = false;
 
 // External FSM state (defined in main.cpp)
@@ -73,14 +78,13 @@ void sendUploadRateLimitResponse(WebServer* server,
 // Constructor
 CpapWebServer::CpapWebServer(Config* cfg, UploadStateManager* state,
                              ScheduleManager* schedule, 
-                             WiFiManager* wifi, CPAPMonitor* monitor)
+                             WiFiManager* wifi)
     : server(nullptr),
       config(cfg),
       stateManager(state),
       smbStateManager(nullptr),
       scheduleManager(schedule),
       wifiManager(wifi),
-      cpapMonitor(monitor),
       trafficMonitor(nullptr),
       sdManager(nullptr)
 #ifdef ENABLE_OTA_UPDATES
@@ -160,6 +164,10 @@ bool CpapWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleSdActivity();
     });
+    server->on("/api/diagnostics", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiDiagnostics();
+    });
     server->on("/reset-state", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleResetState();
@@ -171,6 +179,10 @@ bool CpapWebServer::begin() {
     server->on("/api/config-raw",  HTTP_GET,  [this]() { this->handleApiConfigRawGet(); });
     server->on("/api/config-raw",  HTTP_POST, [this]() { this->handleApiConfigRawPost(); });
     server->on("/api/config-lock", HTTP_POST, [this]() { this->handleApiConfigLock(); });
+    server->on("/api/logs/saved", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsSaved();
+    });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -199,13 +211,30 @@ bool CpapWebServer::begin() {
     
     LOG("[WebServer] Web server started successfully");
     LOG("[WebServer] Available endpoints:");
-    LOG("[WebServer]   GET /              - Status page (HTML)");
-    LOG("[WebServer]   GET /trigger-upload - Force immediate upload");
-    LOG("[WebServer]   GET /status        - Status information (JSON)");
-    LOG("[WebServer]   GET /reset-state   - Clear upload state");
-    LOG("[WebServer]   GET /config        - Display configuration");
-    LOG("[WebServer]   GET /logs          - Retrieve system logs (JSON)");
-    LOG("[WebServer]   GET /monitor       - SD Activity Monitor (live)");
+    LOG("[WebServer]   GET  /                  - Dashboard (SPA)");
+    LOG("[WebServer]   GET  /status             - Status page (SPA)");
+    LOG("[WebServer]   GET  /config             - Config page (SPA)");
+    LOG("[WebServer]   GET  /logs               - Logs page (SPA)");
+    LOG("[WebServer]   GET  /monitor            - Monitor page (SPA)");
+    LOG("[WebServer]   GET  /trigger-upload     - Force immediate upload");
+    LOG("[WebServer]   GET  /soft-reboot        - Soft reboot (skips cold-boot delay)");
+    LOG("[WebServer]   GET  /reset-state        - Clear upload state and reboot");
+    LOG("[WebServer]   GET  /api/status         - Live status JSON");
+    LOG("[WebServer]   GET  /api/config         - Config snapshot JSON");
+    LOG("[WebServer]   GET  /api/logs           - In-memory log buffer (plain text)");
+    LOG("[WebServer]   GET  /api/logs/saved     - Download persisted LittleFS logs");
+    LOG("[WebServer]   GET  /api/sd-activity    - SD bus activity samples JSON");
+    LOG("[WebServer]   GET  /api/diagnostics    - Heap/system diagnostics JSON");
+    LOG("[WebServer]   GET  /api/config-raw     - Raw config.txt contents");
+    LOG("[WebServer]   POST /api/config-raw     - Save raw config.txt");
+    LOG("[WebServer]   POST /api/config-lock    - Acquire/release config edit lock");
+    LOG("[WebServer]   GET  /api/monitor-start  - Start SD activity monitoring");
+    LOG("[WebServer]   GET  /api/monitor-stop   - Stop SD activity monitoring");
+#ifdef ENABLE_OTA_UPDATES
+    LOG("[WebServer]   GET  /ota               - OTA firmware update page");
+    LOG("[WebServer]   POST /ota-upload         - Upload firmware binary");
+    LOG("[WebServer]   POST /ota-url            - Trigger OTA from URL");
+#endif
     
     return true;
 }
@@ -503,6 +532,40 @@ void CpapWebServer::handleApiLogs() {
     server->sendContent("");
 }
 
+// GET /api/logs/saved — flush, then stream syslog.B.txt (older) + syslog.A.txt (newer) from LittleFS
+void CpapWebServer::handleApiLogsSaved() {
+    // Flush any unflushed in-memory logs before serving so the download is current
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+
+    addCorsHeaders(server);
+    server->sendHeader("Content-Disposition", "attachment; filename=\"cpap_logs.txt\"");
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/plain; charset=utf-8", " ");
+    ChunkedPrint chunked(server);
+
+    const char* files[] = {"/syslog.B.txt", "/syslog.A.txt"};
+    bool anyFound = false;
+    for (int i = 0; i < 2; i++) {
+        File f = LittleFS.open(files[i], FILE_READ);
+        if (!f) continue;
+        anyFound = true;
+        chunked.print("\n=== ");
+        chunked.print(files[i]);
+        chunked.print(" ===\n");
+        uint8_t buf[256];
+        while (f.available()) {
+            size_t n = f.read(buf, sizeof(buf));
+            if (n > 0) chunked.write(buf, n);
+            yield();
+        }
+        f.close();
+    }
+    if (!anyFound) {
+        chunked.print("[No saved log files found — enable SAVE_LOGS=true in config.txt to persist logs]\n");
+    }
+    server->sendContent("");
+}
+
 // GET /config - serve SPA
 void CpapWebServer::handleConfigPage() {
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
@@ -707,11 +770,6 @@ void CpapWebServer::handleApiConfigRawPost() {
         server->send(503, "application/json", "{\"error\":\"SD manager unavailable\"}");
         return;
     }
-    if (isUploadInProgress()) {
-        server->send(409, "application/json", "{\"error\":\"Upload in progress — cannot edit config now\"}");
-        return;
-    }
-
     size_t bodyLen = server->arg("plain").length();
     if (bodyLen == 0) {
         server->send(400, "application/json", "{\"error\":\"Empty body\"}");
@@ -739,15 +797,30 @@ void CpapWebServer::handleApiConfigRawPost() {
     sd.remove("/config.txt.tmp");
     File f = sd.open("/config.txt.tmp", FILE_WRITE);
     if (!f) {
-        if (tookControl) sdManager->releaseControl();
-        server->send(500, "application/json", "{\"error\":\"Failed to open temp file for writing\"}");
-        return;
+        // SD is mounted read-only. We need to remount it read-write briefly.
+        SD_MMC.end();
+        if (!SD_MMC.begin("/sdcard", false)) { // Remount R/W
+            if (tookControl) sdManager->releaseControl();
+            server->send(500, "application/json", "{\"error\":\"Failed to remount SD card read-write\"}");
+            return;
+        }
+        
+        f = sd.open("/config.txt.tmp", FILE_WRITE);
+        if (!f) {
+            SD_MMC.end();
+            SD_MMC.begin("/sdcard", true); // Remount R/O
+            if (tookControl) sdManager->releaseControl();
+            server->send(500, "application/json", "{\"error\":\"Failed to open temp file for writing\"}");
+            return;
+        }
     }
     size_t written = f.print(body);
     f.close();
 
     if (written != bodyLen) {
         sd.remove("/config.txt.tmp");
+        SD_MMC.end();
+        SD_MMC.begin("/sdcard", true); // Remount R/O
         if (tookControl) sdManager->releaseControl();
         server->send(500, "application/json", "{\"error\":\"Write incomplete\"}");
         return;
@@ -755,14 +828,20 @@ void CpapWebServer::handleApiConfigRawPost() {
 
     sd.remove("/config.txt");
     if (!sd.rename("/config.txt.tmp", "/config.txt")) {
+        SD_MMC.end();
+        SD_MMC.begin("/sdcard", true); // Remount R/O
         if (tookControl) sdManager->releaseControl();
         server->send(500, "application/json", "{\"error\":\"Rename failed\"}");
         return;
     }
 
+    // Remount Read-Only
+    SD_MMC.end();
+    SD_MMC.begin("/sdcard", true);
+
     if (tookControl) sdManager->releaseControl();
     LOG("[WebServer] config.txt updated via web UI");
-    server->send(200, "application/json", "{\"ok\":true,\"message\":\"Saved. Reboot to apply.\"}");
+    server->send(200, "application/json", "{\"ok\":true,\"message\":\"Saved successfully. CRITICAL: You MUST physically eject and reinsert the SD card into the CPAP machine now to prevent data corruption!\"}");
 }
 
 // ---------------------------------------------------------------------------
@@ -784,12 +863,6 @@ void CpapWebServer::handleApiConfigLock() {
         lock = false;
     } else {
         server->send(400, "application/json", "{\"error\":\"Body must contain 'true' or 'false'\"}");
-        return;
-    }
-
-    if (lock && isUploadInProgress()) {
-        server->send(409, "application/json",
-                     "{\"error\":\"Upload in progress — cannot lock config now\",\"locked\":false}");
         return;
     }
 
@@ -1261,8 +1334,8 @@ void CpapWebServer::handleSdActivity() {
         if (compactJson[0] == '\0' || now - lastCompactRefreshMs >= 1000) {
             snprintf(compactJson,
                      sizeof(compactJson),
-                     "{\"last_pulse_count\":%d,\"consecutive_idle_ms\":%lu,\"longest_idle_ms\":%lu,\"total_active_samples\":%lu,\"total_idle_samples\":%lu,\"is_busy\":%s,\"sample_count\":%d,\"samples\":[],\"degraded\":true}",
-                     trafficMonitor->getLastPulseCount(),
+                     "{\"last_pulse_count\":%lu,\"consecutive_idle_ms\":%lu,\"longest_idle_ms\":%lu,\"total_active_samples\":%lu,\"total_idle_samples\":%lu,\"is_busy\":%s,\"sample_count\":%d,\"samples\":[],\"degraded\":true}",
+                     (unsigned long)trafficMonitor->getLastPulseCount(),
                      (unsigned long)trafficMonitor->getConsecutiveIdleMs(),
                      (unsigned long)trafficMonitor->getLongestIdleMs(),
                      (unsigned long)trafficMonitor->getTotalActiveSamples(),
@@ -1279,10 +1352,10 @@ void CpapWebServer::handleSdActivity() {
     // Build JSON with current stats and recent samples
     String json = "{";
     json += "\"last_pulse_count\":" + String(trafficMonitor->getLastPulseCount()) + ",";
-    json += "\"consecutive_idle_ms\":" + String(trafficMonitor->getConsecutiveIdleMs()) + ",";
-    json += "\"longest_idle_ms\":" + String(trafficMonitor->getLongestIdleMs()) + ",";
-    json += "\"total_active_samples\":" + String(trafficMonitor->getTotalActiveSamples()) + ",";
-    json += "\"total_idle_samples\":" + String(trafficMonitor->getTotalIdleSamples()) + ",";
+    json += "\"consecutive_idle_ms\":" + String((unsigned long)trafficMonitor->getConsecutiveIdleMs()) + ",";
+    json += "\"longest_idle_ms\":" + String((unsigned long)trafficMonitor->getLongestIdleMs()) + ",";
+    json += "\"total_active_samples\":" + String((unsigned long)trafficMonitor->getTotalActiveSamples()) + ",";
+    json += "\"total_idle_samples\":" + String((unsigned long)trafficMonitor->getTotalIdleSamples()) + ",";
     json += "\"is_busy\":" + String(trafficMonitor->isBusy() ? "true" : "false") + ",";
     json += "\"sample_count\":" + String(trafficMonitor->getSampleCount()) + ",";
     
@@ -1311,6 +1384,19 @@ void CpapWebServer::handleSdActivity() {
     
     json += "]}";
     
+    server->send(200, "application/json", json);
+}
+
+void CpapWebServer::handleApiDiagnostics() {
+    addCorsHeaders(server);
+    server->sendHeader("Cache-Control", "no-store");
+    
+    char json[128];
+    snprintf(json, sizeof(json), 
+             "{\"free_heap\":%u,\"max_alloc\":%u}", 
+             (unsigned)ESP.getFreeHeap(), 
+             (unsigned)ESP.getMaxAllocHeap());
+             
     server->send(200, "application/json", json);
 }
 

@@ -143,11 +143,11 @@ public:
         // Do nothing - we're testing buffer logic, not serial output
     }
     
-    // Mock writeToSdCard to do nothing (not used in our tests)
-    virtual void writeToSdCard(const char* data, size_t len) override {
+    // Mock writeToStorage to do nothing (not used in our tests)
+    virtual void writeToStorage(const char* data, size_t len) override {
         (void)data;
         (void)len;
-        // Do nothing - not testing SD card functionality
+        // Do nothing - not testing persisted-log functionality
     }
     
     // Mock trackLostBytes to do nothing (handled in writeToBuffer)
