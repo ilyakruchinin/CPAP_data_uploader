@@ -166,7 +166,6 @@ nav button:hover:not(.act){background:#3a5a7e}
 <button id=btn-mst class="btn bp" onclick=startMon()>Start Monitoring</button>
 <button id=btn-msp class="btn bd" onclick=stopMon() style=display:none>Stop</button>
 <button class="btn bs" onclick=openProfilerWizard()>&#9881; Profiler Wizard</button>
-<button class="btn bs" onclick="tab('dash')">&#8592; Dashboard</button>
 </div>
 </div>
 <div class=stats-grid>
@@ -217,8 +216,8 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 <div id=mem class=page>
 <div class=card style="margin-bottom:10px"><h2>Runtime Memory <span style="font-size:.7em;color:#8f98a0;font-weight:400">(live, 2s)</span></h2>
 <div class=stats-grid>
-<div class=stat-box><span class=sl>Free Heap</span><span class=sv id=hd-fh style="color:#66c0f4">—</span><span style="font-size:.72em;color:#8f98a0;margin-top:2px;display:block">Min (2m): <span id=hd-fh-min>—</span></span></div>
-<div class=stat-box><span class=sl>Max Contiguous</span><span class=sv id=hd-ma style="color:#aa66ff">—</span><span style="font-size:.72em;color:#8f98a0;margin-top:2px;display:block">Min (2m): <span id=hd-ma-min>—</span></span></div>
+<div class=stat-box><span class=sl>Free Heap</span><span class=sv id=hd-fh style="color:#66c0f4">—</span><span class=sl style="margin-top:6px">Min (2m)</span><span class=sv id=hd-fh-min style="color:#ddaa44">—</span></div>
+<div class=stat-box><span class=sl>Max Contiguous</span><span class=sv id=hd-ma style="color:#aa66ff">—</span><span class=sl style="margin-top:6px">Min (2m)</span><span class=sv id=hd-ma-min style="color:#ddaa44">—</span></div>
 </div>
 </div>
 <div class=card>
@@ -420,9 +419,12 @@ function _setCfgLockUI(locked){
 }
 function acquireCfgLock(){
   var active=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
-  if(active&&!confirm('An upload is currently in progress.\n\nEditing config will pause the active upload. It resumes automatically on Save, Cancel, or after 30 min.\n\nContinue?'))return;
+  if(active&&!confirm('An upload is currently in progress.\n\nConfirming will abort the upload session so you can edit the config.\n\nContinue?'))return;
+  _doAcquireCfgLock();
+}
+function _doAcquireCfgLock(){
   var msg=document.getElementById('cfg-raw-msg');
-  msg.style.color='#8f98a0';msg.textContent='Pausing uploads...';
+  msg.style.color='#8f98a0';msg.textContent='Requesting lock...';
   fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":true}',cache:'no-store'})
   .then(function(r){return r.json();})
   .then(function(d){
@@ -430,8 +432,16 @@ function acquireCfgLock(){
       _setCfgLockUI(true);
       loadRawCfg();
       msg.textContent='';
-    }else{msg.style.color='#ff6060';msg.textContent='Cannot lock: '+(d.error||'?');}
-  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Lock failed: '+e.message;});
+    }else if(d.aborting){
+      msg.style.color='#ddaa44';msg.textContent='\u23f3 Aborting upload \u2014 waiting for safe stop...';
+      var poll=setInterval(function(){
+        if(currentFsmState!=='UPLOADING'&&currentFsmState!=='ACQUIRING'){
+          clearInterval(poll);
+          _doAcquireCfgLock();
+        }
+      },2000);
+    }else{msg.style.color='#ff6060';msg.textContent='Lock failed: '+(d.error||'?');}
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Lock error: '+e.message;});
 }
 function releaseCfgLock(){
   fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});

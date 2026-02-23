@@ -10,6 +10,9 @@
 #include "CpapWebServer.h"
 #endif
 
+// Cooperative abort flag — set by web server when config lock is requested during upload
+extern volatile bool g_abortUploadFlag;
+
 // Constructor
 FileUploader::FileUploader(Config* cfg, WiFiManager* wifiManager) 
     : config(cfg),
@@ -1023,6 +1026,11 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
 #ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
+        if (g_abortUploadFlag) {
+            LOG_WARN("[FileUploader] [SMB] Abort requested — stopping upload cleanly");
+            smbStateManager->save(stateFs);
+            return false;
+        }
     }
 
     if (isRescan) {
@@ -1199,6 +1207,11 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
 #ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
+        if (g_abortUploadFlag) {
+            LOG_WARN("[FileUploader] [Cloud] Abort requested — stopping upload cleanly");
+            cloudStateManager->save(stateFs);
+            return false;
+        }
     }
 
     if (isRescan) {

@@ -21,6 +21,7 @@ extern volatile bool g_resetStateFlag;
 extern volatile bool g_softRebootFlag;
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
+extern volatile bool g_abortUploadFlag;
 
 // Config edit lock — set by web UI to pause FSM uploads while user edits config
 extern bool g_configEditLock;
