@@ -52,7 +52,8 @@ private:
     void handleConfigPage();      // HTML Config Page
     void handleApiConfig();       // JSON Config API
     void handleLogs();            // HTML Logs Viewer (AJAX)
-    void handleApiLogs();         // Raw Logs API
+    void handleApiLogs();         // Raw Logs API (in-memory buffer)
+    void handleApiLogsSaved();    // Saved log files from LittleFS (syslog.A/B.txt)
     void handleNotFound();
     void handleMonitorStart();
     void handleMonitorStop();
