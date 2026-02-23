@@ -1022,6 +1022,10 @@ bool UploadStateManager::applyJournalLine(const char* line) {
 }
 
 bool UploadStateManager::replayJournal(fs::FS &sd) {
+    if (!sd.exists(stateJournalPath)) {
+        journalLineCount = 0;
+        return false;
+    }
     File file = sd.open(stateJournalPath, FILE_READ);
     if (!file) {
         journalLineCount = 0;
