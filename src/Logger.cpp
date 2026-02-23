@@ -53,8 +53,8 @@ Logger::Logger()
     , totalBytesLost(0)
     , mutex(nullptr)
     , initialized(false)
-    , sdCardLoggingEnabled(false)
-    , sdFileSystem(nullptr)
+    , logSavingEnabled(false)
+    , logFileSystem(nullptr)
     , logFileName("/debug_log.txt")
     , lastDumpedBytes(0)
 {
@@ -154,8 +154,8 @@ void Logger::log(const char* message) {
         writeToBuffer(finalMsg, len);
     }
     
-    // Note: SD card logging is now handled by periodic dump task
-    // See dumpLogsToSDCardPeriodic() which should be called from main loop
+    // Note: persistent log saving is handled by the periodic flush task.
+    // See dumpSavedLogsPeriodic() which should be called from main loop.
 }
 
 // Log an Arduino String message
@@ -496,22 +496,22 @@ size_t Logger::printLogsTail(Print& output, size_t maxBytes) {
     return bytesWritten;
 }
 
-// Enable or disable SD card logging (debugging only)
-void Logger::enableSdCardLogging(bool enable, fs::FS* sdFS) {
-    if (enable && sdFS == nullptr) {
+// Enable or disable persistent log saving (debugging only)
+void Logger::enableLogSaving(bool enable, fs::FS* logFS) {
+    if (enable && logFS == nullptr) {
         // Cannot enable without valid filesystem
         return;
     }
     
-    sdCardLoggingEnabled = enable;
-    sdFileSystem = enable ? sdFS : nullptr;
+    logSavingEnabled = enable;
+    logFileSystem = enable ? logFS : nullptr;
     
     if (enable) {
         // Reset dump tracking when enabling
         lastDumpedBytes = 0;
         
         // Log a warning message about debugging use
-        String warningMsg = getTimestamp() + "[WARN] SD card logging enabled - DEBUGGING ONLY - Logs will be dumped periodically\n";
+        String warningMsg = getTimestamp() + "[WARN] Persistent log saving enabled - DEBUGGING ONLY - Logs will be flushed periodically\n";
         writeToSerial(warningMsg.c_str(), warningMsg.length());
         if (initialized && buffer != nullptr) {
             writeToBuffer(warningMsg.c_str(), warningMsg.length());
@@ -520,11 +520,13 @@ void Logger::enableSdCardLogging(bool enable, fs::FS* sdFS) {
 }
 
 // Periodic internal log dump (call from main loop every 10 seconds)
-bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
+bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
 #ifdef UNIT_TEST
     return false; // Not supported in unit tests
 #else
-    if (!sdCardLoggingEnabled || sdFileSystem == nullptr) {
+    (void)sdManager;
+
+    if (!logSavingEnabled || logFileSystem == nullptr) {
         return false;
     }
     
@@ -595,9 +597,9 @@ bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
     String activeLogFile = "/littlefs/syslog.A.txt";
     String inactiveLogFile = "/littlefs/syslog.B.txt";
     
-    File logFile = sdFileSystem->open(activeLogFile, FILE_APPEND);
+    File logFile = logFileSystem->open(activeLogFile, FILE_APPEND);
     if (!logFile) {
-        logFile = sdFileSystem->open(activeLogFile, FILE_WRITE);
+        logFile = logFileSystem->open(activeLogFile, FILE_WRITE);
         if (!logFile) {
             return false;
         }
@@ -610,27 +612,27 @@ bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
     // Simple rotation: if file A is > 20KB, rename it to B (overwriting B),
     // so the next write creates a fresh file A.
     if (fileSize > 20480) {
-        sdFileSystem->remove(inactiveLogFile);
-        sdFileSystem->rename(activeLogFile, inactiveLogFile);
+        logFileSystem->remove(inactiveLogFile);
+        logFileSystem->rename(activeLogFile, inactiveLogFile);
     }
     
     return true;
 #endif
 }
 
-// Write data to SD card log file (debugging only) - DEPRECATED
-// This method is no longer used - SD logging is now handled by dumpLogsToSDCardPeriodic()
-void Logger::writeToSdCard(const char* data, size_t len) {
+// Write data to persistent log storage (debugging only) - DEPRECATED
+// This method is no longer used - periodic saving is handled by dumpSavedLogsPeriodic()
+void Logger::writeToStorage(const char* data, size_t len) {
     // This method is deprecated and no longer used
-    // SD card logging is now handled by periodic dump task
+    // Persistent log saving is handled by periodic flush task
     // Kept for interface compatibility
 }
 // Dump current logs to internal FS for critical failures
-bool Logger::dumpLogsToSDCard(const String& reason) {
+bool Logger::dumpSavedLogs(const String& reason) {
 #ifdef UNIT_TEST
     return false; // Not supported in unit tests
 #else
-    if (!sdFileSystem) {
+    if (!logFileSystem) {
         return false;
     }
     
@@ -645,10 +647,10 @@ bool Logger::dumpLogsToSDCard(const String& reason) {
     String filename = "/littlefs/crash_log.txt";
     
     // Write logs to FS (append mode to preserve previous dumps)
-    File logFile = sdFileSystem->open(filename, FILE_APPEND);
+    File logFile = logFileSystem->open(filename, FILE_APPEND);
     if (!logFile) {
         // If file doesn't exist, create it
-        logFile = sdFileSystem->open(filename, FILE_WRITE);
+        logFile = logFileSystem->open(filename, FILE_WRITE);
         if (!logFile) {
             return false;
         }

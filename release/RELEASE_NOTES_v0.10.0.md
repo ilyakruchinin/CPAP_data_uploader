@@ -63,5 +63,5 @@ This release fundamentally changes how the ESP32 interacts with the SD card, mig
 
 ## Upgrade Notes
 
-- **Logs Location:** If `LOG_TO_SD_CARD=true` is set in your `config.txt`, logs are now written to the internal `LittleFS` partition (as `syslog.A.txt` / `syslog.B.txt` ping-pong files) to prevent SD card corruption. They can be viewed normally via the Web UI Logs tab.
+- **Logs Location:** If `SAVE_LOGS=true` is set in your `config.txt`, logs are written to the internal `LittleFS` partition (as `syslog.A.txt` / `syslog.B.txt` ping-pong files). They can be viewed normally via the Web UI Logs tab.
 - **First Boot:** Upon installing v0.10.0, your ESP32 will format its internal `LittleFS` partition. The very first upload session will scan your entire SD card from scratch, as the old `.upload_state.v2` tracking files on the SD card are no longer used.

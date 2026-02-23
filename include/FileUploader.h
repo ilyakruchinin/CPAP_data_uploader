@@ -31,7 +31,7 @@ class CpapWebServer;
 // Which upload backend is active this session
 enum class UploadBackend { NONE, SMB, CLOUD };
 
-// Lightweight per-backend session summary (written to SD at session start and end)
+// Lightweight per-backend session summary (written to LittleFS at session start and end)
 struct BackendSummary {
     uint32_t sessionStartTs;  // Unix ts recorded at session start
     int      foldersTotal;

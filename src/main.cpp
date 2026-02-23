@@ -93,9 +93,9 @@ const unsigned long NTP_RETRY_INTERVAL_MS = 5 * 60 * 1000;  // 5 minutes
 unsigned long lastWifiReconnectAttempt = 0;
 unsigned long lastSdCardRetry = 0;
 
-// SD card logging periodic dump timing
-unsigned long lastLogDumpTime = 0;
-const unsigned long LOG_DUMP_INTERVAL_MS = 10 * 1000;  // 10 seconds
+// Persistent log flush timing
+unsigned long lastLogFlushTime = 0;
+const unsigned long LOG_FLUSH_INTERVAL_MS = 10 * 1000;  // 10 seconds
 
 // Runtime debug mode: set from config DEBUG=true after config load.
 // Gates [res fh= ma= fd=] heap suffix on all log lines and verbose pre-flight output.
@@ -271,18 +271,28 @@ void setup() {
             resetPrefs.putBool("reset_state", false);
             resetPrefs.end();
             
-            // Delete all known state file paths: per-backend (current) + old default (legacy)
+            // Delete all known state/summary paths from internal LittleFS only.
             static const char* STATE_FILES[] = {
-                "/.upload_state.v2.smb",
+                "/littlefs/.upload_state.v2.smb",
+                "/littlefs/.upload_state.v2.smb.log",
+                "/littlefs/.upload_state.v2.cloud",
+                "/littlefs/.upload_state.v2.cloud.log",
+                "/littlefs/.backend_summary.smb",
+                "/littlefs/.backend_summary.cloud",
+                "/littlefs/.upload_state.v2",      // legacy: pre-split single-manager path
+                "/littlefs/.upload_state.v2.log",
+                "/.upload_state.v2.smb",           // legacy files in LittleFS root
                 "/.upload_state.v2.smb.log",
                 "/.upload_state.v2.cloud",
                 "/.upload_state.v2.cloud.log",
-                "/.upload_state.v2",        // legacy: pre-split single-manager path
+                "/.backend_summary.smb",
+                "/.backend_summary.cloud",
+                "/.upload_state.v2",
                 "/.upload_state.v2.log",
             };
             bool removedAny = false;
             for (const char* path : STATE_FILES) {
-                if (sdManager.getFS().remove(path)) {
+                if (LittleFS.remove(path)) {
                     LOGF("Deleted state file: %s", path);
                     removedAny = true;
                 }
@@ -304,10 +314,10 @@ void setup() {
         
         sdManager.releaseControl();
         
-        // Dump logs to SD card for configuration failures
-        bool dumped = Logger::getInstance().dumpLogsToSDCard("config_load_failed");
+        // Save logs to internal storage for configuration failures
+        bool dumped = Logger::getInstance().dumpSavedLogs("config_load_failed");
         if (!dumped) {
-            LOG_WARN("Failed to dump logs to SD card (config_load_failed)");
+            LOG_WARN("Failed to persist logs (config_load_failed)");
         }
 
         // Fail-safe: always force SD switch back to CPAP before aborting setup
@@ -325,10 +335,10 @@ void setup() {
     LOG_DEBUGF("Endpoint: %s", config.getEndpoint().c_str());
 
     // Configure internal logging if enabled (debugging only)
-    if (config.getLogToSdCard()) {
+    if (config.getSaveLogs()) {
         LOG_WARN("Enabling persistent logging - DEBUGGING ONLY");
         LOG_WARN("Logs will be dumped every 10 seconds to internal flash");
-        Logger::getInstance().enableSdCardLogging(true, &LittleFS);
+        Logger::getInstance().enableLogSaving(true, &LittleFS);
     }
 
     // Release SD card back to CPAP machine
@@ -348,7 +358,7 @@ void setup() {
     // Initialize WiFi in station mode
     if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
         LOG("Failed to connect to WiFi");
-        // Note: WiFiManager already dumps logs to SD card on connection failures
+        // Note: WiFiManager already persists logs on connection failures
         return;
     }
     
@@ -787,15 +797,14 @@ void handleMonitoring() {
 void loop() {
     // ── Always-on tasks ──
     
-    // Periodic SD card log dump (every 10 seconds when enabled)
-    // Skip when upload task is running — SD card is in use on another core
-    if (config.getLogToSdCard() && !uploadTaskRunning) {
+    // Periodic persisted-log flush (every 10 seconds when enabled)
+    if (config.getSaveLogs() && !uploadTaskRunning) {
         unsigned long currentTime = millis();
-        if (currentTime - lastLogDumpTime >= LOG_DUMP_INTERVAL_MS) {
-            if (Logger::getInstance().dumpLogsToSDCardPeriodic(&sdManager)) {
-                LOG_DEBUG("Periodic log dump to SD card completed");
+        if (currentTime - lastLogFlushTime >= LOG_FLUSH_INTERVAL_MS) {
+            if (Logger::getInstance().dumpSavedLogsPeriodic(&sdManager)) {
+                LOG_DEBUG("Periodic log flush completed");
             }
-            lastLogDumpTime = currentTime;
+            lastLogFlushTime = currentTime;
         }
     }
     

@@ -39,7 +39,7 @@ private:
     String endpointUser;
     String endpointPassword;
     int gmtOffsetHours;
-    bool logToSdCard;
+    bool saveLogs;
     bool debugMode;
     bool isValid;
     
@@ -121,7 +121,7 @@ public:
     const String& getEndpointUser() const;
     const String& getEndpointPassword() const;
     int getGmtOffsetHours() const;
-    bool getLogToSdCard() const;
+    bool getSaveLogs() const;
     bool getDebugMode() const;
     bool valid() const;
     

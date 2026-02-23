@@ -72,7 +72,9 @@ bool SDCardManager::takeControl() {
 
 void SDCardManager::releaseControl() {
     if (!espHasControl) {
-    
+        return;
+    }
+
     // Perform software reset of SD card state machine before handing back to CPAP
     // if configured to do so. This crashes the card's Transfer state back to Idle,
     // forcing the CPAP to cleanly remount it instead of failing on RCA mismatch.
@@ -130,9 +132,6 @@ void SDCardManager::releaseControl() {
         // Return pins to floating state before MUX switch
         pinMode(SD_CMD_PIN, INPUT);
         pinMode(SD_CLK_PIN, INPUT);
-    }
-
-        return;
     }
 
     SD_MMC.end();
