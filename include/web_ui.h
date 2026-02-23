@@ -481,10 +481,10 @@ function saveAndReboot(){
     if(d.ok){
       _setCfgLockUI(false);
       document.getElementById('cfg-lock-banner').style.display='none';
-      msg.style.color='#57cbde';msg.textContent='Saved — rebooting… redirecting in 5s';
+      msg.style.color='#57cbde';msg.textContent='Saved — rebooting… redirecting in 10s';
       fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});
       setTimeout(function(){fetch('/soft-reboot',{cache:'no-store'});},800);
-      setTimeout(function(){window.location.href='/';},5000);
+      setTimeout(function(){window.location.href='/';},10000);
     }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
   }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
 }

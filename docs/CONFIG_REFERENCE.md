@@ -95,7 +95,7 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 
 | Key | Default | Description |
 |---|---|---|
-| `SAVE_LOGS` | `false` | Set to `true` to periodically flush the in-memory log buffer to the ESP32's internal `LittleFS` partition (as rotating `syslog.A.txt` / `syslog.B.txt` files). **Debugging only** — logs are written to internal flash, not to the SD card. The previous key name `LOG_TO_SD_CARD` is accepted as a backward-compatible alias. |
+| `SAVE_LOGS` | `false` | Set to `true` to periodically flush the in-memory log buffer to the ESP32's internal `LittleFS` partition (rotating `syslog.A.txt` / `syslog.B.txt`). Logs are flushed every **5 seconds**, continuously — including during active uploads — and always immediately before any reboot. Use the **⬇ Download Saved Logs** button on the Logs tab to download the persisted files to your browser. Logs are written to internal flash only, never to the SD card. The legacy key name `LOG_TO_SD_CARD` is accepted as a deprecated alias. |
 | `DEBUG` | `false` | Set to `true` to enable verbose diagnostics: (1) per-folder `Pre-flight scan` lines in the upload log, and (2) `[res fh= ma= fd=]` heap/file-descriptor stats appended to every log line. Leave `false` in normal operation to keep logs concise. |
 
 ---

@@ -61,7 +61,60 @@ This release fundamentally changes how the ESP32 interacts with the SD card, mig
 
 ---
 
+## Upload Engine
+
+### ⚡ Always-Async Upload Task
+**Symptom:** Rare stack canary crash during TLS handshakes in mixed SMB+CLOUD sessions under low heap.
+**Cause:** When `max_alloc < 50 KB`, the old code fell back to `runUploadBlocking()`, running the full TLS stack directly on the main Arduino loop task (8 KB stack). OpenSSL record processing and certificate parsing exceeded the available stack, triggering a hardware stack canary fault.
+**Fix:** `runUploadBlocking()` and the `UPLOAD_ASYNC_MIN_MAX_ALLOC_BYTES` threshold are completely removed. All uploads now run in a dedicated **16 KB FreeRTOS task pinned to Core 0**, unconditionally. The main loop task stack was also increased from 8 KB to 12 KB as an additional safety net. If task creation fails (extreme heap pressure), the FSM transitions gracefully to RELEASING instead of crashing.
+
+---
+
+## Log Persistence
+
+### 💾 Continuous Log Flushing
+**Previous behaviour:** Logs were only flushed to LittleFS when the upload task was **not** running, and only every 10 seconds. Upload sessions — often the most diagnostically interesting period — were never persisted.
+**Fix:** The `!uploadTaskRunning` guard has been removed. Logs now flush every **5 seconds continuously**, including during active upload sessions.
+
+### 📥 Pre-Reboot Log Flush
+**Feature:** Logs are now explicitly flushed immediately before every `esp_restart()` call: upload-complete reboot, software watchdog kill, state reset, and soft reboot. This guarantees zero log loss on any planned or watchdog-triggered reboot when `SAVE_LOGS=true`.
+
+### ⬇ Download Saved Logs Button
+**Feature:** A new **⬇ Download Saved Logs** button appears in the Logs tab toolbar. Clicking it:
+1. Triggers a final flush of any unflushed in-memory logs
+2. Downloads `syslog.B.txt` (older rotation) + `syslog.A.txt` (current) as a single `cpap_logs.txt` file directly to your browser
+
+This is the primary way to retrieve logs from a previous session after a reboot or crash.
+
+### 🐛 Crash Log Path Fix
+**Bug:** `dumpSavedLogs()` was writing to `/littlefs/crash_log.txt` — a literal path that LittleFS cannot create (it has no subdirectories named `littlefs`). The file was silently never written.
+**Fix:** Path corrected to `/crash_log.txt`.
+
+---
+
+## UI / UX Enhancements (Additional)
+
+### 📈 Memory Tab — Rolling Minimum Heap Tracking
+**Feature:** The Memory tab now tracks **2-minute rolling minimums** for both `Free Heap` and `Max Contiguous Alloc`. The minimum values are displayed in amber-coloured stat boxes at equal visual prominence to the live values. This surfaces worst-case heap conditions at a glance without requiring `DEBUG=true`.
+
+### ✏️ Config Editor — Edit During Active Uploads
+**Previous behaviour:** Clicking Edit while an upload was running returned a 409 error or aborted the upload session.
+**Fix:** The upload-in-progress restriction has been removed from both the config lock endpoint and the config save endpoint. Uploads now run completely uninterrupted while the user edits and saves the config. This is safe because:
+- The upload task reads CPAP data files; it does not read or write `config.txt`
+- Config changes take effect after reboot, not mid-session
+- The SD_MMC driver serialises hardware transactions internally
+
+After **Save & Reboot**, the browser displays a countdown and auto-redirects to the Dashboard after 10 seconds.
+
+### 🧘 Profiler Wizard — Breathing Instruction
+**Feature:** The Profiler Wizard instructions now include a clearly highlighted step requiring the user to **breathe in and out continuously as in normal therapy** during the measurement period. This is critical for accurate results — the profiler measures SD write gaps during live therapy, not idle gaps.
+
+---
+
 ## Upgrade Notes
 
-- **Logs Location:** If `SAVE_LOGS=true` is set in your `config.txt`, logs are written to the internal `LittleFS` partition (as `syslog.A.txt` / `syslog.B.txt` ping-pong files). They can be viewed normally via the Web UI Logs tab.
-- **First Boot:** Upon installing v0.10.0, your ESP32 will format its internal `LittleFS` partition. The very first upload session will scan your entire SD card from scratch, as the old `.upload_state.v2` tracking files on the SD card are no longer used.
+- **LittleFS path correction (developer note):** If you wrote custom code targeting `/littlefs/crash_log.txt`, update to `/crash_log.txt`. LittleFS on ESP32 Arduino exposes the filesystem root directly — the `/littlefs/` prefix in file paths is not a valid subdirectory and writes to it silently fail.
+- **Blocking upload path removed:** The `runUploadBlocking()` function and the `UPLOAD_ASYNC_MIN_MAX_ALLOC_BYTES = 50000` constant no longer exist. If you have any downstream code or references to these, remove them.
+- **`LOG_TO_SD_CARD` config key:** Still accepted as a deprecated alias for `SAVE_LOGS`. A future release may remove support. Migrate to `SAVE_LOGS = true`.
+- **Logs now flush during uploads:** If you rely on `SAVE_LOGS` and were previously using `UPLOAD_MODE = scheduled` specifically to ensure log flushing happened, this restriction no longer applies. Logs flush every 5 seconds regardless of upload state.
+- **First Boot:** Upon installing v0.10.0 for the first time, the ESP32 will format its internal `LittleFS` partition. The first upload session will scan your entire SD card from scratch — the old `.upload_state.v2` tracking files on the SD card are no longer used.

@@ -94,6 +94,8 @@ See the [Full Setup Guide](release/README.md#️-sd-card-errors--use-scheduled-m
 - **Web dashboard at `http://cpap.local`** — live progress, logs, config editor, OTA updates
 - **Edit config from the browser** — no SD card pulls after initial setup
 - **Never uploads the same file twice** — tracks what's been sent, even across reboots
+- **Persistent log storage** — enable `SAVE_LOGS=true` to flush logs to internal flash every 5 seconds; download past sessions directly from the browser
+- **Live memory diagnostics** — Memory tab tracks free heap and max contiguous allocation with rolling 2-minute minimums
 - **Respects your CPAP machine** — only accesses the SD card when therapy is not running
 
 ---
