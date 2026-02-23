@@ -367,11 +367,12 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - Example: `DEBUG = true`
 
 **SAVE_LOGS** (optional, default: false)
-- Persist logs to internal LittleFS (`/littlefs/syslog.A.txt` / `/littlefs/syslog.B.txt`)
-- **WARNING**: Debug-only feature; disable when not actively troubleshooting
-- Use only temporarily for troubleshooting, and only with `UPLOAD_MODE`=`"scheduled"` and an upload window outside normal therapy times
-- Automatically disabled if file operations fail
-- Example: `true` or `false`
+- Persist logs to internal flash (`syslog.A.txt` / `syslog.B.txt` on LittleFS) for retrieval across reboots
+- Logs flush every **5 seconds**, continuously — including during active uploads — and immediately before every reboot
+- Use the **⬇ Download Saved Logs** button on the Logs tab to download persisted log files directly to your browser
+- Useful for diagnosing issues that only appear after a reboot or crash
+- Automatically disabled if flash write operations fail
+- Example: `SAVE_LOGS = true`
 
 ### Credential Security
 
@@ -542,61 +543,55 @@ Usually `/dev/ttyUSB0` or `/dev/ttyACM0`
 
 ---
 
-## Web Interface (Optional)
+## Web Interface
 
-The firmware includes an optional web server for monitoring and configuration.
+The firmware includes a web interface accessible at **`http://cpap.local`** (or `http://<device-ip>/`).
 
 ### Accessing the Web Interface
 
-1. After device connects to WiFi, note the IP address from serial monitor
-2. Open browser and go to: `http://<device-ip>/`
+Once the device connects to WiFi, open a browser and navigate to `http://cpap.local`. All features are accessible through a single-page dashboard with the following tabs:
 
-### Available Features
+---
 
-**Status Page** (`http://<device-ip>/`)
-- Auto-refreshes every 5 seconds
-- System uptime and current time
-- WiFi signal strength (color-coded)
-- Next scheduled upload time
-- Time budget remaining
-- Pending files count
-- Current configuration
+### Dashboard Tab
+- Live upload state machine status (LISTENING, ACQUIRING, UPLOADING, COOLDOWN, etc.)
+- WiFi signal strength with color coding
+- Upload progress: current file, bytes transferred, folder counts
+- Quick-action buttons: Trigger Upload, Soft Reboot, Reset State
+- Live clock and uptime
 
-**Trigger Upload** (`http://<device-ip>/trigger-upload`)
-- Force immediate upload (bypasses schedule)
-- Useful for testing without waiting
+### Logs Tab
+- Live scrolling log feed, polled every 4 seconds from the device's in-memory buffer
+- **⬇ Download Saved Logs** — flushes current logs to flash and downloads `syslog.A.txt` + `syslog.B.txt` as a single `cpap_logs.txt` file (requires `SAVE_LOGS=true`)
+- Copy to clipboard / Clear buffer buttons
+- Up to 2000 lines buffered client-side across page reloads
 
-**SD Activity Monitor** (`http://<device-ip>/monitor`)
-- Real-time graph of SD card read/write activity
-- Useful for diagnosing CPAP machine interference
-- Helps verify "Smart Mode" inactivity detection
+### Config Tab
+- Direct editor for `config.txt` on the SD card
+- Click **Edit** to unlock the textarea (uploads continue uninterrupted)
+- **Save & Reboot** writes the file and reboots the device; browser auto-redirects after 10 seconds
+- Passwords replaced with `***STORED_IN_FLASH***` — leave unchanged to keep existing credentials
 
-**View Status** (`http://<device-ip>/status`)
-- JSON format system status
-- Useful for monitoring
+### Monitor Tab
+- Real-time SD bus activity graph (pulses from the SD data lines)
+- **Start Monitoring** / **Stop** buttons
+- **⚙ Profiler Wizard** — measures your CPAP machine's SD write gap pattern and recommends a safe `INACTIVITY_SECONDS` value. Requires CPAP on and blowing air; breathe continuously during the 2–3 minute measurement.
 
-**Reset State** (`http://<device-ip>/reset-state`)
-- Clears upload history
-- Forces re-upload of all files
-- Useful for testing from clean state
+### Memory Tab
+- Live `Free Heap` and `Max Contiguous Alloc` readings
+- Rolling **2-minute minimum** values (amber) to highlight worst-case memory conditions
+- Updates every 3 seconds
 
-**View Configuration** (`http://<device-ip>/config`)
-- Shows current config.txt values
-- Useful for verifying configuration
+### OTA Tab *(OTA firmware only)*
+- Upload new firmware binary (`firmware-ota-upgrade.bin`) directly from the browser
+- Or enter a URL to download firmware from GitHub releases
+- Progress bar and automatic device restart after update
+- **⚠️ Important:** Ensure stable WiFi; do not power off during an OTA update
 
-**View Logs** (`http://<device-ip>/logs`)
-- Shows recent log messages from circular buffer
-- Useful for troubleshooting
-
-**Firmware Update** (`http://<device-ip>/ota`) - OTA firmware only
-- Upload new firmware via web browser
-- Download firmware from URL
-- Real-time progress monitoring
-- Automatic device restart after update
-- **⚠️ Important:** Ensure stable WiFi and do not power off during updates
+---
 
 ### Security Warning
-⚠️ The web server has no authentication. Only use on trusted networks.
+⚠️ The web server has no authentication. Only use on a trusted local network.
 
 ---
 

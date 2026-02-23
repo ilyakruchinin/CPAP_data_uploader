@@ -211,13 +211,30 @@ bool CpapWebServer::begin() {
     
     LOG("[WebServer] Web server started successfully");
     LOG("[WebServer] Available endpoints:");
-    LOG("[WebServer]   GET /              - Status page (HTML)");
-    LOG("[WebServer]   GET /trigger-upload - Force immediate upload");
-    LOG("[WebServer]   GET /status        - Status information (JSON)");
-    LOG("[WebServer]   GET /reset-state   - Clear upload state");
-    LOG("[WebServer]   GET /config        - Display configuration");
-    LOG("[WebServer]   GET /logs          - Retrieve system logs (JSON)");
-    LOG("[WebServer]   GET /monitor       - SD Activity Monitor (live)");
+    LOG("[WebServer]   GET  /                  - Dashboard (SPA)");
+    LOG("[WebServer]   GET  /status             - Status page (SPA)");
+    LOG("[WebServer]   GET  /config             - Config page (SPA)");
+    LOG("[WebServer]   GET  /logs               - Logs page (SPA)");
+    LOG("[WebServer]   GET  /monitor            - Monitor page (SPA)");
+    LOG("[WebServer]   GET  /trigger-upload     - Force immediate upload");
+    LOG("[WebServer]   GET  /soft-reboot        - Soft reboot (skips cold-boot delay)");
+    LOG("[WebServer]   GET  /reset-state        - Clear upload state and reboot");
+    LOG("[WebServer]   GET  /api/status         - Live status JSON");
+    LOG("[WebServer]   GET  /api/config         - Config snapshot JSON");
+    LOG("[WebServer]   GET  /api/logs           - In-memory log buffer (plain text)");
+    LOG("[WebServer]   GET  /api/logs/saved     - Download persisted LittleFS logs");
+    LOG("[WebServer]   GET  /api/sd-activity    - SD bus activity samples JSON");
+    LOG("[WebServer]   GET  /api/diagnostics    - Heap/system diagnostics JSON");
+    LOG("[WebServer]   GET  /api/config-raw     - Raw config.txt contents");
+    LOG("[WebServer]   POST /api/config-raw     - Save raw config.txt");
+    LOG("[WebServer]   POST /api/config-lock    - Acquire/release config edit lock");
+    LOG("[WebServer]   GET  /api/monitor-start  - Start SD activity monitoring");
+    LOG("[WebServer]   GET  /api/monitor-stop   - Stop SD activity monitoring");
+#ifdef ENABLE_OTA_UPDATES
+    LOG("[WebServer]   GET  /ota               - OTA firmware update page");
+    LOG("[WebServer]   POST /ota-upload         - Upload firmware binary");
+    LOG("[WebServer]   POST /ota-url            - Trigger OTA from URL");
+#endif
     
     return true;
 }
