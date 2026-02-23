@@ -10,13 +10,19 @@ This release fundamentally changes how the ESP32 interacts with the SD card, mig
 
 ## Critical Fixes
 
-### 🛡️ 100% Read-Only SD Card Mounting
+### 🛡️ Read-Only SD Card Mounting
 **Symptom:** The CPAP machine occasionally displayed an unrecoverable "SD Card Error," forcing users to reformat the card.
 **Cause:** The ESP32 was writing state tracking files (`.upload_state.*`) and logs to the FAT32 volume. If the CPAP machine had the FAT table cached in its RAM, it detected this modification as silent corruption upon waking up.
-**Fix:** The ESP32 now mounts the physical SD card strictly as **Read-Only**. It is physically impossible for the ESP32 to corrupt the CPAP's FAT32 filesystem.
+**Fix:** The ESP32 now mounts the SD card **strictly as Read-Only** for all normal operation. Therapy data uploads are pure reads. All upload state, journals, and logs are written to internal LittleFS — never to the SD card.
+
+**The only exception is `config.txt` saves** triggered via the Web UI Config tab. When the user clicks **Save & Reboot**, the firmware briefly remounts the SD card as Read/Write, writes the single file, and immediately remounts as Read-Only before handing the card back. This is a controlled, single-file write followed by an immediate reboot — the CPAP never sees the card in a modified-but-still-mounted state.
+
+> ⚠️ After a `config.txt` save, always **physically eject and reinsert the SD card** into the CPAP machine before powering it on, to ensure the CPAP reads the freshly written FAT directory entry.
 
 ### 💾 LittleFS Internal State Migration
 **Feature:** All upload tracking state and session summaries have been migrated off the physical SD card and onto the ESP32's internal 960KB `LittleFS` partition. The physical SD card is only used for reading therapy data.
+
+> ⚠️ **First-boot requirement after installing v0.10.0:** Because the old `.upload_state.v2.*` files that lived on the SD card are no longer used, the device has no upload history on first boot. It will perform a **full SD card scan** (potentially uploading all files within `MAX_DAYS`) during the first session. This is expected and only happens once — subsequent boots resume from the new LittleFS state. **An OTA update alone is not sufficient to migrate state** — the old SD-based state files are simply abandoned and the new LittleFS state is built from scratch on first run.
 
 ### 🔄 SD Protocol Reset (CMD0 Bit-Banging)
 **Symptom:** Intermittent CPAP timeouts when the ESP32 released the card.
