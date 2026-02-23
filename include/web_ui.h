@@ -421,28 +421,14 @@ function _setCfgLockUI(locked){
 }
 function acquireCfgLock(){
   var active=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
-  if(active&&!confirm('An upload is currently in progress.\n\nConfirming will abort the upload session so you can edit the config.\n\nContinue?'))return;
-  _doAcquireCfgLock();
-}
-function _doAcquireCfgLock(){
+  if(active&&!confirm('An upload is currently in progress.\n\nThe upload will continue running. You can edit config and Save & Reboot when ready.\n\nContinue?'))return;
   var msg=document.getElementById('cfg-raw-msg');
   msg.style.color='#8f98a0';msg.textContent='Requesting lock...';
   fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":true}',cache:'no-store'})
   .then(function(r){return r.json();})
   .then(function(d){
-    if(d.ok){
-      _setCfgLockUI(true);
-      loadRawCfg();
-      msg.textContent='';
-    }else if(d.aborting){
-      msg.style.color='#ddaa44';msg.textContent='\u23f3 Aborting upload \u2014 waiting for safe stop...';
-      var poll=setInterval(function(){
-        if(currentFsmState!=='UPLOADING'&&currentFsmState!=='ACQUIRING'){
-          clearInterval(poll);
-          _doAcquireCfgLock();
-        }
-      },2000);
-    }else{msg.style.color='#ff6060';msg.textContent='Lock failed: '+(d.error||'?');}
+    if(d.ok){_setCfgLockUI(true);loadRawCfg();msg.textContent='';}
+    else{msg.style.color='#ff6060';msg.textContent='Lock failed: '+(d.error||'?');}
   }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Lock error: '+e.message;});
 }
 function releaseCfgLock(){

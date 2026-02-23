@@ -854,13 +854,6 @@ void CpapWebServer::handleApiConfigLock() {
         return;
     }
 
-    if (lock && isUploadInProgress()) {
-        g_abortUploadFlag = true;
-        LOG("[WebServer] Config lock requested during upload — signalling cooperative abort");
-        server->send(200, "application/json", "{\"ok\":false,\"aborting\":true}");
-        return;
-    }
-
     g_configEditLock = lock;
     if (lock) {
         g_configEditLockAt = millis();
