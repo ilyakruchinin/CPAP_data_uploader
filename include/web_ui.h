@@ -124,7 +124,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
 <h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
 <div style="display:flex;gap:6px">
-<button class="btn bs" onclick=loadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Load previously saved log files from device flash">&#128194; Saved Logs</button>
+<button class="btn bs" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Download persisted log files from device flash">&#11015; Download Saved Logs</button>
 <button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
 <button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
 </div>
@@ -192,8 +192,9 @@ This tool will measure your CPAP machine's specific SD card writing behavior to 
 <ol style="font-size:0.85em;color:#8f98a0;padding-left:20px;line-height:1.6">
 <li>Ensure the CPAP machine is <strong>turned ON</strong> and actively blowing air.</li>
 <li>Ensure the SD card is physically inserted into the CPAP.</li>
-<li>Click Start Profiling.</li>
-<li>Wait 2-3 minutes. The wizard will record the longest continuous silence between SD writes.</li>
+<li>Click <strong>Start Profiling</strong>.</li>
+<li><strong style="color:#ffcc44">Breathe in and out continuously as you would during normal therapy</strong> — do not pause or hold your breath. The profiler measures real SD write gaps during active therapy.</li>
+<li>Wait 2–3 minutes. The wizard will record the longest continuous silence between SD writes and suggest an <strong>INACTIVITY_SECONDS</strong> value.</li>
 </ol>
 </div>
 <div style="text-align:center;margin-bottom:20px">
@@ -568,20 +569,11 @@ function fetchLogs(){
   }).catch(function(){set('log-st','Disconnected');});
 }
 function clearLogBuf(){clientLogBuf=[];lastSeenLine='';document.getElementById('log-box').textContent='';}
-function loadSavedLogs(){
-  set('log-st','Loading saved logs...');
-  fetch('/api/logs/saved',{cache:'no-store'}).then(function(r){return r.text();})
-  .then(function(t){
-    if(!t||!t.trim()){
-      set('log-st','No saved logs on device');return;
-    }
-    var lines=t.split('\n');
-    var sep=['\u2500\u2500\u2500 SAVED LOGS (flash) \u2500\u2500\u2500'];
-    clientLogBuf=sep.concat(lines).concat(['\u2500\u2500\u2500 END SAVED LOGS \u2500\u2500\u2500','']).concat(clientLogBuf);
-    if(clientLogBuf.length>LOG_BUF_MAX)clientLogBuf=clientLogBuf.slice(clientLogBuf.length-LOG_BUF_MAX);
-    _renderLogBuf();
-    set('log-st','Saved logs loaded \u2022 '+clientLogBuf.length+' lines');
-  }).catch(function(e){set('log-st','Failed: '+e.message);});
+function downloadSavedLogs(){
+  var a=document.createElement('a');
+  a.href='/api/logs/saved';
+  a.download='cpap_logs.txt';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
 }
 function copyLogBuf(){
   var txt=clientLogBuf.join('\n');
