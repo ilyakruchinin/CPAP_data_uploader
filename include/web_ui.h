@@ -136,14 +136,14 @@ nav button:hover:not(.act){background:#3a5a7e}
 <!-- CONFIG -->
 <div id=cfg class=page>
 <div id=cfg-lock-banner style="display:none;background:#2a2a00;border:1px solid #aa9900;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#ddcc88">
-&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume without saving, or <em>Save &amp; Reboot</em> to apply changes. After reboot, <strong>always</strong> physically eject and reinsert the CPAP&rsquo;s SD card before powering it on.
+&#128274; <strong>Upload running</strong> &mdash; Config editor is active. Press <em>Cancel</em> to close without saving, or <em>Save &amp; Reboot</em> to apply changes. After reboot, <strong>always</strong> physically eject and reinsert the CPAP&rsquo;s SD card before powering it on.
 </div>
 <div class=card>
 <h2>Edit config.txt
 <span id=cfg-lock-badge style="display:none;margin-left:8px;background:#4a8a4a;color:#fff;font-size:.65em;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle">LOCKED</span>
 </h2>
 <p style="font-size:.82em;color:#8f98a0;margin-bottom:8px">Direct editor for the SD card config file. Passwords stored securely in flash appear as <code>***STORED_IN_FLASH***</code> &mdash; leave them unchanged to keep existing credentials. Max 4096 bytes. <strong>Changes take effect after reboot.</strong></p>
-<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> to pause active uploads and start editing.</p>
+<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> to start editing. Uploads continue while the editor is open.</p>
 <textarea id=cfg-raw style="width:100%;box-sizing:border-box;height:320px;background:#111820;color:#6a7a8a;border:1px solid #2d3440;border-radius:4px;padding:8px;font-family:monospace;font-size:.8em;resize:vertical" maxlength=4096 oninput=cfgRawCount() placeholder="Click Edit to begin..." readonly></textarea>
 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
 <span id=cfg-raw-cnt style="font-size:.8em;color:#8f98a0">0 / 4096 bytes</span>
@@ -479,9 +479,12 @@ function saveAndReboot(){
   .then(function(r){return r.json();})
   .then(function(d){
     if(d.ok){
-      msg.style.color='#57cbde';msg.textContent='Saved. Rebooting...';
+      _setCfgLockUI(false);
+      document.getElementById('cfg-lock-banner').style.display='none';
+      msg.style.color='#57cbde';msg.textContent='Saved — rebooting… redirecting in 5s';
       fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});
       setTimeout(function(){fetch('/soft-reboot',{cache:'no-store'});},800);
+      setTimeout(function(){window.location.href='/';},5000);
     }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
   }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
 }
