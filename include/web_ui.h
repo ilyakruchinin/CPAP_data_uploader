@@ -134,22 +134,21 @@ nav button:hover:not(.act){background:#3a5a7e}
 
 <!-- CONFIG -->
 <div id=cfg class=page>
-<div id=cfg-lock-banner style="display:none;background:#2a4a2a;border:1px solid #4a8a4a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#a0e0a0">
-&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume without saving, or <em>Save &amp; Reboot</em> to apply changes. After reboot, if the CPAP shows SD card errors, physically eject and reinsert its SD card.
+<div id=cfg-lock-banner style="display:none;background:#2a2a00;border:1px solid #aa9900;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#ddcc88">
+&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume without saving, or <em>Save &amp; Reboot</em> to apply changes. After reboot, <strong>always</strong> physically eject and reinsert the CPAP&rsquo;s SD card before powering it on.
 </div>
 <div class=card>
 <h2>Edit config.txt
 <span id=cfg-lock-badge style="display:none;margin-left:8px;background:#4a8a4a;color:#fff;font-size:.65em;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle">LOCKED</span>
 </h2>
 <p style="font-size:.82em;color:#8f98a0;margin-bottom:8px">Direct editor for the SD card config file. Passwords stored securely in flash appear as <code>***STORED_IN_FLASH***</code> &mdash; leave them unchanged to keep existing credentials. Max 4096 bytes. <strong>Changes take effect after reboot.</strong></p>
-<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> to pause uploads and enable editing. After saving, a <strong>reboot is required</strong> for changes to take effect. If the CPAP shows SD card errors after reboot, physically eject and reinsert its SD card.</p>
+<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> to pause active uploads and start editing.</p>
 <textarea id=cfg-raw style="width:100%;box-sizing:border-box;height:320px;background:#111820;color:#6a7a8a;border:1px solid #2d3440;border-radius:4px;padding:8px;font-family:monospace;font-size:.8em;resize:vertical" maxlength=4096 oninput=cfgRawCount() placeholder="Click Edit to begin..." readonly></textarea>
 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
 <span id=cfg-raw-cnt style="font-size:.8em;color:#8f98a0">0 / 4096 bytes</span>
 <div class=actions style=margin:0>
 <button id=btn-cfg-edit class="btn bp" onclick=acquireCfgLock() style="padding:6px 14px">&#9998; Edit</button>
 <button id=btn-cfg-reload class="btn bs" onclick=loadRawCfg() style="padding:6px 14px;display:none">&#8635; Reload</button>
-<button id=btn-cfg-save class="btn bp" onclick=saveRawCfg() style="padding:6px 14px;display:none">&#128190; Save</button>
 <button id=btn-cfg-savereboot class="btn bd" onclick=saveAndReboot() style="padding:6px 14px;display:none">Save &amp; Reboot</button>
 <button id=btn-cfg-cancel class="btn bs" onclick=releaseCfgLock() style="padding:6px 14px;display:none">&#10005; Cancel</button>
 </div>
@@ -218,14 +217,14 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 <div id=mem class=page>
 <div class=card style="margin-bottom:10px"><h2>Runtime Memory <span style="font-size:.7em;color:#8f98a0;font-weight:400">(live, 2s)</span></h2>
 <div class=stats-grid>
-<div class=stat-box><span class=sl>Free Heap</span><span class=sv id=hd-fh style="color:#66c0f4">—</span></div>
-<div class=stat-box><span class=sl>Max Contiguous</span><span class=sv id=hd-ma style="color:#aa66ff">—</span></div>
+<div class=stat-box><span class=sl>Free Heap</span><span class=sv id=hd-fh style="color:#66c0f4">—</span><span style="font-size:.72em;color:#8f98a0;margin-top:2px;display:block">Min (2m): <span id=hd-fh-min>—</span></span></div>
+<div class=stat-box><span class=sl>Max Contiguous</span><span class=sv id=hd-ma style="color:#aa66ff">—</span><span style="font-size:.72em;color:#8f98a0;margin-top:2px;display:block">Min (2m): <span id=hd-ma-min>—</span></span></div>
 </div>
 </div>
 <div class=card>
 <h2>Heap History <span style="font-size:.65em;color:#8f98a0;font-weight:400">&nbsp;last ~2 min &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#5c9ade;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Free &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#aa66ff;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Max Alloc</span></h2>
 <div style="background:#0f1923;border-radius:6px;padding:8px 4px 2px">
-<svg id=heap-svg viewBox="0 0 600 100" preserveAspectRatio="none" style="width:100%;height:100px;display:block"></svg>
+<svg id=heap-svg viewBox="0 0 600 200" preserveAspectRatio="none" style="width:100%;height:200px;display:block"></svg>
 </div>
 <div style="display:flex;justify-content:space-between;font-size:.72em;color:#3a5070;padding:2px 6px 0"><span>~2m ago</span><span>~1m ago</span><span>now</span></div>
 </div>
@@ -367,21 +366,21 @@ function pollDiag(){
 function updateHeapChart(){
   var svg=document.getElementById('heap-svg');
   if(!svg||heapHistory.length<2)return;
-  var W=600,H=100,n=heapHistory.length;
+  var W=600,H=200,n=heapHistory.length;
   var maxVal=0;
   heapHistory.forEach(function(s){if(s.fh>maxVal)maxVal=s.fh;});
   if(maxVal<65536)maxVal=65536;
   var ptsFh='',ptsMa='';
   heapHistory.forEach(function(s,i){
     var x=((W-2)*i/(MAX_HEAP_SAMPLES-1)+1).toFixed(1);
-    var yFh=(H-(s.fh/maxVal)*(H-12)-4).toFixed(1);
-    var yMa=(H-(s.ma/maxVal)*(H-12)-4).toFixed(1);
+    var yFh=(H-(s.fh/maxVal)*(H-14)-6).toFixed(1);
+    var yMa=(H-(s.ma/maxVal)*(H-14)-6).toFixed(1);
     ptsFh+=(i===0?'M':'L')+x+' '+yFh;
     ptsMa+=(i===0?'M':'L')+x+' '+yMa;
   });
   var grid='';
   [0.25,0.5,0.75].forEach(function(f){
-    var y=(H-f*(H-12)-4).toFixed(0);
+    var y=(H-f*(H-14)-6).toFixed(0);
     var kb=Math.round(maxVal*f/1024);
     grid+='<line x1="0" y1="'+y+'" x2="'+W+'" y2="'+y+'" stroke="#1a2a3a" stroke-width="1"/>';
     grid+='<text x="4" y="'+(parseInt(y)-2)+'" fill="#3a5070" font-size="9" font-family="monospace">'+kb+'K</text>';
@@ -389,6 +388,12 @@ function updateHeapChart(){
   svg.innerHTML=grid
     +'<path d="'+ptsFh+'" stroke="#5c9ade" stroke-width="1.5" fill="none"/>'
     +'<path d="'+ptsMa+'" stroke="#aa66ff" stroke-width="1.5" fill="none"/>';
+  if(heapHistory.length>0){
+    var minFh=heapHistory.reduce(function(m,s){return s.fh<m?s.fh:m;},heapHistory[0].fh);
+    var minMa=heapHistory.reduce(function(m,s){return s.ma<m?s.ma:m;},heapHistory[0].ma);
+    set('hd-fh-min',Math.round(minFh/1024)+' KB');
+    set('hd-ma-min',Math.round(minMa/1024)+' KB');
+  }
 }
 function checkMonUploadState(){
   var busy=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
@@ -410,7 +415,6 @@ function _setCfgLockUI(locked){
   ta.style.borderColor=locked?'#3d4450':'#2d3440';
   document.getElementById('btn-cfg-edit').style.display=locked?'none':'';
   document.getElementById('btn-cfg-reload').style.display=locked?'':'none';
-  document.getElementById('btn-cfg-save').style.display=locked?'':'none';
   document.getElementById('btn-cfg-savereboot').style.display=locked?'':'none';
   document.getElementById('btn-cfg-cancel').style.display=locked?'':'none';
 }
