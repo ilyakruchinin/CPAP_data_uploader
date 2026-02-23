@@ -515,9 +515,13 @@ void CpapWebServer::handleApiLogs() {
     server->sendContent("");
 }
 
-// GET /api/logs/saved — stream syslog.B.txt (older) + syslog.A.txt (newer) from LittleFS
+// GET /api/logs/saved — flush, then stream syslog.B.txt (older) + syslog.A.txt (newer) from LittleFS
 void CpapWebServer::handleApiLogsSaved() {
+    // Flush any unflushed in-memory logs before serving so the download is current
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+
     addCorsHeaders(server);
+    server->sendHeader("Content-Disposition", "attachment; filename=\"cpap_logs.txt\"");
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/plain; charset=utf-8", " ");
     ChunkedPrint chunked(server);
