@@ -70,6 +70,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <button id=t-logs onclick="tab('logs')">Logs</button>
 <button id=t-cfg onclick="tab('cfg')">Config</button>
 <button id=t-mon onclick="tab('mon')">Monitor</button>
+<button id=t-mem onclick="tab('mem')">Memory</button>
 <button id=t-ota onclick="tab('ota')">OTA</button>
 </nav>
 
@@ -113,12 +114,6 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=actions>
 <button id=btn-up class="btn bp" onclick=triggerUpload()>&#9650; Trigger Upload</button>
 <button id=btn-rst class="btn bd" onclick=resetState()>Reset State</button>
-</div>
-</div>
-<div class=card style="margin-bottom:14px"><h2>Memory Diagnostics <span style="font-size:.7em;color:#8f98a0;font-weight:400">(live, 2s)</span></h2>
-<div class=stats-grid>
-<div class=stat-box><span class=sl>Free Heap</span><span class=sv id=hd-fh style="color:#66c0f4">—</span></div>
-<div class=stat-box><span class=sl>Max Contiguous</span><span class=sv id=hd-ma style="color:#66c0f4">—</span></div>
 </div>
 </div>
 </div>
@@ -167,6 +162,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div id=mon class=page>
 <div class=card style="margin-bottom:10px"><h2>SD Activity Monitor <span id=mon-dot class="dot idle"></span></h2>
 <p style="font-size:.85em;color:#c7d5e0;line-height:1.5;margin-bottom:10px">Monitors SD card bus activity. Use when CPAP machine is on. Red = CPAP writing, Green = safe to upload.</p>
+<div id=mon-upwarn style="display:none;background:#2a2a1a;border:1px solid #665522;border-radius:6px;padding:9px 13px;margin-bottom:10px;font-size:.84em;color:#ddcc88">&#9889; Upload in progress — monitoring will start automatically when the upload finishes.</div>
 <div class=actions>
 <button id=btn-mst class="btn bp" onclick=startMon()>Start Monitoring</button>
 <button id=btn-msp class="btn bd" onclick=stopMon() style=display:none>Stop</button>
@@ -218,6 +214,23 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 </div>
 </div>
 
+<!-- MEMORY -->
+<div id=mem class=page>
+<div class=card style="margin-bottom:10px"><h2>Runtime Memory <span style="font-size:.7em;color:#8f98a0;font-weight:400">(live, 2s)</span></h2>
+<div class=stats-grid>
+<div class=stat-box><span class=sl>Free Heap</span><span class=sv id=hd-fh style="color:#66c0f4">—</span></div>
+<div class=stat-box><span class=sl>Max Contiguous</span><span class=sv id=hd-ma style="color:#aa66ff">—</span></div>
+</div>
+</div>
+<div class=card>
+<h2>Heap History <span style="font-size:.65em;color:#8f98a0;font-weight:400">&nbsp;last ~2 min &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#5c9ade;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Free &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#aa66ff;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Max Alloc</span></h2>
+<div style="background:#0f1923;border-radius:6px;padding:8px 4px 2px">
+<svg id=heap-svg viewBox="0 0 600 100" preserveAspectRatio="none" style="width:100%;height:100px;display:block"></svg>
+</div>
+<div style="display:flex;justify-content:space-between;font-size:.72em;color:#3a5070;padding:2px 6px 0"><span>~2m ago</span><span>~1m ago</span><span>now</span></div>
+</div>
+</div>
+
 <!-- OTA -->
 <div id=ota class=page>
 <div class=wb><h3>WARNING</h3><ul>
@@ -252,8 +265,9 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 
 <script>
 var cfg={},monPoll=null,logPoll=null,curTab='dash',monActive=false;
+var heapHistory=[],MAX_HEAP_SAMPLES=60,currentFsmState='';
 function tab(t){
-  ['dash','logs','cfg','mon','ota'].forEach(function(x){
+  ['dash','logs','cfg','mon','mem','ota'].forEach(function(x){
     document.getElementById(x).classList.toggle('on',x===t);
     document.getElementById('t-'+x).classList.toggle('act',x===t);
   });
@@ -261,6 +275,8 @@ function tab(t){
   if(t==='logs'){startLogPoll();}else{stopLogPoll();}
   if(t!=='mon'){stopMon();}
   if(t==='cfg'){loadCfg();}
+  if(t==='mon'){checkMonUploadState();}
+  if(t==='mem'){updateHeapChart();}
 }
 function toast(msg,mode){
   var el=document.getElementById('toast');
@@ -281,7 +297,8 @@ function set(id,html,inner){var el=document.getElementById(id);if(el){if(inner==
 function seti(id,html){set(id,html,false);}
 
 function renderStatus(d){
-  seti('d-st',badgeHtml(d.state||'?'));
+  currentFsmState=d.state||'';
+  seti('d-st',badgeHtml(currentFsmState||'?'));
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
   set('d-mode',cfg.upload_mode||'—');
   set('d-tsync',d.time_synced?'Yes':'No');
@@ -325,6 +342,7 @@ function renderStatus(d){
   var fst=inc>0?'&#9888; '+inc+' folder(s) pending':(done>0?'&#10003; All synced':'Waiting for first scan');
   seti('d-fst',fst);
   set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
+  if(curTab==='mon')checkMonUploadState();
 }
 
 var statusTimer=null,diagTimer=null;
@@ -337,11 +355,45 @@ function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval
 
 function pollDiag(){
   fetch('/api/diagnostics',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
-    var fh=d.free_heap?Math.round(d.free_heap/1024)+' KB':'\u2014';
-    var ma=d.max_alloc?Math.round(d.max_alloc/1024)+' KB':'\u2014';
+    var fhV=d.free_heap||0,maV=d.max_alloc||0;
+    var fh=fhV?Math.round(fhV/1024)+' KB':'\u2014';
+    var ma=maV?Math.round(maV/1024)+' KB':'\u2014';
     set('d-fh',fh);set('d-ma',ma);
     set('hd-fh',fh);set('hd-ma',ma);
+    if(fhV){heapHistory.push({fh:fhV,ma:maV});if(heapHistory.length>MAX_HEAP_SAMPLES)heapHistory.shift();}
+    if(curTab==='mem')updateHeapChart();
   }).catch(function(){});
+}
+function updateHeapChart(){
+  var svg=document.getElementById('heap-svg');
+  if(!svg||heapHistory.length<2)return;
+  var W=600,H=100,n=heapHistory.length;
+  var maxVal=0;
+  heapHistory.forEach(function(s){if(s.fh>maxVal)maxVal=s.fh;});
+  if(maxVal<65536)maxVal=65536;
+  var ptsFh='',ptsMa='';
+  heapHistory.forEach(function(s,i){
+    var x=((W-2)*i/(MAX_HEAP_SAMPLES-1)+1).toFixed(1);
+    var yFh=(H-(s.fh/maxVal)*(H-12)-4).toFixed(1);
+    var yMa=(H-(s.ma/maxVal)*(H-12)-4).toFixed(1);
+    ptsFh+=(i===0?'M':'L')+x+' '+yFh;
+    ptsMa+=(i===0?'M':'L')+x+' '+yMa;
+  });
+  var grid='';
+  [0.25,0.5,0.75].forEach(function(f){
+    var y=(H-f*(H-12)-4).toFixed(0);
+    var kb=Math.round(maxVal*f/1024);
+    grid+='<line x1="0" y1="'+y+'" x2="'+W+'" y2="'+y+'" stroke="#1a2a3a" stroke-width="1"/>';
+    grid+='<text x="4" y="'+(parseInt(y)-2)+'" fill="#3a5070" font-size="9" font-family="monospace">'+kb+'K</text>';
+  });
+  svg.innerHTML=grid
+    +'<path d="'+ptsFh+'" stroke="#5c9ade" stroke-width="1.5" fill="none"/>'
+    +'<path d="'+ptsMa+'" stroke="#aa66ff" stroke-width="1.5" fill="none"/>';
+}
+function checkMonUploadState(){
+  var busy=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
+  var w=document.getElementById('mon-upwarn');
+  if(w)w.style.display=busy?'':'none';
 }
 function startDiagPoll(){if(!diagTimer){pollDiag();diagTimer=setInterval(pollDiag,2000);}}
 startDiagPoll();
@@ -363,6 +415,8 @@ function _setCfgLockUI(locked){
   document.getElementById('btn-cfg-cancel').style.display=locked?'':'none';
 }
 function acquireCfgLock(){
+  var active=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
+  if(active&&!confirm('An upload is currently in progress.\n\nEditing config will pause the active upload. It resumes automatically on Save, Cancel, or after 30 min.\n\nContinue?'))return;
   var msg=document.getElementById('cfg-raw-msg');
   msg.style.color='#8f98a0';msg.textContent='Pausing uploads...';
   fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":true}',cache:'no-store'})
