@@ -2,6 +2,7 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <Preferences.h>
+#include <LittleFS.h>
 
 #include "Config.h"
 #include "SDCardManager.h"
@@ -26,7 +27,6 @@ bool g_heapRecoveryBoot = false;
 
 #ifdef ENABLE_WEBSERVER
 #include "CpapWebServer.h"
-#include "CPAPMonitor.h"
 #endif
 
 // ============================================================================
@@ -44,7 +44,6 @@ OTAManager otaManager;
 
 #ifdef ENABLE_WEBSERVER
 CpapWebServer* webServer = nullptr;
-CPAPMonitor* cpapMonitor = nullptr;
 #endif
 
 // ============================================================================
@@ -76,7 +75,6 @@ TaskHandle_t uploadTaskHandle = nullptr;
 // Software watchdog: upload task updates this heartbeat; main loop kills task if stale
 volatile unsigned long g_uploadHeartbeat = 0;
 const unsigned long UPLOAD_WATCHDOG_TIMEOUT_MS = 120000;  // 2 minutes
-const uint32_t UPLOAD_ASYNC_MIN_MAX_ALLOC_BYTES = 50000;   // Below this, prefer blocking upload to preserve heap
 
 struct UploadTaskParams {
     FileUploader* uploader;
@@ -94,9 +92,9 @@ const unsigned long NTP_RETRY_INTERVAL_MS = 5 * 60 * 1000;  // 5 minutes
 unsigned long lastWifiReconnectAttempt = 0;
 unsigned long lastSdCardRetry = 0;
 
-// SD card logging periodic dump timing
-unsigned long lastLogDumpTime = 0;
-const unsigned long LOG_DUMP_INTERVAL_MS = 10 * 1000;  // 10 seconds
+// Persistent log flush timing
+unsigned long lastLogFlushTime = 0;
+const unsigned long LOG_FLUSH_INTERVAL_MS = 5 * 1000;   // 5 seconds
 
 // Runtime debug mode: set from config DEBUG=true after config load.
 // Gates [res fh= ma= fd=] heap suffix on all log lines and verbose pre-flight output.
@@ -110,6 +108,7 @@ extern volatile bool g_resetStateFlag;
 // Monitoring trigger flags (defined in WebServer.cpp)
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
+extern volatile bool g_abortUploadFlag;
 #endif
 
 // ============================================================================
@@ -194,6 +193,13 @@ void setup() {
         LOG_WARN("System reset due to watchdog timeout - possible hang or power issue");
     }
 
+    // Initialize LittleFS for state and internal logs
+    if (!LittleFS.begin(true)) {
+        LOG_ERROR("Failed to mount LittleFS - state and logs cannot be saved!");
+    } else {
+        LOG("LittleFS mounted successfully");
+    }
+
     // Initialize SD card control
     if (!sdManager.begin()) {
         LOG("Failed to initialize SD card manager");
@@ -209,25 +215,19 @@ void setup() {
     bool fastBoot = g_heapRecoveryBoot;
 
     // Smart Wait constants — same values for both cold and soft-reboot.
-    // 5 s of continuous SD bus silence required; give up after 45 s max.
-    const unsigned long SMART_WAIT_MAX_MS      = 45000;
-    const unsigned long SMART_WAIT_REQUIRED_MS =  5000;
+    // 5 s of continuous SD bus silence required before taking control.
+    // The previous 45s hostile takeover timeout has been removed to prevent filesystem corruption.
+    const unsigned long SMART_WAIT_REQUIRED_MS = 5000;
 
     auto runSmartWait = [&]() {
         LOG("Checking for CPAP SD card activity (Smart Wait)...");
-        unsigned long waitStart = millis();
-        bool busIsQuiet = false;
-        while (millis() - waitStart < SMART_WAIT_MAX_MS) {
+        while (true) {
             trafficMonitor.update();
             delay(10);
             if (trafficMonitor.isIdleFor(SMART_WAIT_REQUIRED_MS)) {
                 LOGF("Smart Wait: %lums of bus silence — CPAP is idle", SMART_WAIT_REQUIRED_MS);
-                busIsQuiet = true;
                 break;
             }
-        }
-        if (!busIsQuiet) {
-            LOG_WARN("Smart Wait timed out — bus still active, proceeding anyway");
         }
     };
 
@@ -271,18 +271,21 @@ void setup() {
             resetPrefs.putBool("reset_state", false);
             resetPrefs.end();
             
-            // Delete all known state file paths: per-backend (current) + old default (legacy)
+            // Delete all known state/summary paths from internal LittleFS only.
+            // Paths are relative to the LittleFS mount — do NOT include /littlefs/ prefix.
             static const char* STATE_FILES[] = {
                 "/.upload_state.v2.smb",
                 "/.upload_state.v2.smb.log",
                 "/.upload_state.v2.cloud",
                 "/.upload_state.v2.cloud.log",
-                "/.upload_state.v2",        // legacy: pre-split single-manager path
+                "/.backend_summary.smb",
+                "/.backend_summary.cloud",
+                "/.upload_state.v2",      // legacy: pre-split single-manager path
                 "/.upload_state.v2.log",
             };
             bool removedAny = false;
             for (const char* path : STATE_FILES) {
-                if (sdManager.getFS().remove(path)) {
+                if (LittleFS.remove(path)) {
                     LOGF("Deleted state file: %s", path);
                     removedAny = true;
                 }
@@ -304,10 +307,10 @@ void setup() {
         
         sdManager.releaseControl();
         
-        // Dump logs to SD card for configuration failures
-        bool dumped = Logger::getInstance().dumpLogsToSDCard("config_load_failed");
+        // Save logs to internal storage for configuration failures
+        bool dumped = Logger::getInstance().dumpSavedLogs("config_load_failed");
         if (!dumped) {
-            LOG_WARN("Failed to dump logs to SD card (config_load_failed)");
+            LOG_WARN("Failed to persist logs (config_load_failed)");
         }
 
         // Fail-safe: always force SD switch back to CPAP before aborting setup
@@ -324,11 +327,11 @@ void setup() {
     LOG_DEBUGF("WiFi SSID: %s", config.getWifiSSID().c_str());
     LOG_DEBUGF("Endpoint: %s", config.getEndpoint().c_str());
 
-    // Configure SD card logging if enabled (debugging only; can block CPAP SD access)
-    if (config.getLogToSdCard()) {
-        LOG_WARN("Enabling SD card logging - DEBUGGING ONLY - may block CPAP SD access; use scheduled mode outside therapy times");
-        LOG_WARN("Logs will be dumped every 10 seconds");
-        Logger::getInstance().enableSdCardLogging(true, &sdManager.getFS());
+    // Configure internal logging if enabled (debugging only)
+    if (config.getSaveLogs()) {
+        LOG_WARN("Enabling persistent logging - DEBUGGING ONLY");
+        LOG_WARN("Logs will be dumped every 10 seconds to internal flash");
+        Logger::getInstance().enableLogSaving(true, &LittleFS);
     }
 
     // Release SD card back to CPAP machine
@@ -348,7 +351,7 @@ void setup() {
     // Initialize WiFi in station mode
     if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
         LOG("Failed to connect to WiFi");
-        // Note: WiFiManager already dumps logs to SD card on connection failures
+        // Note: WiFiManager already persists logs on connection failures
         return;
     }
     
@@ -402,17 +405,6 @@ void setup() {
     }
 
 #ifdef ENABLE_WEBSERVER
-    // Initialize CPAP monitor
-#ifdef ENABLE_CPAP_MONITOR
-    LOG("Initializing CPAP SD card usage monitor...");
-    cpapMonitor = new CPAPMonitor();
-    cpapMonitor->begin();
-    LOG("CPAP monitor started - tracking SD card usage every 10 minutes");
-#else
-    LOG("CPAP monitor disabled (CS_SENSE hardware issue)");
-    cpapMonitor = new CPAPMonitor();  // Use stub implementation
-#endif
-    
     // Initialize web server
     LOG("Initializing web server...");
     
@@ -420,8 +412,7 @@ void setup() {
     webServer = new CpapWebServer(&config, 
                                       uploader->getStateManager(),
                                       uploader->getScheduleManager(),
-                                      &wifiManager,
-                                      cpapMonitor);
+                                      &wifiManager);
     
     if (webServer->begin()) {
         LOG("Web server started successfully");
@@ -554,29 +545,6 @@ void uploadTaskFunction(void* pvParameters) {
     vTaskDelete(NULL);  // Self-delete
 }
 
-static void runUploadBlocking(DataFilter filter) {
-    int maxMinutes = config.getExclusiveAccessMinutes();
-    UploadResult result = uploader->uploadWithExclusiveAccess(&sdManager, maxMinutes, filter);
-    switch (result) {
-        case UploadResult::COMPLETE:
-            transitionTo(UploadState::COMPLETE);
-            break;
-        case UploadResult::TIMEOUT:
-            uploadCycleHadTimeout = true;
-            transitionTo(UploadState::RELEASING);
-            break;
-        case UploadResult::ERROR:
-            LOG_ERROR("[FSM] Upload error");
-            transitionTo(UploadState::RELEASING);
-            break;
-        case UploadResult::NOTHING_TO_DO:
-            LOG("[FSM] Nothing to upload — entering cooldown (no reboot)");
-            g_nothingToUpload = true;
-            transitionTo(UploadState::RELEASING);
-            break;
-    }
-}
-
 void handleUploading() {
     if (!uploader) {
         transitionTo(UploadState::RELEASING);
@@ -602,22 +570,16 @@ void handleUploading() {
             return;
         }
 
-        const uint32_t freeHeapBeforeTask = ESP.getFreeHeap();
-        const uint32_t maxAllocBeforeTask = ESP.getMaxAllocHeap();
-        if (maxAllocBeforeTask < UPLOAD_ASYNC_MIN_MAX_ALLOC_BYTES) {
-            LOG_WARNF("[FSM] Low contiguous heap (%u bytes, free=%u) - using blocking upload to preserve memory",
-                      maxAllocBeforeTask,
-                      freeHeapBeforeTask);
-            runUploadBlocking(filter);
-            return;
-        }
-        
+        LOGF("[FSM] Heap before upload task: fh=%u ma=%u",
+             ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        g_abortUploadFlag = false;  // Clear any stale abort request
+
         // Disable web server handling inside upload task — main loop handles it
         // This prevents concurrent handleClient() calls from two cores
 #ifdef ENABLE_WEBSERVER
         uploader->setWebServer(nullptr);
 #endif
-        
+
         UploadTaskParams* params = new UploadTaskParams{
             uploader, &sdManager, config.getExclusiveAccessMinutes(), filter
         };
@@ -643,19 +605,17 @@ void handleUploading() {
         );
         
         if (rc != pdPASS) {
-            LOG_ERRORF("[FSM] Failed to create upload task (rc=%ld, free=%u, max_alloc=%u) — falling back to blocking upload",
+            LOG_ERRORF("[FSM] Failed to create upload task (rc=%ld, free=%u, max_alloc=%u) \u2014 releasing",
                        (long)rc,
                        ESP.getFreeHeap(),
                        ESP.getMaxAllocHeap());
             uploadTaskRunning = false;
             delete params;
-            // Re-subscribe IDLE0 since task didn't start
             esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
 #ifdef ENABLE_WEBSERVER
             uploader->setWebServer(webServer);
 #endif
-            // Fallback: run synchronously (old behavior)
-            runUploadBlocking(filter);
+            transitionTo(UploadState::RELEASING);
         } else {
             LOG("[FSM] Upload task started on Core 0 (non-blocking)");
         }
@@ -663,6 +623,7 @@ void handleUploading() {
         // ── Task finished: read result and transition ──
         uploadTaskRunning = false;
         uploadTaskHandle = nullptr;
+        g_abortUploadFlag = false;  // Clear abort flag — task has stopped
         
         // Re-subscribe IDLE0 to task watchdog now that Core 0 is free
         esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
@@ -726,6 +687,7 @@ void handleReleasing() {
     // The fast-boot path (ESP_RST_SW) skips cold-boot delays.
     LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
          (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
     delay(200);
     esp_restart();
 }
@@ -799,15 +761,15 @@ void handleMonitoring() {
 void loop() {
     // ── Always-on tasks ──
     
-    // Periodic SD card log dump (every 10 seconds when enabled)
-    // Skip when upload task is running — SD card is in use on another core
-    if (config.getLogToSdCard() && !uploadTaskRunning) {
+    // Periodic persisted-log flush (every 5 seconds when enabled)
+    // Runs unconditionally — LittleFS is independent of SD_MMC / upload task
+    if (config.getSaveLogs()) {
         unsigned long currentTime = millis();
-        if (currentTime - lastLogDumpTime >= LOG_DUMP_INTERVAL_MS) {
-            if (Logger::getInstance().dumpLogsToSDCardPeriodic(&sdManager)) {
-                LOG_DEBUG("Periodic log dump to SD card completed");
+        if (currentTime - lastLogFlushTime >= LOG_FLUSH_INTERVAL_MS) {
+            if (Logger::getInstance().dumpSavedLogsPeriodic(&sdManager)) {
+                LOG_DEBUG("Periodic log flush completed");
             }
-            lastLogDumpTime = currentTime;
+            lastLogFlushTime = currentTime;
         }
     }
     
@@ -819,13 +781,6 @@ void loop() {
     }
 
 #ifdef ENABLE_WEBSERVER
-    // Update CPAP monitor
-#ifdef ENABLE_CPAP_MONITOR
-    if (cpapMonitor) {
-        cpapMonitor->update();
-    }
-#endif
-    
     // Handle web server requests
     if (webServer) {
         webServer->handleClient();
@@ -856,6 +811,7 @@ void loop() {
             vTaskDelete(uploadTaskHandle);
         }
         
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         delay(300);
         esp_restart();
     }
@@ -887,6 +843,7 @@ void loop() {
         
         // Immediate reboot — state files deleted on next clean boot
         LOG("Rebooting for clean state reset...");
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         delay(300);  // Brief pause for web response to send
         esp_restart();
     }
@@ -895,6 +852,7 @@ void loop() {
     if (g_softRebootFlag) {
         LOG("=== Soft Reboot Triggered via Web Interface ===");
         g_softRebootFlag = false;
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         delay(300);
         esp_restart();
     }
@@ -960,6 +918,7 @@ void loop() {
     if (monitoringRequested) {
         if (currentState != UploadState::UPLOADING) {
             monitoringRequested = false;
+            stopMonitoringRequested = false;  // discard any stale stop from before monitoring began
             if (currentState == UploadState::ACQUIRING && sdManager.hasControl()) {
                 sdManager.releaseControl();
             }

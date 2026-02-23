@@ -4,13 +4,15 @@ This directory contains unit tests for the SD WIFI PRO auto uploader project.
 
 ## Structure
 
-- `test_native/` - Native unit tests that run on the host machine (not on ESP32)
 - `test_config/` - Configuration loading and credential management tests
 - `test_credential_migration/` - Secure credential migration tests
-- `test_logger_circular_buffer/` - Logger circular buffer tests
+- `test_logger_circular_buffer/` - Logger circular buffer tests (in-memory buffer, overflow, line tracking)
 - `test_schedule_manager/` - Upload scheduling and NTP sync tests
-- `test_upload_state_manager/` - Upload state tracking and persistence tests
-- `mocks/` - Mock implementations of hardware-dependent components for testing
+- `test_upload_state_manager/` - Upload state tracking, journalling, and persistence tests
+- `test_native/` - General-purpose native tests
+- `mocks/` - Mock implementations of hardware-dependent components (Arduino, FS, Time, WebServer)
+
+For detailed guidance on writing tests, running them, and debugging failures see **[TESTING_GUIDE.md](TESTING_GUIDE.md)**.
 
 ## Running Tests
 

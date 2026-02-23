@@ -2,6 +2,7 @@
 #include "Logger.h"
 #include "WebStatus.h"
 #include <SD_MMC.h>
+#include <LittleFS.h>
 #include <functional>
 #include <time.h>
 
@@ -9,13 +10,16 @@
 #include "CpapWebServer.h"
 #endif
 
+// Cooperative abort flag — set by web server when config lock is requested during upload
+extern volatile bool g_abortUploadFlag;
+
 // Constructor
-FileUploader::FileUploader(Config* cfg, WiFiManager* wifi) 
+FileUploader::FileUploader(Config* cfg, WiFiManager* wifiManager) 
     : config(cfg),
       smbStateManager(nullptr),
       cloudStateManager(nullptr),
       scheduleManager(nullptr),
-      wifiManager(wifi),
+      wifiManager(wifiManager),
       activeBackend(UploadBackend::NONE),
 #ifdef ENABLE_WEBSERVER
       webServer(nullptr),
@@ -49,6 +53,9 @@ FileUploader::~FileUploader() {
 bool FileUploader::begin(fs::FS &sd) {
     LOG("[FileUploader] Initializing components...");
 
+    (void)sd;
+    fs::FS &stateFs = LittleFS;
+
     String endpointType = config->getEndpointType();
     LOGF("[FileUploader] Endpoint type: %s", endpointType.c_str());
 
@@ -79,7 +86,7 @@ bool FileUploader::begin(fs::FS &sd) {
 
         smbStateManager = new UploadStateManager();
         smbStateManager->setPaths("/.upload_state.v2.smb", "/.upload_state.v2.smb.log");
-        if (!smbStateManager->begin(sd)) {
+        if (!smbStateManager->begin(stateFs)) {
             LOG("[FileUploader] WARNING: SMB state load failed, starting fresh");
         }
         anyBackendCreated = true;
@@ -94,7 +101,7 @@ bool FileUploader::begin(fs::FS &sd) {
 
         cloudStateManager = new UploadStateManager();
         cloudStateManager->setPaths("/.upload_state.v2.cloud", "/.upload_state.v2.cloud.log");
-        if (!cloudStateManager->begin(sd)) {
+        if (!cloudStateManager->begin(stateFs)) {
             LOG("[FileUploader] WARNING: Cloud state load failed, starting fresh");
         }
         anyBackendCreated = true;
@@ -107,7 +114,7 @@ bool FileUploader::begin(fs::FS &sd) {
     }
 
     // ── Backend cycling: select which backend runs this session ───────────────
-    activeBackend = selectActiveBackend(sd);
+    activeBackend = selectActiveBackend(stateFs);
     const char* abName = (activeBackend == UploadBackend::SMB)   ? "SMB"  :
                          (activeBackend == UploadBackend::CLOUD) ? "CLOUD" : "NONE";
     LOGF("[FileUploader] Active backend this session: %s", abName);
@@ -122,7 +129,7 @@ bool FileUploader::begin(fs::FS &sd) {
         (activeBackend == UploadBackend::CLOUD && smbStateManager)   ? UploadBackend::SMB   :
         UploadBackend::NONE;
     if (inactiveBackend != UploadBackend::NONE) {
-        BackendSummary ibSum = readBackendSummary(sd, inactiveBackend);
+        BackendSummary ibSum = readBackendSummary(stateFs, inactiveBackend);
         const char* ibName  = (inactiveBackend == UploadBackend::SMB) ? "SMB" : "CLOUD";
         strncpy(g_inactiveBackendStatus.name, ibName, sizeof(g_inactiveBackendStatus.name) - 1);
         g_inactiveBackendStatus.sessionStartTs = ibSum.sessionStartTs;
@@ -237,6 +244,7 @@ UploadBackend FileUploader::selectActiveBackend(fs::FS& sd) const {
 
 UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, int maxMinutes, DataFilter filter) {
     fs::FS &sd = sdManager->getFS();
+    fs::FS &stateFs = LittleFS;
     unsigned long sessionStart = millis();
     unsigned long maxMs = (unsigned long)maxMinutes * 60UL * 1000UL;
 
@@ -325,7 +333,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                             if (currentTime >= 1000000000 &&
                                     sm->shouldPromotePendingToCompleted(name, currentTime)) {
                                 sm->promotePendingToCompleted(name);
-                                sm->save(sd);
+                                sm->save(stateFs);
                                 LOGF("[FileUploader] Pre-flight: empty folder %s pending 7+ days — promoted to completed",
                                      name.c_str());
                             }
@@ -403,13 +411,13 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     // the backend pointer advances even if the session is interrupted.
     time_t nowTs; time(&nowTs);
     uint32_t sessionTs = (uint32_t)nowTs;
-    writeBackendSummaryStart(sd, activeBackend, sessionTs);
+    writeBackendSummaryStart(stateFs, activeBackend, sessionTs);
     // If we redirected away from originalBackend, advance its timestamp too so
     // cycling doesn't permanently select the no-work backend every boot.
     if (originalBackend != activeBackend) {
         LOGF("[FileUploader] Pre-flight: also advancing %s timestamp to keep cycling balanced",
              (originalBackend == UploadBackend::SMB) ? "SMB" : "CLOUD");
-        writeBackendSummaryStart(sd, originalBackend, sessionTs);
+        writeBackendSummaryStart(stateFs, originalBackend, sessionTs);
     }
 
     cloudImportCreated = false;
@@ -492,7 +500,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             }
             if (smbUploader->isConnected()) smbUploader->end();
         }
-        smbStateManager->save(sd);
+        smbStateManager->save(stateFs);
 
         g_smbSessionStatus.uploadActive     = false;
         g_smbSessionStatus.filesUploaded    = 0;
@@ -573,7 +581,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                 }
             }
         }
-        cloudStateManager->save(sd);
+        cloudStateManager->save(stateFs);
 
         g_cloudSessionStatus.uploadActive     = false;
         g_cloudSessionStatus.filesUploaded    = 0;
@@ -587,7 +595,7 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     int sessionDone  = sm ? sm->getCompletedFoldersCount() : 0;
     int sessionEmpty = sm ? sm->getPendingFoldersCount()   : 0;
     int sessionTotal = sessionDone + (sm ? sm->getIncompleteFoldersCount() : 0);
-    writeBackendSummaryFull(sd, activeBackend, sessionTs, sessionDone, sessionTotal, sessionEmpty);
+    writeBackendSummaryFull(stateFs, activeBackend, sessionTs, sessionDone, sessionTotal, sessionEmpty);
 
     // ── Determine result ──────────────────────────────────────────────────────
     unsigned long elapsed = millis() - sessionStart;
@@ -900,7 +908,7 @@ void FileUploader::finalizeCloudImport(SDCardManager* sdManager, fs::FS &sd) {
 // Returns false if caller should return false (error).
 // Sets filesOut to the file list on success.
 // ============================================================================
-static bool handleFolderScan(fs::FS &sd, const String& folderName, const String& folderPath,
+static bool handleFolderScan(fs::FS &sd, fs::FS &stateFs, const String& folderName, const String& folderPath,
                               UploadStateManager* sm,
                               std::vector<String>& filesOut,
                               std::function<std::vector<String>(fs::FS&, const String&)> scanFn) {
@@ -932,11 +940,11 @@ static bool handleFolderScan(fs::FS &sd, const String& folderName, const String&
         if (sm->isPendingFolder(folderName)) {
             if (sm->shouldPromotePendingToCompleted(folderName, currentTime)) {
                 sm->promotePendingToCompleted(folderName);
-                sm->save(sd);
+                sm->save(stateFs);
             }
         } else {
             sm->markFolderPending(folderName, currentTime);
-            sm->save(sd);
+            sm->save(stateFs);
         }
         return true;  // "done" for this folder (empty)
     }
@@ -952,12 +960,13 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
 #else
     if (!smbUploader || !smbStateManager) return false;
     fs::FS &sd = sdManager->getFS();
+    fs::FS &stateFs = LittleFS;
 
     LOGF("[FileUploader] [SMB] Uploading DATALOG folder: %s", folderName.c_str());
     String folderPath = "/DATALOG/" + folderName;
 
     std::vector<String> files;
-    if (!handleFolderScan(sd, folderName, folderPath, smbStateManager, files,
+    if (!handleFolderScan(sd, stateFs, folderName, folderPath, smbStateManager, files,
             [this](fs::FS& sd2, const String& fp) { return scanFolderFiles(sd2, fp); })) {
         return false;
     }
@@ -999,7 +1008,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         if (!smbUploader->isConnected()) {
             if (!smbUploader->begin()) {
                 LOG_ERROR("[FileUploader] [SMB] Failed to connect");
-                smbStateManager->save(sd);
+                smbStateManager->save(stateFs);
                 return false;
             }
         }
@@ -1007,7 +1016,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         if (!smbUploader->upload(localPath, localPath, sd, smbBytes)) {
             LOG_ERRORF("[FileUploader] [SMB] Upload failed: %s", localPath.c_str());
             LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
-            smbStateManager->save(sd);
+            smbStateManager->save(stateFs);
             return false;
         }
         if (isRecent) smbStateManager->markFileUploaded(localPath, "", fileSize);
@@ -1017,6 +1026,11 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
 #ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
+        if (g_abortUploadFlag) {
+            LOG_WARN("[FileUploader] [SMB] Abort requested — stopping upload cleanly");
+            smbStateManager->save(stateFs);
+            return false;
+        }
     }
 
     if (isRescan) {
@@ -1044,7 +1058,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         smbStateManager->markFolderCompleted(folderName);
     }
 
-    smbStateManager->save(sd);
+    smbStateManager->save(stateFs);
     return uploadSuccess;
 #endif
 }
@@ -1095,6 +1109,8 @@ bool FileUploader::uploadMandatoryFilesSmb(SDCardManager* sdManager, fs::FS &sd)
 #ifndef ENABLE_SMB_UPLOAD
     return true;
 #else
+    fs::FS &stateFs = LittleFS;
+
     LOG("[FileUploader] [SMB] Uploading mandatory root files...");
     const char* rootPaths[] = {
         "/Identification.json", "/Identification.crc", "/Identification.tgt", "/STR.edf"
@@ -1106,7 +1122,7 @@ bool FileUploader::uploadMandatoryFilesSmb(SDCardManager* sdManager, fs::FS &sd)
     for (const String& fp : settingsFiles) {
         uploadSingleFileSmb(sdManager, fp, false);
     }
-    if (smbStateManager) smbStateManager->save(sd);
+    if (smbStateManager) smbStateManager->save(stateFs);
     return true;
 #endif
 }
@@ -1120,12 +1136,13 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
 #else
     if (!sleephqUploader || !cloudStateManager) return false;
     fs::FS &sd = sdManager->getFS();
+    fs::FS &stateFs = LittleFS;
 
     LOGF("[FileUploader] [Cloud] Uploading DATALOG folder: %s", folderName.c_str());
     String folderPath = "/DATALOG/" + folderName;
 
     std::vector<String> files;
-    if (!handleFolderScan(sd, folderName, folderPath, cloudStateManager, files,
+    if (!handleFolderScan(sd, stateFs, folderName, folderPath, cloudStateManager, files,
             [this](fs::FS& sd2, const String& fp) { return scanFolderFiles(sd2, fp); })) {
         return false;
     }
@@ -1171,7 +1188,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
 
         if (!sleephqUploader->isConnected() && !sleephqUploader->begin()) {
             LOG_ERROR("[FileUploader] [Cloud] Connection failed");
-            cloudStateManager->save(sd);
+            cloudStateManager->save(stateFs);
             return false;
         }
         unsigned long cloudBytes = 0;
@@ -1179,7 +1196,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         if (!sleephqUploader->upload(localPath, localPath, sd, cloudBytes, cloudChecksum)) {
             LOG_ERRORF("[FileUploader] [Cloud] Upload failed: %s", localPath.c_str());
             LOGF("[FileUploader] Successfully uploaded %d files before failure", uploadedCount);
-            cloudStateManager->save(sd);
+            cloudStateManager->save(stateFs);
             return false;
         }
         if (isRecent) cloudStateManager->markFileUploaded(localPath, "", fileSize);
@@ -1190,6 +1207,11 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
 #ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
+        if (g_abortUploadFlag) {
+            LOG_WARN("[FileUploader] [Cloud] Abort requested — stopping upload cleanly");
+            cloudStateManager->save(stateFs);
+            return false;
+        }
     }
 
     if (isRescan) {
@@ -1210,7 +1232,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         cloudStateManager->markFolderCompleted(folderName);
     }
 
-    cloudStateManager->save(sd);
+    cloudStateManager->save(stateFs);
     return uploadSuccess;
 #endif
 }

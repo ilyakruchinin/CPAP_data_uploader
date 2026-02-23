@@ -156,8 +156,8 @@ uint32_t TrafficMonitor::getTotalIdleSamples() const {
     return _totalIdleSamples;
 }
 
-uint16_t TrafficMonitor::getLastPulseCount() const {
-    return _lastPulseCount;
+uint32_t TrafficMonitor::getLastPulseCount() const {
+    return (uint32_t)_lastPulseCount;
 }
 
 void TrafficMonitor::resetStatistics() {

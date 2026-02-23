@@ -53,8 +53,8 @@ Logger::Logger()
     , totalBytesLost(0)
     , mutex(nullptr)
     , initialized(false)
-    , sdCardLoggingEnabled(false)
-    , sdFileSystem(nullptr)
+    , logSavingEnabled(false)
+    , logFileSystem(nullptr)
     , logFileName("/debug_log.txt")
     , lastDumpedBytes(0)
 {
@@ -154,8 +154,8 @@ void Logger::log(const char* message) {
         writeToBuffer(finalMsg, len);
     }
     
-    // Note: SD card logging is now handled by periodic dump task
-    // See dumpLogsToSDCardPeriodic() which should be called from main loop
+    // Note: persistent log saving is handled by the periodic flush task.
+    // See dumpSavedLogsPeriodic() which should be called from main loop.
 }
 
 // Log an Arduino String message
@@ -496,22 +496,22 @@ size_t Logger::printLogsTail(Print& output, size_t maxBytes) {
     return bytesWritten;
 }
 
-// Enable or disable SD card logging (debugging only)
-void Logger::enableSdCardLogging(bool enable, fs::FS* sdFS) {
-    if (enable && sdFS == nullptr) {
+// Enable or disable persistent log saving (debugging only)
+void Logger::enableLogSaving(bool enable, fs::FS* logFS) {
+    if (enable && logFS == nullptr) {
         // Cannot enable without valid filesystem
         return;
     }
     
-    sdCardLoggingEnabled = enable;
-    sdFileSystem = enable ? sdFS : nullptr;
+    logSavingEnabled = enable;
+    logFileSystem = enable ? logFS : nullptr;
     
     if (enable) {
         // Reset dump tracking when enabling
         lastDumpedBytes = 0;
         
         // Log a warning message about debugging use
-        String warningMsg = getTimestamp() + "[WARN] SD card logging enabled - DEBUGGING ONLY - Logs will be dumped periodically\n";
+        String warningMsg = getTimestamp() + "[WARN] Persistent log saving enabled - DEBUGGING ONLY - Logs will be flushed periodically\n";
         writeToSerial(warningMsg.c_str(), warningMsg.length());
         if (initialized && buffer != nullptr) {
             writeToBuffer(warningMsg.c_str(), warningMsg.length());
@@ -519,12 +519,14 @@ void Logger::enableSdCardLogging(bool enable, fs::FS* sdFS) {
     }
 }
 
-// Periodic SD card log dump (call from main loop every 10 seconds)
-bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
+// Periodic internal log dump (call from main loop every 10 seconds)
+bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
 #ifdef UNIT_TEST
     return false; // Not supported in unit tests
 #else
-    if (!sdCardLoggingEnabled || sdFileSystem == nullptr || sdManager == nullptr) {
+    (void)sdManager;
+
+    if (!logSavingEnabled || logFileSystem == nullptr) {
         return false;
     }
     
@@ -550,19 +552,8 @@ bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
         return false;
     }
     
-    // Try to take control of SD card (non-blocking)
-    if (!sdManager->takeControl()) {
-        // SD card in use by CPAP - skip this dump
-        return false;
-    }
-    
-    // Calculate how much data to dump
-    // We need to read from lastDumpedBytes to currentBytes
-    // But we need to be careful about buffer wrapping
-    
     // Acquire mutex again for reading buffer content
     if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        sdManager->releaseControl();
         return false;
     }
     
@@ -601,60 +592,47 @@ bool Logger::dumpLogsToSDCardPeriodic(SDCardManager* sdManager) {
     // Release mutex
     xSemaphoreGive(mutex);
     
-    // Write to SD card
-    File logFile = sdFileSystem->open(logFileName, FILE_APPEND);
+    // Write to internal LittleFS (rotating A/B files)
+    // For simplicity, we just append to the active file, and truncate if it gets too large
+    String activeLogFile = "/syslog.A.txt";
+    String inactiveLogFile = "/syslog.B.txt";
+    
+    File logFile = logFileSystem->open(activeLogFile, FILE_APPEND);
     if (!logFile) {
-        // Try to create file if it doesn't exist
-        logFile = sdFileSystem->open(logFileName, FILE_WRITE);
+        logFile = logFileSystem->open(activeLogFile, FILE_WRITE);
         if (!logFile) {
-            sdManager->releaseControl();
             return false;
         }
     }
     
-    // Write log content
     logFile.print(logContent);
+    size_t fileSize = logFile.size();
     logFile.close();
     
-    // Release SD card
-    sdManager->releaseControl();
+    // Simple rotation: if file A is > 20KB, rename it to B (overwriting B),
+    // so the next write creates a fresh file A.
+    if (fileSize > 20480) {
+        logFileSystem->remove(inactiveLogFile);
+        logFileSystem->rename(activeLogFile, inactiveLogFile);
+    }
     
     return true;
 #endif
 }
 
-// Write data to SD card log file (debugging only) - DEPRECATED
-// This method is no longer used - SD logging is now handled by dumpLogsToSDCardPeriodic()
-void Logger::writeToSdCard(const char* data, size_t len) {
+// Write data to persistent log storage (debugging only) - DEPRECATED
+// This method is no longer used - periodic saving is handled by dumpSavedLogsPeriodic()
+void Logger::writeToStorage(const char* data, size_t len) {
     // This method is deprecated and no longer used
-    // SD card logging is now handled by periodic dump task
+    // Persistent log saving is handled by periodic flush task
     // Kept for interface compatibility
 }
-// Dump current logs to SD card for critical failures
-bool Logger::dumpLogsToSDCard(const String& reason) {
+// Dump current logs to internal FS for critical failures
+bool Logger::dumpSavedLogs(const String& reason) {
 #ifdef UNIT_TEST
     return false; // Not supported in unit tests
 #else
-    // Create a temporary SD card manager to dump logs
-    SDCardManager tempSDManager;
-    
-    if (!tempSDManager.begin()) {
-        // Try to log error, but don't recurse into SD dump
-        String errorMsg = getTimestamp() + "[ERROR] Failed to initialize SD card for log dump\n";
-        writeToSerial(errorMsg.c_str(), errorMsg.length());
-        if (initialized && buffer != nullptr) {
-            writeToBuffer(errorMsg.c_str(), errorMsg.length());
-        }
-        return false;
-    }
-    
-    if (!tempSDManager.takeControl()) {
-        // Try to log error, but don't recurse into SD dump
-        String errorMsg = getTimestamp() + "[ERROR] Cannot dump logs - SD card in use by CPAP\n";
-        writeToSerial(errorMsg.c_str(), errorMsg.length());
-        if (initialized && buffer != nullptr) {
-            writeToBuffer(errorMsg.c_str(), errorMsg.length());
-        }
+    if (!logFileSystem) {
         return false;
     }
     
@@ -662,56 +640,33 @@ bool Logger::dumpLogsToSDCard(const String& reason) {
     LogData logData = retrieveLogs();
     
     if (logData.content.isEmpty()) {
-        String warnMsg = getTimestamp() + "[WARN] No logs available to dump\n";
-        writeToSerial(warnMsg.c_str(), warnMsg.length());
-        if (initialized && buffer != nullptr) {
-            writeToBuffer(warnMsg.c_str(), warnMsg.length());
-        }
-        tempSDManager.releaseControl();
         return false;
     }
     
-    // Use the existing logFileName for debug logs
-    String filename = logFileName;
+    // Write logs to internal FS
+    String filename = "/crash_log.txt";
     
-    // Write logs to SD card (append mode to preserve previous dumps)
-    File logFile = tempSDManager.getFS().open(filename, FILE_APPEND);
+    // Write logs to FS (append mode to preserve previous dumps)
+    File logFile = logFileSystem->open(filename, FILE_APPEND);
     if (!logFile) {
         // If file doesn't exist, create it
-        logFile = tempSDManager.getFS().open(filename, FILE_WRITE);
+        logFile = logFileSystem->open(filename, FILE_WRITE);
         if (!logFile) {
-            String errorMsg = getTimestamp() + "[ERROR] Failed to create log dump file: " + filename + "\n";
-            writeToSerial(errorMsg.c_str(), errorMsg.length());
-            if (initialized && buffer != nullptr) {
-                writeToBuffer(errorMsg.c_str(), errorMsg.length());
-            }
-            tempSDManager.releaseControl();
             return false;
         }
     }
     
     // Write separator and reason header
-    logFile.println("\n===== REASON: " + reason + " =====");
+    logFile.println("\n===== CRASH REASON: " + reason + " =====");
     logFile.println("Timestamp: " + String(millis()) + "ms");
     logFile.println("Free heap: " + String(ESP.getFreeHeap()) + " bytes");
-    logFile.println("WiFi status: " + String(WiFi.status()));
-    if (logData.bytesLost > 0) {
-        logFile.println("WARNING: " + String(logData.bytesLost) + " bytes of logs were lost due to buffer overflow");
-    }
-    logFile.println("Buffer retention: Logs always retained in circular buffer");
     logFile.println("=== Log Content ===");
-    
-    // Write log content
     logFile.print(logData.content);
-    
-    // Write end separator
     logFile.println("=== End of Log Dump ===\n");
-    
     logFile.close();
-    tempSDManager.releaseControl();
     
     // Log success message
-    String successMsg = getTimestamp() + "[INFO] Debug logs dumped to SD card: " + filename + " (reason: " + reason + ")\n";
+    String successMsg = getTimestamp() + "[INFO] Crash logs saved to " + filename + "\n";
     writeToSerial(successMsg.c_str(), successMsg.length());
     if (initialized && buffer != nullptr) {
         writeToBuffer(successMsg.c_str(), successMsg.length());

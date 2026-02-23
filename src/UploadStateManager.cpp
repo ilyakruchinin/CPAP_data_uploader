@@ -83,8 +83,8 @@ void UploadStateManager::setPaths(const String& snapshotPath, const String& jour
 }
 
 UploadStateManager::UploadStateManager() 
-    : stateSnapshotPath("/.upload_state.v2"),
-      stateJournalPath("/.upload_state.v2.log"),
+    : stateSnapshotPath("/littlefs/.upload_state.v2"),
+      stateJournalPath("/littlefs/.upload_state.v2.log"),
       lastUploadTimestamp(0),
       completedCount(0),
       pendingCount(0),
@@ -1022,6 +1022,10 @@ bool UploadStateManager::applyJournalLine(const char* line) {
 }
 
 bool UploadStateManager::replayJournal(fs::FS &sd) {
+    if (!sd.exists(stateJournalPath)) {
+        journalLineCount = 0;
+        return false;
+    }
     File file = sd.open(stateJournalPath, FILE_READ);
     if (!file) {
         journalLineCount = 0;

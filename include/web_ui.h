@@ -70,6 +70,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <button id=t-logs onclick="tab('logs')">Logs</button>
 <button id=t-cfg onclick="tab('cfg')">Config</button>
 <button id=t-mon onclick="tab('mon')">Monitor</button>
+<button id=t-mem onclick="tab('mem')">Memory</button>
 <button id=t-ota onclick="tab('ota')">OTA</button>
 </nav>
 
@@ -123,6 +124,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
 <h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
 <div style="display:flex;gap:6px">
+<button class="btn bs" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Download persisted log files from device flash">&#11015; Download Saved Logs</button>
 <button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
 <button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
 </div>
@@ -133,25 +135,21 @@ nav button:hover:not(.act){background:#3a5a7e}
 
 <!-- CONFIG -->
 <div id=cfg class=page>
-<div id=cfg-lock-banner style="display:none;background:#2a4a2a;border:1px solid #4a8a4a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#a0e0a0">
-&#128274; <strong>Upload paused</strong> &mdash; Config editor is active. Press <em>Cancel</em> to resume uploads without saving, or <em>Save &amp; Reboot</em> to apply changes.
-</div>
-<div class=card><h2>Configuration</h2>
-<pre id=cfg-box style="font-size:.8em;max-height:300px;overflow-y:auto">Loading...</pre>
+<div id=cfg-lock-banner style="display:none;background:#2a2a00;border:1px solid #aa9900;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.85em;color:#ddcc88">
+&#128274; <strong>Upload running</strong> &mdash; Config editor is active. Press <em>Cancel</em> to close without saving, or <em>Save &amp; Reboot</em> to apply changes. After reboot, <strong>always</strong> physically eject and reinsert the CPAP&rsquo;s SD card before powering it on.
 </div>
 <div class=card>
 <h2>Edit config.txt
 <span id=cfg-lock-badge style="display:none;margin-left:8px;background:#4a8a4a;color:#fff;font-size:.65em;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle">LOCKED</span>
 </h2>
 <p style="font-size:.82em;color:#8f98a0;margin-bottom:8px">Direct editor for the SD card config file. Passwords stored securely in flash appear as <code>***STORED_IN_FLASH***</code> &mdash; leave them unchanged to keep existing credentials. Max 4096 bytes. <strong>Changes take effect after reboot.</strong></p>
-<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> first to pause uploads and enable editing. Uploads resume automatically on Save, Cancel, or after 30&nbsp;min.</p>
+<p style="font-size:.82em;color:#ffcc44;margin-bottom:8px">&#9888; Click <strong>Edit</strong> to start editing. Uploads continue while the editor is open.</p>
 <textarea id=cfg-raw style="width:100%;box-sizing:border-box;height:320px;background:#111820;color:#6a7a8a;border:1px solid #2d3440;border-radius:4px;padding:8px;font-family:monospace;font-size:.8em;resize:vertical" maxlength=4096 oninput=cfgRawCount() placeholder="Click Edit to begin..." readonly></textarea>
 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
 <span id=cfg-raw-cnt style="font-size:.8em;color:#8f98a0">0 / 4096 bytes</span>
 <div class=actions style=margin:0>
 <button id=btn-cfg-edit class="btn bp" onclick=acquireCfgLock() style="padding:6px 14px">&#9998; Edit</button>
 <button id=btn-cfg-reload class="btn bs" onclick=loadRawCfg() style="padding:6px 14px;display:none">&#8635; Reload</button>
-<button id=btn-cfg-save class="btn bp" onclick=saveRawCfg() style="padding:6px 14px;display:none">&#128190; Save</button>
 <button id=btn-cfg-savereboot class="btn bd" onclick=saveAndReboot() style="padding:6px 14px;display:none">Save &amp; Reboot</button>
 <button id=btn-cfg-cancel class="btn bs" onclick=releaseCfgLock() style="padding:6px 14px;display:none">&#10005; Cancel</button>
 </div>
@@ -164,10 +162,11 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div id=mon class=page>
 <div class=card style="margin-bottom:10px"><h2>SD Activity Monitor <span id=mon-dot class="dot idle"></span></h2>
 <p style="font-size:.85em;color:#c7d5e0;line-height:1.5;margin-bottom:10px">Monitors SD card bus activity. Use when CPAP machine is on. Red = CPAP writing, Green = safe to upload.</p>
+<div id=mon-upwarn style="display:none;background:#2a2a1a;border:1px solid #665522;border-radius:6px;padding:9px 13px;margin-bottom:10px;font-size:.84em;color:#ddcc88">&#9889; Upload in progress — monitoring will start automatically when the upload finishes.</div>
 <div class=actions>
 <button id=btn-mst class="btn bp" onclick=startMon()>Start Monitoring</button>
 <button id=btn-msp class="btn bd" onclick=stopMon() style=display:none>Stop</button>
-<button class="btn bs" onclick="tab('dash')">&#8592; Dashboard</button>
+<button class="btn bs" onclick=openProfilerWizard()>&#9881; Profiler Wizard</button>
 </div>
 </div>
 <div class=stats-grid>
@@ -178,6 +177,57 @@ nav button:hover:not(.act){background:#3a5a7e}
 </div>
 <div class=card><h2>Activity Timeline (Last 60s)</h2>
 <div class=chart id=m-ch><em>Waiting for data...</em></div>
+</div>
+</div>
+
+
+<!-- PROFILER WIZARD MODAL -->
+<div id="prof-wiz" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;display:none;align-items:center;justify-content:center">
+<div style="background:#1b2838;border:1px solid #66c0f4;border-radius:12px;padding:25px;max-width:550px;width:90%;box-shadow:0 10px 40px rgba(102,192,244,0.2)">
+<h2 style="color:#fff;margin-bottom:10px;font-size:1.4em">&#9881; CPAP Profiler Wizard</h2>
+<p style="font-size:0.9em;color:#c7d5e0;line-height:1.5;margin-bottom:20px">
+This tool will measure your CPAP machine's specific SD card writing behavior to help you tune <strong style="color:#66c0f4">INACTIVITY_SECONDS</strong> (SMART_WAIT).
+</p>
+<div style="background:#0f1923;padding:15px;border-radius:8px;margin-bottom:20px;border:1px solid #2a475e">
+<ol style="font-size:0.85em;color:#8f98a0;padding-left:20px;line-height:1.6">
+<li>Ensure the CPAP machine is <strong>turned ON</strong> and actively blowing air.</li>
+<li>Ensure the SD card is physically inserted into the CPAP.</li>
+<li>Click <strong>Start Profiling</strong>.</li>
+<li><strong style="color:#ffcc44">Breathe in and out continuously as you would during normal therapy</strong> — do not pause or hold your breath. The profiler measures real SD write gaps during active therapy.</li>
+<li>Wait 2–3 minutes. The wizard will record the longest continuous silence between SD writes and suggest an <strong>INACTIVITY_SECONDS</strong> value.</li>
+</ol>
+</div>
+<div style="text-align:center;margin-bottom:20px">
+<div style="font-size:1.1em;color:#8f98a0;margin-bottom:5px">Longest measured silence:</div>
+<div id="prof-max-idle" style="font-size:2.8em;color:#44ff44;font-family:monospace;font-weight:bold">0.0s</div>
+</div>
+<div id="prof-rec-box" style="display:none;background:#1a3a1a;border:1px solid #2f8f57;padding:12px;border-radius:6px;margin-bottom:20px">
+<div style="font-size:0.9em;color:#c7d5e0">
+Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id="prof-rec-val" style="font-weight:bold;font-size:1.2em;color:#fff">--</span>
+</div>
+<div style="font-size:0.75em;color:#8f98a0;margin-top:4px">(Longest silence + 5 second safety margin)</div>
+</div>
+<div style="display:flex;gap:10px;justify-content:flex-end">
+<button id="btn-prof-cancel" class="btn bs" onclick="document.getElementById('prof-wiz').style.display='none'">Close</button>
+<button id="btn-prof-start" class="btn bp" onclick="startProfiler()" style="background:#aa66ff;color:#fff">Start Profiling</button>
+</div>
+</div>
+</div>
+
+<!-- MEMORY -->
+<div id=mem class=page>
+<div class=card style="margin-bottom:10px"><h2>Runtime Memory <span style="font-size:.7em;color:#8f98a0;font-weight:400">(live, 2s)</span></h2>
+<div class=stats-grid>
+<div class=stat-box><span class=sl>Free Heap</span><span class=sv id=hd-fh style="color:#66c0f4">—</span><span class=sl style="margin-top:6px">Min (2m)</span><span class=sv id=hd-fh-min style="color:#ddaa44">—</span></div>
+<div class=stat-box><span class=sl>Max Contiguous</span><span class=sv id=hd-ma style="color:#aa66ff">—</span><span class=sl style="margin-top:6px">Min (2m)</span><span class=sv id=hd-ma-min style="color:#ddaa44">—</span></div>
+</div>
+</div>
+<div class=card>
+<h2>Heap History <span style="font-size:.65em;color:#8f98a0;font-weight:400">&nbsp;last ~2 min &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#5c9ade;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Free &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#aa66ff;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Max Alloc</span></h2>
+<div style="background:#0f1923;border-radius:6px;padding:8px 4px 2px">
+<svg id=heap-svg viewBox="0 0 600 200" preserveAspectRatio="none" style="width:100%;height:200px;display:block"></svg>
+</div>
+<div style="display:flex;justify-content:space-between;font-size:.72em;color:#3a5070;padding:2px 6px 0"><span>~2m ago</span><span>~1m ago</span><span>now</span></div>
 </div>
 </div>
 
@@ -214,16 +264,19 @@ nav button:hover:not(.act){background:#3a5a7e}
 </div>
 
 <script>
-var cfg={},monPoll=null,logPoll=null,curTab='dash';
+var cfg={},monPoll=null,logPoll=null,curTab='dash',monActive=false;
+var heapHistory=[],MAX_HEAP_SAMPLES=60,currentFsmState='';
 function tab(t){
-  ['dash','logs','cfg','mon','ota'].forEach(function(x){
+  ['dash','logs','cfg','mon','mem','ota'].forEach(function(x){
     document.getElementById(x).classList.toggle('on',x===t);
     document.getElementById('t-'+x).classList.toggle('act',x===t);
   });
   curTab=t;
   if(t==='logs'){startLogPoll();}else{stopLogPoll();}
-  if(t==='mon'){startMon();}else{stopMon();}
+  if(t!=='mon'){stopMon();}
   if(t==='cfg'){loadCfg();}
+  if(t==='mon'){checkMonUploadState();}
+  if(t==='mem'){updateHeapChart();}
 }
 function toast(msg,mode){
   var el=document.getElementById('toast');
@@ -244,7 +297,8 @@ function set(id,html,inner){var el=document.getElementById(id);if(el){if(inner==
 function seti(id,html){set(id,html,false);}
 
 function renderStatus(d){
-  seti('d-st',badgeHtml(d.state||'?'));
+  currentFsmState=d.state||'';
+  seti('d-st',badgeHtml(currentFsmState||'?'));
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
   set('d-mode',cfg.upload_mode||'—');
   set('d-tsync',d.time_synced?'Yes':'No');
@@ -288,15 +342,67 @@ function renderStatus(d){
   var fst=inc>0?'&#9888; '+inc+' folder(s) pending':(done>0?'&#10003; All synced':'Waiting for first scan');
   seti('d-fst',fst);
   set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
+  if(curTab==='mon')checkMonUploadState();
 }
 
-var statusTimer=null;
+var statusTimer=null,diagTimer=null;
 function pollStatus(){
   fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     renderStatus(d);
   }).catch(function(){set('d-st','Offline');});
 }
 function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
+
+function pollDiag(){
+  fetch('/api/diagnostics',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    var fhV=d.free_heap||0,maV=d.max_alloc||0;
+    var fh=fhV?Math.round(fhV/1024)+' KB':'\u2014';
+    var ma=maV?Math.round(maV/1024)+' KB':'\u2014';
+    set('d-fh',fh);set('d-ma',ma);
+    set('hd-fh',fh);set('hd-ma',ma);
+    if(fhV){heapHistory.push({fh:fhV,ma:maV});if(heapHistory.length>MAX_HEAP_SAMPLES)heapHistory.shift();}
+    if(curTab==='mem')updateHeapChart();
+  }).catch(function(){});
+}
+function updateHeapChart(){
+  var svg=document.getElementById('heap-svg');
+  if(!svg||heapHistory.length<2)return;
+  var W=600,H=200,n=heapHistory.length;
+  var maxVal=0;
+  heapHistory.forEach(function(s){if(s.fh>maxVal)maxVal=s.fh;});
+  if(maxVal<65536)maxVal=65536;
+  var ptsFh='',ptsMa='';
+  heapHistory.forEach(function(s,i){
+    var x=((W-2)*i/(MAX_HEAP_SAMPLES-1)+1).toFixed(1);
+    var yFh=(H-(s.fh/maxVal)*(H-14)-6).toFixed(1);
+    var yMa=(H-(s.ma/maxVal)*(H-14)-6).toFixed(1);
+    ptsFh+=(i===0?'M':'L')+x+' '+yFh;
+    ptsMa+=(i===0?'M':'L')+x+' '+yMa;
+  });
+  var grid='';
+  [0.25,0.5,0.75].forEach(function(f){
+    var y=(H-f*(H-14)-6).toFixed(0);
+    var kb=Math.round(maxVal*f/1024);
+    grid+='<line x1="0" y1="'+y+'" x2="'+W+'" y2="'+y+'" stroke="#1a2a3a" stroke-width="1"/>';
+    grid+='<text x="4" y="'+(parseInt(y)-2)+'" fill="#3a5070" font-size="9" font-family="monospace">'+kb+'K</text>';
+  });
+  svg.innerHTML=grid
+    +'<path d="'+ptsFh+'" stroke="#5c9ade" stroke-width="1.5" fill="none"/>'
+    +'<path d="'+ptsMa+'" stroke="#aa66ff" stroke-width="1.5" fill="none"/>';
+  if(heapHistory.length>0){
+    var minFh=heapHistory.reduce(function(m,s){return s.fh<m?s.fh:m;},heapHistory[0].fh);
+    var minMa=heapHistory.reduce(function(m,s){return s.ma<m?s.ma:m;},heapHistory[0].ma);
+    set('hd-fh-min',Math.round(minFh/1024)+' KB');
+    set('hd-ma-min',Math.round(minMa/1024)+' KB');
+  }
+}
+function checkMonUploadState(){
+  var busy=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
+  var w=document.getElementById('mon-upwarn');
+  if(w)w.style.display=busy?'':'none';
+}
+function startDiagPoll(){if(!diagTimer){pollDiag();diagTimer=setInterval(pollDiag,2000);}}
+startDiagPoll();
 
 var cfgLocked=false;
 function _setCfgLockUI(locked){
@@ -310,22 +416,20 @@ function _setCfgLockUI(locked){
   ta.style.borderColor=locked?'#3d4450':'#2d3440';
   document.getElementById('btn-cfg-edit').style.display=locked?'none':'';
   document.getElementById('btn-cfg-reload').style.display=locked?'':'none';
-  document.getElementById('btn-cfg-save').style.display=locked?'':'none';
   document.getElementById('btn-cfg-savereboot').style.display=locked?'':'none';
   document.getElementById('btn-cfg-cancel').style.display=locked?'':'none';
 }
 function acquireCfgLock(){
+  var active=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
+  if(active&&!confirm('An upload is currently in progress.\n\nThe upload will continue running. You can edit config and Save & Reboot when ready.\n\nContinue?'))return;
   var msg=document.getElementById('cfg-raw-msg');
-  msg.style.color='#8f98a0';msg.textContent='Pausing uploads...';
+  msg.style.color='#8f98a0';msg.textContent='Requesting lock...';
   fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":true}',cache:'no-store'})
   .then(function(r){return r.json();})
   .then(function(d){
-    if(d.ok){
-      _setCfgLockUI(true);
-      loadRawCfg();
-      msg.textContent='';
-    }else{msg.style.color='#ff6060';msg.textContent='Cannot lock: '+(d.error||'?');}
-  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Lock failed: '+e.message;});
+    if(d.ok){_setCfgLockUI(true);loadRawCfg();msg.textContent='';}
+    else{msg.style.color='#ff6060';msg.textContent='Lock failed: '+(d.error||'?');}
+  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Lock error: '+e.message;});
 }
 function releaseCfgLock(){
   fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});
@@ -335,10 +439,8 @@ function releaseCfgLock(){
 function loadCfg(){
   fetch('/api/config',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     cfg=d;
-    document.getElementById('cfg-box').textContent=JSON.stringify(d,null,2);
-    renderStatus._cfgLoaded=true;
-  }).catch(function(){document.getElementById('cfg-box').textContent='Failed to load config.';});
-  if(!cfgLocked)_setCfgLockUI(false);
+  }).catch(function(){});
+  if(!cfgLocked){_setCfgLockUI(false);loadRawCfg();}
 }
 function cfgRawCount(){
   var t=document.getElementById('cfg-raw');
@@ -364,7 +466,7 @@ function saveRawCfg(){
   .then(function(r){return r.json();})
   .then(function(d){
     if(d.ok){
-      msg.style.color='#57cbde';msg.textContent='\u2713 '+d.message;
+      msg.style.color='#57cbde';msg.innerHTML='\u2713 Saved \u2014 <strong>reboot required</strong> for changes to take effect.';
       releaseCfgLock();
     }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
   }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
@@ -377,9 +479,12 @@ function saveAndReboot(){
   .then(function(r){return r.json();})
   .then(function(d){
     if(d.ok){
-      msg.style.color='#57cbde';msg.textContent='Saved. Rebooting...';
+      _setCfgLockUI(false);
+      document.getElementById('cfg-lock-banner').style.display='none';
+      msg.style.color='#57cbde';msg.textContent='Saved — rebooting… redirecting in 10s';
       fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});
       setTimeout(function(){fetch('/soft-reboot',{cache:'no-store'});},800);
+      setTimeout(function(){window.location.href='/';},10000);
     }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
   }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Failed: '+e.message;});
 }
@@ -453,6 +558,12 @@ function fetchLogs(){
   }).catch(function(){set('log-st','Disconnected');});
 }
 function clearLogBuf(){clientLogBuf=[];lastSeenLine='';document.getElementById('log-box').textContent='';}
+function downloadSavedLogs(){
+  var a=document.createElement('a');
+  a.href='/api/logs/saved';
+  a.download='cpap_logs.txt';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
 function copyLogBuf(){
   var txt=clientLogBuf.join('\n');
   if(!txt){return;}
@@ -471,6 +582,7 @@ function startLogPoll(){if(!logPoll){fetchLogs();logPoll=setInterval(fetchLogs,4
 function stopLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}}
 
 function startMon(){
+  monActive=true;
   fetch('/api/monitor-start',{cache:'no-store'});
   document.getElementById('btn-mst').style.display='none';
   document.getElementById('btn-msp').style.display='inline-flex';
@@ -478,7 +590,10 @@ function startMon(){
   fetchMon();
 }
 function stopMon(){
-  fetch('/api/monitor-stop',{cache:'no-store'});
+  if(monActive){
+    monActive=false;
+    fetch('/api/monitor-stop',{cache:'no-store'});
+  }
   document.getElementById('btn-mst').style.display='inline-flex';
   document.getElementById('btn-msp').style.display='none';
   if(monPoll){clearInterval(monPoll);monPoll=null;}
@@ -502,7 +617,35 @@ function fetchMon(){
       });
       document.getElementById('m-ch').innerHTML=h;
     }
+    if(profActive){
+      var li=d.longest_idle_ms/1000;
+      if(li>profMaxIdle)profMaxIdle=li;
+      document.getElementById('prof-max-idle').textContent=profMaxIdle.toFixed(1)+'s';
+      if(profMaxIdle>0){
+        document.getElementById('prof-rec-box').style.display='block';
+        document.getElementById('prof-rec-val').textContent=Math.ceil(profMaxIdle+5)+'';
+      }
+    }
   }).catch(function(){});
+}
+
+var profActive=false,profMaxIdle=0;
+function openProfilerWizard(){
+  document.getElementById('prof-wiz').style.display='flex';
+}
+function startProfiler(){
+  if(profActive){
+    profActive=false;
+    document.getElementById('btn-prof-start').textContent='Start Profiling';
+    document.getElementById('btn-prof-start').style.background='#aa66ff';
+    return;
+  }
+  profActive=true;profMaxIdle=0;
+  document.getElementById('prof-max-idle').textContent='0.0s';
+  document.getElementById('prof-rec-box').style.display='none';
+  document.getElementById('btn-prof-start').textContent='Stop Profiling';
+  document.getElementById('btn-prof-start').style.background='#e04030';
+  startMon();
 }
 
 function triggerUpload(){

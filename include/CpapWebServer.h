@@ -7,7 +7,6 @@
 #include "UploadStateManager.h"
 #include "ScheduleManager.h"
 #include "WiFiManager.h"
-#include "CPAPMonitor.h"
 #include "TrafficMonitor.h"
 #include "WebStatus.h"
 #include "SDCardManager.h"
@@ -22,6 +21,7 @@ extern volatile bool g_resetStateFlag;
 extern volatile bool g_softRebootFlag;
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
+extern volatile bool g_abortUploadFlag;
 
 // Config edit lock — set by web UI to pause FSM uploads while user edits config
 extern bool g_configEditLock;
@@ -35,7 +35,6 @@ private:
     UploadStateManager* smbStateManager;  // SMB state manager (may be null)
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
-    CPAPMonitor* cpapMonitor;
     TrafficMonitor* trafficMonitor;
     SDCardManager* sdManager;
     
@@ -53,11 +52,13 @@ private:
     void handleConfigPage();      // HTML Config Page
     void handleApiConfig();       // JSON Config API
     void handleLogs();            // HTML Logs Viewer (AJAX)
-    void handleApiLogs();         // Raw Logs API
+    void handleApiLogs();         // Raw Logs API (in-memory buffer)
+    void handleApiLogsSaved();    // Saved log files from LittleFS (syslog.A/B.txt)
     void handleNotFound();
     void handleMonitorStart();
     void handleMonitorStop();
     void handleSdActivity();
+    void handleApiDiagnostics();
     void handleMonitorPage();
     void handleApiConfigRawGet();   // GET /api/config-raw
     void handleApiConfigRawPost();  // POST /api/config-raw
@@ -86,7 +87,7 @@ private:
 public:
     CpapWebServer(Config* cfg, UploadStateManager* state, 
                   ScheduleManager* schedule, 
-                  WiFiManager* wifi = nullptr, CPAPMonitor* monitor = nullptr);
+                  WiFiManager* wifi = nullptr);
     ~CpapWebServer();
     
     bool begin();

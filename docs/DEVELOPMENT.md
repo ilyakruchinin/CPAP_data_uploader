@@ -412,16 +412,15 @@ build_flags =
 
 **Debug Logging:** By default, `LOG_DEBUG()` and `LOG_DEBUGF()` macros are compiled out (zero overhead). Enable with `-DENABLE_VERBOSE_LOGGING` to see detailed diagnostics including progress updates, state details, and troubleshooting information. Saves ~10-15KB flash and ~35-75ms per upload session when disabled.
 
-**SD Card Logging:** For advanced debugging, logs can be written to SD card by setting `LOG_TO_SD_CARD: true` in `config.txt`. 
+**Persistent Log Saving:** For advanced debugging, logs can be persisted to internal LittleFS by setting `SAVE_LOGS: true` in `config.txt`. 
 
-⚠️ **WARNING: SD card logging is for debugging only and can prevent the CPAP machine from reliably accessing the SD card. Only enable it temporarily for troubleshooting, and only when `UPLOAD_MODE` is `"scheduled"` with an upload window outside normal therapy times. Disable it immediately afterward.**
+⚠️ **WARNING: Persistent log saving is for debugging only. Enable it temporarily for troubleshooting, and only when `UPLOAD_MODE` is `"scheduled"` with an upload window outside normal therapy times. Disable it immediately afterward.**
 
 When enabled:
-- Logs are written to `/debug_log.txt` on the SD card
-- All log messages (including serial and buffer logs) are also written to the file
-- File is opened in append mode for each log message
-- If file creation fails, SD logging is automatically disabled
-- Can interfere with or block CPAP machine SD card access
+- Logs are written to `/littlefs/syslog.A.txt` and rotated to `/littlefs/syslog.B.txt`
+- Crash snapshots are written to `/littlefs/crash_log.txt`
+- All log messages (including serial and buffer logs) are also persisted
+- If file creation fails, log persistence is automatically disabled
 
 ### Memory Usage
 
@@ -534,7 +533,7 @@ git push origin v0.3.0
 4. **Test Upload**
    - [ ] Files uploaded to SMB share (if SMB enabled)
    - [ ] Files uploaded to SleepHQ (if Cloud enabled)
-   - [ ] `.upload_state.v2.smb`/`.cloud` and `.upload_state.v2.smb.log`/`.cloud.log` created on SD card (depending on enabled backends)
+   - [ ] `.upload_state.v2.smb`/`.cloud` and `.upload_state.v2.smb.log`/`.cloud.log` created on internal LittleFS (depending on enabled backends)
    - [ ] No errors in serial output
 
 5. **Test Web Interface** (if enabled)

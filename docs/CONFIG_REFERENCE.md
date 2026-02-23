@@ -83,11 +83,19 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 
 ---
 
-## 8. Debugging
+## 8. SD Card & System
 
 | Key | Default | Description |
 |---|---|---|
-| `LOG_TO_SD_CARD` | `false` | Set to `true` to periodically dump the in-memory log buffer to the SD card. **Debugging only** — this keeps the SD card mounted continuously and will block CPAP data writes. Use only in `scheduled` mode outside therapy hours. |
+| `ENABLE_SD_CMD0_RESET` | `true` | If `true`, bit-bangs a `CMD0` (GO_IDLE_STATE) frame on the SD bus immediately before returning control to the CPAP machine. This forces the CPAP to cleanly remount the SD card instead of throwing a timeout or RCA-mismatch error after the ESP32 releases control. Disable only if your CPAP model is known to reject CMD0 pulses. |
+
+---
+
+## 9. Debugging
+
+| Key | Default | Description |
+|---|---|---|
+| `SAVE_LOGS` | `false` | Set to `true` to periodically flush the in-memory log buffer to the ESP32's internal `LittleFS` partition (rotating `syslog.A.txt` / `syslog.B.txt`). Logs are flushed every **5 seconds**, continuously — including during active uploads — and always immediately before any reboot. Use the **⬇ Download Saved Logs** button on the Logs tab to download the persisted files to your browser. Logs are written to internal flash only, never to the SD card. The legacy key name `LOG_TO_SD_CARD` is accepted as a deprecated alias. |
 | `DEBUG` | `false` | Set to `true` to enable verbose diagnostics: (1) per-folder `Pre-flight scan` lines in the upload log, and (2) `[res fh= ma= fd=]` heap/file-descriptor stats appended to every log line. Leave `false` in normal operation to keep logs concise. |
 
 ---
