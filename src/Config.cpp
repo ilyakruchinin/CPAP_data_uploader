@@ -28,7 +28,7 @@ Config::Config() :
     inactivitySeconds(62),
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
-    enableSdCmd0Reset(true),
+    enableSdCmd0Reset(false),
     
     _hasSmbEndpoint(false),
     _hasCloudEndpoint(false),
