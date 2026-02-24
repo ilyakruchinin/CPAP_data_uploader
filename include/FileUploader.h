@@ -119,7 +119,15 @@ private:
         return cloudStateManager;
     }
 
+    UploadStateManager* getCloudStateManager() {
+        return cloudStateManager;
+    }
+
 public:
+    // Allow main FSM to trigger pre-connections before SD acquisition
+    SMBUploader* getSmbUploader() { return smbUploader; }
+    SleepHQUploader* getCloudUploader() { return sleephqUploader; }
+
     FileUploader(Config* cfg, WiFiManager* wifi);
     ~FileUploader();
 
