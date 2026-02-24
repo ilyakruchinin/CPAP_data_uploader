@@ -300,15 +300,31 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
                     }
 
                     if (!completed && !pending) {
-                        // Genuinely incomplete — but old folders are gated by canUploadOldData()
-                        // (same gate used in Phase 2).  Outside the upload window old folders
-                        // cannot be processed, so must not count as "work" here either.
-                        bool isOld = !recent;
-                        bool canDoOld = !isOld || !scheduleManager || scheduleManager->canUploadOldData();
-                        if (canDoOld) {
-                            LOGF("[FileUploader] Pre-flight: WORK — folder %s not completed/pending",
-                                 name.c_str());
-                            entry.close(); root.close(); return true;
+                        // Newly seen folder. Treat it as work only if it actually contains
+                        // uploadable files. If it's empty, mark pending now so we don't spin
+                        // a full CLOUD auth/import cycle just to discover there is nothing.
+                        String folderPath = "/DATALOG/" + name;
+                        auto files = scanFolderFiles(sd, folderPath);
+
+                        if (!files.empty()) {
+                            // Genuinely incomplete — but old folders are gated by canUploadOldData()
+                            // (same gate used in Phase 2). Outside the upload window old folders
+                            // cannot be processed, so must not count as "work" here either.
+                            bool isOld = !recent;
+                            bool canDoOld = !isOld || !scheduleManager || scheduleManager->canUploadOldData();
+                            if (canDoOld) {
+                                LOGF("[FileUploader] Pre-flight: WORK — folder %s has %d file(s)",
+                                     name.c_str(), (int)files.size());
+                                entry.close(); root.close(); return true;
+                            }
+                        } else {
+                            unsigned long currentTime = time(NULL);
+                            if (currentTime >= 1000000000) {
+                                sm->markFolderPending(name, currentTime);
+                                sm->save(stateFs);
+                                LOGF("[FileUploader] Pre-flight: empty folder %s — marked pending",
+                                     name.c_str());
+                            }
                         }
                     }
                     if (!completed && pending) {

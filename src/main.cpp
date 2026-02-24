@@ -510,17 +510,8 @@ void handleListening() {
         if (trafficMonitor.isIdleFor(inactivityMs)) {
             LOGF("[FSM] %ds of bus silence confirmed", config.getInactivitySeconds());
             
-            // ── NETWORK PRE-CONNECT ──
-            // Connect to backends BEFORE grabbing the SD card to minimize hold time
-            if (config.hasSmbEndpoint()) {
-                LOG("[FSM] Pre-connecting SMB...");
-                uploader->getSmbUploader()->begin();
-            }
-            if (config.hasCloudEndpoint()) {
-                LOG("[FSM] Pre-connecting Cloud...");
-                uploader->getCloudUploader()->begin();
-            }
-            
+            // No network pre-connect here — backends connect on-demand when actual work is confirmed
+            // (SMB connects lazily in FileUploader, Cloud connects after preflight)
             transitionTo(UploadState::ACQUIRING);
             return;
         }
@@ -536,16 +527,7 @@ void handleListening() {
         } else if (trafficMonitor.isIdleFor(inactivityMs)) {
             LOGF("[FSM] Scheduled mode — %ds of bus silence confirmed", config.getInactivitySeconds());
             
-            // ── NETWORK PRE-CONNECT ──
-            if (config.hasSmbEndpoint()) {
-                LOG("[FSM] Pre-connecting SMB...");
-                uploader->getSmbUploader()->begin();
-            }
-            if (config.hasCloudEndpoint()) {
-                LOG("[FSM] Pre-connecting Cloud...");
-                uploader->getCloudUploader()->begin();
-            }
-            
+            // No network pre-connect here — backends connect on-demand when actual work is confirmed
             transitionTo(UploadState::ACQUIRING);
         }
     }
