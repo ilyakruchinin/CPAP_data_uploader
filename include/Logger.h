@@ -151,6 +151,16 @@ public:
     bool dumpSavedLogs(const String& reason);
 
     /**
+     * Dumps the current log buffer directly to a file on the provided filesystem.
+     * This is useful for emergency boot failures (e.g. bad config) where the SD card
+     * is the only way for the user to retrieve the failure reason.
+     * @param fs The filesystem to write to (typically SD_MMC)
+     * @param filename Absolute path to the file (e.g. "/uploader_error.txt")
+     * @return true if successful
+     */
+    bool dumpToSD(fs::FS& fs, const char* filename);
+
+    /**
      * Check if logger is properly initialized
      * Returns false if memory allocation or mutex creation failed
      */

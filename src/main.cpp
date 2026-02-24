@@ -302,6 +302,12 @@ void setup() {
         LOG_ERROR("Failed to load configuration - cannot continue");
         LOG_ERROR("Please check config.txt file on SD card");
         
+        // ── EMERGENCY BOOT ERROR DUMP ──
+        // Without config, we have no WiFi and no Web UI. We must dump the reason
+        // directly to the SD card so the user can read it on their PC.
+        LOG_ERROR("FATAL ERROR: System halted due to config failure. Please check config.txt.");
+        Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt");
+        
         sdManager.releaseControl();
         
         // Save logs to internal storage for configuration failures
@@ -349,6 +355,16 @@ void setup() {
     if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
         LOG("Failed to connect to WiFi");
         // Note: WiFiManager already persists logs on connection failures
+        
+        // ── EMERGENCY BOOT ERROR DUMP ──
+        // If we can't connect to WiFi on boot, the user can't access the Web UI to see why.
+        // We re-take the SD card just to dump the log buffer.
+        if (sdManager.takeControl()) {
+            LOG_ERROR("FATAL ERROR: System halted due to WiFi connection failure.");
+            Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt");
+            sdManager.releaseControl();
+        }
+        
         return;
     }
     
