@@ -87,7 +87,7 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 
 | Key | Default | Description |
 |---|---|---|
-| `ENABLE_SD_CMD0_RESET` | `true` | If `true`, bit-bangs a `CMD0` (GO_IDLE_STATE) frame on the SD bus immediately before returning control to the CPAP machine. This forces the CPAP to cleanly remount the SD card instead of throwing a timeout or RCA-mismatch error after the ESP32 releases control. Disable only if your CPAP model is known to reject CMD0 pulses. |
+| `ENABLE_SD_CMD0_RESET` | `false` | If `true`, bit-bangs a `CMD0` (GO_IDLE_STATE) frame on the SD bus immediately before returning control to the CPAP machine. This forces the CPAP to cleanly remount the SD card instead of throwing a timeout or RCA-mismatch error after the ESP32 releases control. Enable ONLY if your CPAP model throws errors upon the ESP releasing control. AirSense 11 users have reported issues (SD Card Error) with this setting enabled. |
 
 ---
 

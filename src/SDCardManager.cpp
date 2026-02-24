@@ -7,7 +7,11 @@
 #include "Config.h"
 extern Config config;
 
-SDCardManager::SDCardManager() : initialized(false), espHasControl(false) {}
+SDCardManager::SDCardManager() : 
+    initialized(false), 
+    espHasControl(false),
+    controlAcquiredAt(0) {
+}
 
 void SDCardManager::setControlPin(bool espControl) {
     digitalWrite(SD_SWITCH_PIN, espControl ? SD_SWITCH_ESP_VALUE : SD_SWITCH_CPAP_VALUE);
@@ -67,6 +71,7 @@ bool SDCardManager::takeControl() {
 
     LOG("SD card mounted successfully");
     initialized = true;
+    controlAcquiredAt = millis();
     return true;
 }
 
@@ -74,6 +79,9 @@ void SDCardManager::releaseControl() {
     if (!espHasControl) {
         return;
     }
+
+    unsigned long holdDurationMs = millis() - controlAcquiredAt;
+    LOGF("Releasing SD card. Total mount duration: %lu ms", holdDurationMs);
 
     // Perform software reset of SD card state machine before handing back to CPAP
     // if configured to do so. This crashes the card's Transfer state back to Idle,

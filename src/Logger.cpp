@@ -627,6 +627,34 @@ void Logger::writeToStorage(const char* data, size_t len) {
     // Persistent log saving is handled by periodic flush task
     // Kept for interface compatibility
 }
+// Dump current logs directly to a specific file on a specific filesystem
+bool Logger::dumpToSD(fs::FS& fs, const char* filename) {
+    if (!initialized || !this->buffer) return false;
+
+    xSemaphoreTake(mutex, portMAX_DELAY);
+
+    File f = fs.open(filename, FILE_WRITE);
+    if (!f) {
+        xSemaphoreGive(mutex);
+        return false;
+    }
+
+    uint32_t availableBytes = headIndex - tailIndex;
+    if (availableBytes > bufferSize) availableBytes = bufferSize;
+
+    if (availableBytes > 0) {
+        for (uint32_t i = 0; i < availableBytes; i++) {
+            uint32_t logicalIndex = tailIndex + i;
+            size_t physicalPos = logicalIndex % bufferSize;
+            f.write(this->buffer[physicalPos]);
+        }
+    }
+    
+    f.close();
+    xSemaphoreGive(mutex);
+    return true;
+}
+
 // Dump current logs to internal FS for critical failures
 bool Logger::dumpSavedLogs(const String& reason) {
 #ifdef UNIT_TEST
