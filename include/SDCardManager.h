@@ -8,6 +8,7 @@ class SDCardManager {
 private:
     bool initialized;
     bool espHasControl;
+    unsigned long controlAcquiredAt;
 
     void setControlPin(bool espControl);
 
