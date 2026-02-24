@@ -54,9 +54,6 @@ unsigned long stateEnteredAt = 0;
 unsigned long cooldownStartedAt = 0;
 bool uploadCycleHadTimeout = false;
 bool g_nothingToUpload = false;  // Set when pre-flight finds no work — skip reboot, go to cooldown
-bool g_configEditLock = false;   // Set by web UI config editor — FSM won't start new upload session
-unsigned long g_configEditLockAt = 0;  // millis() when lock was acquired
-const unsigned long CONFIG_EDIT_LOCK_TIMEOUT_MS = 30UL * 60UL * 1000UL;  // 30 min auto-expire
 
 // Monitoring mode flags
 bool monitoringRequested = false;
@@ -492,20 +489,25 @@ void handleListening() {
     // TrafficMonitor.update() is called in main loop before FSM dispatch
     uint32_t inactivityMs = (uint32_t)config.getInactivitySeconds() * 1000UL;
 
-    // Config edit lock — pause upload until user saves or cancels
-    if (g_configEditLock) {
-        if (millis() - g_configEditLockAt > CONFIG_EDIT_LOCK_TIMEOUT_MS) {
-            LOG_WARN("[FSM] Config edit lock expired (30 min) — auto-releasing");
-            g_configEditLock = false;
-        } else {
-            return;  // Hold in LISTENING — don't start upload
+    // Smart mode logic
+    if (config.isSmartMode()) {
+        if (trafficMonitor.isIdleFor(inactivityMs)) {
+            LOGF("[FSM] %ds of bus silence confirmed", config.getInactivitySeconds());
+            
+            // ── NETWORK PRE-CONNECT ──
+            // Connect to backends BEFORE grabbing the SD card to minimize hold time
+            if (config.hasSmbEndpoint()) {
+                LOG("[FSM] Pre-connecting SMB...");
+                uploader->getSmbUploader()->begin();
+            }
+            if (config.hasCloudEndpoint()) {
+                LOG("[FSM] Pre-connecting Cloud...");
+                uploader->getCloudUploader()->begin();
+            }
+            
+            transitionTo(UploadState::ACQUIRING);
+            return;
         }
-    }
-
-    if (trafficMonitor.isIdleFor(inactivityMs)) {
-        LOGF("[FSM] %ds of bus silence confirmed", config.getInactivitySeconds());
-        transitionTo(UploadState::ACQUIRING);
-        return;
     }
     
     // In scheduled mode, check if the upload window has closed while we were listening
@@ -515,6 +517,20 @@ void handleListening() {
         if (!sm->isInUploadWindow() || sm->isDayCompleted()) {
             LOG("[FSM] Scheduled mode — window closed or day completed while listening");
             transitionTo(UploadState::IDLE);
+        } else if (trafficMonitor.isIdleFor(inactivityMs)) {
+            LOGF("[FSM] Scheduled mode — %ds of bus silence confirmed", config.getInactivitySeconds());
+            
+            // ── NETWORK PRE-CONNECT ──
+            if (config.hasSmbEndpoint()) {
+                LOG("[FSM] Pre-connecting SMB...");
+                uploader->getSmbUploader()->begin();
+            }
+            if (config.hasCloudEndpoint()) {
+                LOG("[FSM] Pre-connecting Cloud...");
+                uploader->getCloudUploader()->begin();
+            }
+            
+            transitionTo(UploadState::ACQUIRING);
         }
     }
 }

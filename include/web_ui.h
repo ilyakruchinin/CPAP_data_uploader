@@ -422,17 +422,10 @@ function _setCfgLockUI(locked){
 function acquireCfgLock(){
   var active=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
   if(active&&!confirm('An upload is currently in progress.\n\nThe upload will continue running. You can edit config and Save & Reboot when ready.\n\nContinue?'))return;
-  var msg=document.getElementById('cfg-raw-msg');
-  msg.style.color='#8f98a0';msg.textContent='Requesting lock...';
-  fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":true}',cache:'no-store'})
-  .then(function(r){return r.json();})
-  .then(function(d){
-    if(d.ok){_setCfgLockUI(true);loadRawCfg();msg.textContent='';}
-    else{msg.style.color='#ff6060';msg.textContent='Lock failed: '+(d.error||'?');}
-  }).catch(function(e){msg.style.color='#ff6060';msg.textContent='Lock error: '+e.message;});
+  _setCfgLockUI(true);
+  loadRawCfg();
 }
 function releaseCfgLock(){
-  fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});
   _setCfgLockUI(false);
   document.getElementById('cfg-raw-msg').textContent='';
 }
@@ -440,7 +433,6 @@ function loadCfg(){
   fetch('/api/config',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     cfg=d;
   }).catch(function(){});
-  if(!cfgLocked){_setCfgLockUI(false);loadRawCfg();}
 }
 function cfgRawCount(){
   var t=document.getElementById('cfg-raw');
@@ -482,7 +474,6 @@ function saveAndReboot(){
       _setCfgLockUI(false);
       document.getElementById('cfg-lock-banner').style.display='none';
       msg.style.color='#57cbde';msg.textContent='Saved — rebooting… redirecting in 10s';
-      fetch('/api/config-lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"lock":false}',cache:'no-store'});
       setTimeout(function(){fetch('/soft-reboot',{cache:'no-store'});},800);
       setTimeout(function(){window.location.href='/';},10000);
     }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}

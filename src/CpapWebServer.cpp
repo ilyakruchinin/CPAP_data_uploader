@@ -178,7 +178,6 @@ bool CpapWebServer::begin() {
     });
     server->on("/api/config-raw",  HTTP_GET,  [this]() { this->handleApiConfigRawGet(); });
     server->on("/api/config-raw",  HTTP_POST, [this]() { this->handleApiConfigRawPost(); });
-    server->on("/api/config-lock", HTTP_POST, [this]() { this->handleApiConfigLock(); });
     server->on("/api/logs/saved", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleApiLogsSaved();
@@ -227,7 +226,6 @@ bool CpapWebServer::begin() {
     LOG("[WebServer]   GET  /api/diagnostics    - Heap/system diagnostics JSON");
     LOG("[WebServer]   GET  /api/config-raw     - Raw config.txt contents");
     LOG("[WebServer]   POST /api/config-raw     - Save raw config.txt");
-    LOG("[WebServer]   POST /api/config-lock    - Acquire/release config edit lock");
     LOG("[WebServer]   GET  /api/monitor-start  - Start SD activity monitoring");
     LOG("[WebServer]   GET  /api/monitor-stop   - Stop SD activity monitoring");
 #ifdef ENABLE_OTA_UPDATES
@@ -797,85 +795,40 @@ void CpapWebServer::handleApiConfigRawPost() {
     sd.remove("/config.txt.tmp");
     File f = sd.open("/config.txt.tmp", FILE_WRITE);
     if (!f) {
-        // SD is mounted read-only. We need to remount it read-write briefly.
-        SD_MMC.end();
-        if (!SD_MMC.begin("/sdcard", false)) { // Remount R/W
-            if (tookControl) sdManager->releaseControl();
-            server->send(500, "application/json", "{\"error\":\"Failed to remount SD card read-write\"}");
-            return;
-        }
-        
-        f = sd.open("/config.txt.tmp", FILE_WRITE);
-        if (!f) {
-            SD_MMC.end();
-            SD_MMC.begin("/sdcard", true); // Remount R/O
-            if (tookControl) sdManager->releaseControl();
-            server->send(500, "application/json", "{\"error\":\"Failed to open temp file for writing\"}");
-            return;
-        }
+        if (tookControl) sdManager->releaseControl();
+        server->send(500, "application/json", "{\"error\":\"Failed to open temp file for writing\"}");
+        return;
     }
-    size_t written = f.print(body);
-    f.close();
+
+    size_t written = 0;
+    while (written < bodyLen) {
+        size_t toWrite = bodyLen - written;
+        if (toWrite > 512) toWrite = 512;
+        size_t n = f.write((const uint8_t*)body.c_str() + written, toWrite);
+        if (n == 0) break;
+        written += n;
+    }
 
     if (written != bodyLen) {
         sd.remove("/config.txt.tmp");
-        SD_MMC.end();
-        SD_MMC.begin("/sdcard", true); // Remount R/O
+        f.close();
         if (tookControl) sdManager->releaseControl();
         server->send(500, "application/json", "{\"error\":\"Write incomplete\"}");
         return;
     }
 
+    f.close();
+
     sd.remove("/config.txt");
     if (!sd.rename("/config.txt.tmp", "/config.txt")) {
-        SD_MMC.end();
-        SD_MMC.begin("/sdcard", true); // Remount R/O
         if (tookControl) sdManager->releaseControl();
         server->send(500, "application/json", "{\"error\":\"Rename failed\"}");
         return;
     }
 
-    // Remount Read-Only
-    SD_MMC.end();
-    SD_MMC.begin("/sdcard", true);
-
     if (tookControl) sdManager->releaseControl();
     LOG("[WebServer] config.txt updated via web UI");
     server->send(200, "application/json", "{\"ok\":true,\"message\":\"Saved successfully. CRITICAL: You MUST physically eject and reinsert the SD card into the CPAP machine now to prevent data corruption!\"}");
-}
-
-// ---------------------------------------------------------------------------
-// POST /api/config-lock — acquire or release the config edit lock
-// Body: {"lock":true} or {"lock":false}
-// While held, the FSM will not start a new upload session.
-// Auto-expires after 30 minutes (CONFIG_EDIT_LOCK_TIMEOUT_MS in main.cpp).
-// ---------------------------------------------------------------------------
-void CpapWebServer::handleApiConfigLock() {
-    addCorsHeaders(server);
-    server->sendHeader("Cache-Control", "no-store");
-    server->sendHeader("Connection", "close");
-
-    String body = server->arg("plain");
-    bool lock;
-    if (body.indexOf("true") >= 0) {
-        lock = true;
-    } else if (body.indexOf("false") >= 0) {
-        lock = false;
-    } else {
-        server->send(400, "application/json", "{\"error\":\"Body must contain 'true' or 'false'\"}");
-        return;
-    }
-
-    g_configEditLock = lock;
-    if (lock) {
-        g_configEditLockAt = millis();
-        LOG("[WebServer] Config edit lock ACQUIRED — upload FSM paused");
-        server->send(200, "application/json", "{\"ok\":true,\"locked\":true}");
-    } else {
-        g_configEditLockAt = 0;
-        LOG("[WebServer] Config edit lock RELEASED — upload FSM resumed");
-        server->send(200, "application/json", "{\"ok\":true,\"locked\":false}");
-    }
 }
 
 // Set WiFi manager reference
