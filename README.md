@@ -4,6 +4,25 @@ Automatically upload CPAP therapy data from your SD card to a network share or S
 
 **Supports:** ResMed Series 9, 10, and 11 · **Hardware:** [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) (ESP32-based SD card adapter)
 
+---
+
+## ⚠️ **IMPORTANT COMPATIBILITY NOTICE**
+
+### **AirSense 11 Power Compatibility**
+Some **Singapore-made AirSense 11 machines** may not provide sufficient power to the SD card adapter:
+
+- **Potentially affected models:** Platform `R390-447/1` with radio module starting with `AIR11M1`
+- **How to check:** Look at the label on the back of your AirSense 11 device
+- **Status:** Investigation ongoing - gathering more data
+
+### **Confirmed Working**
+- ✅ **All AirSense 10 models**
+- ✅ **Australian-made AirSense 11 models**
+
+**If you have a Singapore-made AirSense 11 with AIR11M1 radio module**, please check your device label and report your experience to help us gather more compatibility data.
+
+---
+
 ![CPAP Data Uploader Web Interface](docs/screenshots/web-interface.png)
 
 ---
