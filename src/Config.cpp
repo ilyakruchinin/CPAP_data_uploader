@@ -37,10 +37,10 @@ Config::Config() :
     storePlainText(false),  // Default: secure mode
     credentialsInFlash(false),  // Will be set during loadFromSD
     
-    // Power management defaults
-    cpuSpeedMhz(240),  // Default: 240MHz (full speed)
-    wifiTxPower(WifiTxPower::POWER_HIGH),  // Default: high power
-    wifiPowerSaving(WifiPowerSaving::SAVE_NONE)  // Default: no power saving
+    // Power management defaults (optimized for AirSense 11 compatibility)
+    cpuSpeedMhz(80),  // Default: 80MHz (minimum for WiFi, saves ~30-40mA)
+    wifiTxPower(WifiTxPower::POWER_MID),  // Default: 8.5dBm (sufficient for bedroom range)
+    wifiPowerSaving(WifiPowerSaving::SAVE_MID)  // Default: MIN_MODEM (preserves mDNS)
 {}
 
 Config::~Config() {
@@ -611,23 +611,25 @@ bool Config::isSmartMode() const { return uploadMode == "smart"; }
 WifiTxPower Config::parseWifiTxPower(const String& str) {
     String s = str;
     s.toUpperCase();
+    if (s == "MAX" || s == "MAXIMUM") return WifiTxPower::POWER_MAX;
     if (s == "HIGH") return WifiTxPower::POWER_HIGH;
     if (s == "MID" || s == "MEDIUM") return WifiTxPower::POWER_MID;
     if (s == "LOW") return WifiTxPower::POWER_LOW;
-    return WifiTxPower::POWER_HIGH; // Default
+    return WifiTxPower::POWER_MID; // Default: 8.5dBm
 }
 
 WifiPowerSaving Config::parseWifiPowerSaving(const String& str) {
     String s = str;
     s.toUpperCase();
-    if (s == "NONE") return WifiPowerSaving::SAVE_NONE;
-    if (s == "MID" || s == "MEDIUM") return WifiPowerSaving::SAVE_MID;
+    if (s == "NONE" || s == "OFF") return WifiPowerSaving::SAVE_NONE;
+    if (s == "MID" || s == "MEDIUM" || s == "MODEM") return WifiPowerSaving::SAVE_MID;
     if (s == "MAX" || s == "HIGH") return WifiPowerSaving::SAVE_MAX;
-    return WifiPowerSaving::SAVE_NONE; // Default
+    return WifiPowerSaving::SAVE_MID; // Default: MIN_MODEM
 }
 
 String Config::wifiTxPowerToString(WifiTxPower power) {
     switch (power) {
+        case WifiTxPower::POWER_MAX: return "MAX";
         case WifiTxPower::POWER_HIGH: return "HIGH";
         case WifiTxPower::POWER_MID: return "MID";
         case WifiTxPower::POWER_LOW: return "LOW";

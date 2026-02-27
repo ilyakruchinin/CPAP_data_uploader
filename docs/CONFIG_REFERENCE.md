@@ -67,11 +67,15 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 
 ## 6. Power Management
 
+Power defaults are optimised for AirSense 11 compatibility (low peak current). Most users should not need to change these.
+
 | Key | Default | Options | Description |
 |---|---|---|---|
-| `CPU_SPEED_MHZ` | `240` | `80`, `160`, `240` | ESP32 CPU clock speed. Lower values reduce heat and power draw at the cost of slower uploads. |
-| `WIFI_TX_PWR` | `HIGH` | `HIGH`, `MID`, `LOW` | WiFi transmit power. Reduce if the device is physically close to the router. |
-| `WIFI_PWR_SAVING` | `NONE` | `NONE`, `MID`, `MAX` | WiFi power-saving mode. `NONE` = best throughput. `MAX` = lowest power but increases latency. |
+| `CPU_SPEED_MHZ` | `80` | `80`, `160`, `240` | ESP32 CPU clock speed. 80 MHz is the minimum for WiFi and sufficient for all operations. DFS automatically boosts to 160 MHz during WiFi/TLS bursts. |
+| `WIFI_TX_PWR` | `MID` | `LOW` (5 dBm), `MID` (8.5 dBm), `HIGH` (11 dBm), `MAX` (19.5 dBm) | WiFi transmit power. `MID` is sufficient for typical bedroom placement (~5-15 m). Increase to `HIGH` if your router is in another room. `MAX` may be capped by the compile-time limit (11 dBm). |
+| `WIFI_PWR_SAVING` | `MID` | `NONE`, `MID`/`MODEM`, `MAX` | WiFi power-saving mode. `MID` (MIN_MODEM) wakes every DTIM for broadcasts — preserves mDNS while saving ~90 mA idle. `MAX` saves slightly more but may miss mDNS queries. |
+
+> **Note:** 802.11b is disabled at the firmware level (OFDM only). This is not configurable and eliminates the 370 mA peak TX scenario. Bluetooth is also fully disabled at compile time.
 
 ---
 

@@ -26,7 +26,7 @@ COOLDOWN_MINUTES = 10         # Wait this long between sessions
 # Examples: PST=-8, EST=-5, UTC=0, CET=+1, JST=+9
 GMT_OFFSET_HOURS = 0
 
-# Advanced Power Settings
-CPU_SPEED_MHZ = 240
-WIFI_TX_PWR = high
-WIFI_PWR_SAVING = none
+# Advanced Power Settings (defaults are optimized for low power — most users can omit these)
+# CPU_SPEED_MHZ = 80
+# WIFI_TX_PWR = mid
+# WIFI_PWR_SAVING = mid
