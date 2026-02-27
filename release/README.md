@@ -343,18 +343,28 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 
 ### Power Management Settings
 
-**CPU_SPEED_MHZ** (optional, default: 240)
+> Power defaults are optimized for AirSense 11 compatibility (minimal current draw). Most users should not need to change these.
+
+**CPU_SPEED_MHZ** (optional, default: 80)
 - CPU frequency in MHz (80, 160, 240)
-- Lower values save power but slow down uploads
-- Recommended for low power: `160`
+- 80 MHz is the minimum for WiFi and sufficient for all operations
+- Dynamic Frequency Scaling (DFS) automatically boosts to 160 MHz during WiFi/TLS activity
 
-**WIFI_TX_PWR** (optional, default: "high")
-- WiFi transmission power ("low", "mid", "high")
-- Lower values reduce range but save power
+**WIFI_TX_PWR** (optional, default: "mid")
+- WiFi transmit power level:
+  - `LOW` — 5 dBm (router must be very close)
+  - `MID` — 8.5 dBm (default, good for typical bedroom placement)
+  - `HIGH` — 11 dBm (router in adjacent room or through walls)
+  - `MAX` — 19.5 dBm (maximum power, only if other settings fail)
+- Increase if you experience WiFi connection issues
 
-**WIFI_PWR_SAVING** (optional, default: "none")
-- WiFi power saving mode ("none", "mid", "max")
-- "max" saves significant power but may increase latency
+**WIFI_PWR_SAVING** (optional, default: "mid")
+- WiFi power saving mode:
+  - `NONE` — No power saving (maximum responsiveness)
+  - `MID` / `MODEM` — MIN_MODEM (default, wakes every DTIM — preserves mDNS)
+  - `MAX` — MAX_MODEM (lowest power but may miss mDNS queries)
+
+> **Note:** 802.11b is disabled at the firmware level to reduce peak power draw. Bluetooth is also fully disabled. These are not configurable.
 
 ### Debugging Settings
 

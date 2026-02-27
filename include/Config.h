@@ -6,15 +6,16 @@
 
 // Power management enums
 enum class WifiTxPower {
-    POWER_HIGH,
-    POWER_MID,
-    POWER_LOW
+    POWER_LOW,     // 5.0 dBm — minimum practical, router must be very close
+    POWER_MID,     // 8.5 dBm — default, good for typical bedroom placement
+    POWER_HIGH,    // 11.0 dBm — router in adjacent room or through walls
+    POWER_MAX      // 19.5 dBm — maximum power, only if other settings fail
 };
 
 enum class WifiPowerSaving {
-    SAVE_NONE,
-    SAVE_MID,
-    SAVE_MAX
+    SAVE_NONE,     // No power saving — maximum responsiveness, highest power
+    SAVE_MID,      // WIFI_PS_MIN_MODEM — default, wakes every DTIM for broadcasts
+    SAVE_MAX       // WIFI_PS_MAX_MODEM — maximum WiFi savings, may miss mDNS queries
 };
 
 // Conditionally include Preferences for ESP32 or use mock for testing

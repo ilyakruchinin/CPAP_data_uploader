@@ -19,6 +19,8 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 - ✅ **All AirSense 10 models**
 - ✅ **Australian-made AirSense 11 models**
 
+> **v0.11.0+:** Firmware now includes aggressive power optimization (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility.
+
 **If you have a Singapore-made AirSense 11 with AIR11M1 radio module**, please check your device label and report your experience to help us gather more compatibility data.
 
 ---

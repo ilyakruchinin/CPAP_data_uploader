@@ -59,9 +59,9 @@ ENDPOINT = //192.168.1.100/cpap_backups
 - `GMT_OFFSET_HOURS` - Timezone offset
 
 ### Power Management
-- `CPU_SPEED_MHZ` - 80, 160, or 240 (default: 240)
-- `WIFI_TX_PWR` - "low", "mid", "high" (default: "high")
-- `WIFI_PWR_SAVING` - "none", "mid", "max" (default: "none")
+- `CPU_SPEED_MHZ` - 80, 160, or 240 (default: 80)
+- `WIFI_TX_PWR` - "low" (5dBm), "mid" (8.5dBm), "high" (11dBm), "max" (19.5dBm) (default: "mid")
+- `WIFI_PWR_SAVING` - "none", "mid"/"modem" (MIN_MODEM), "max" (MAX_MODEM) (default: "mid")
 
 ### Debugging
 - `SAVE_LOGS` - Enable persistent internal logging (default: false)

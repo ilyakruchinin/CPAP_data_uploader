@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
+#include <esp_bt.h>
+#include <esp_pm.h>
 #include <Preferences.h>
 #include <LittleFS.h>
 
@@ -158,6 +160,17 @@ const char* getResetReasonString(esp_reset_reason_t reason) {
 // Setup Function
 // ============================================================================
 void setup() {
+    // ── POWER: Immediate CPU throttle ──
+    // Reduce from 240 MHz to 80 MHz before anything else runs.
+    // Saves ~30-40 mA during the entire 20+ second boot sequence.
+    // 80 MHz is the minimum for WiFi and sufficient for all boot I/O.
+    setCpuFrequencyMhz(80);
+    
+    // ── POWER: Release Bluetooth memory ──
+    // Firmware is WiFi-only. Release BT controller memory (~30 KB DRAM).
+    // CONFIG_BT_ENABLED=n in sdkconfig prevents linking, this is belt-and-suspenders.
+    esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+    
     // Initialize serial port
     Serial.begin(115200);
     
@@ -343,13 +356,18 @@ void setup() {
     // Apply power management settings from config
     LOG("Applying power management settings...");
     
-    // Set CPU frequency
+    // Update CPU frequency from config (boot default is 80 MHz, set in early setup)
     int targetCpuMhz = config.getCpuSpeedMhz();
-    setCpuFrequencyMhz(targetCpuMhz);
-    LOGF("CPU frequency set to %dMHz", getCpuFrequencyMhz());
+    if (targetCpuMhz != getCpuFrequencyMhz()) {
+        setCpuFrequencyMhz(targetCpuMhz);
+    }
+    LOGF("CPU frequency: %dMHz", getCpuFrequencyMhz());
 
     // Setup WiFi event handlers for logging
     wifiManager.setupEventHandlers();
+
+    // Apply TX power BEFORE WiFi.begin() to prevent full-power spikes during association
+    wifiManager.applyTxPowerEarly(config.getWifiTxPower());
 
     // Initialize WiFi in station mode
     if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
@@ -374,6 +392,22 @@ void setup() {
     // Apply WiFi power settings after connection is established
     wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
     LOG("WiFi power management settings applied");
+    
+    // ── POWER: Configure Dynamic Frequency Scaling (DFS) ──
+    // With CONFIG_PM_ENABLE=y in sdkconfig, the CPU can automatically scale
+    // between min and max frequency when tasks are idle. The WiFi driver holds
+    // a PM lock during active operations, ensuring full speed when needed.
+    esp_pm_config_esp32_t pm_config = {
+        .max_freq_mhz = 160,   // Boost to 160 MHz for WiFi/TLS bursts
+        .min_freq_mhz = 80,    // Floor at 80 MHz (WiFi PHY minimum)
+        .light_sleep_enable = false  // Phase 3 — not yet enabled
+    };
+    esp_err_t pm_err = esp_pm_configure(&pm_config);
+    if (pm_err == ESP_OK) {
+        LOG("Dynamic Frequency Scaling enabled (80-160 MHz)");
+    } else {
+        LOGF("DFS configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
+    }
 
     // Initialize uploader
     uploader = new FileUploader(&config, &wifiManager);
@@ -953,5 +987,26 @@ void loop() {
         case UploadState::COOLDOWN:   handleCooldown();   break;
         case UploadState::COMPLETE:   handleComplete();   break;
         case UploadState::MONITORING: handleMonitoring(); break;
+    }
+    
+    // ── POWER: Yield CPU so DFS can scale down ──
+    // Without explicit yields the loop task never blocks, keeping CPU at max
+    // frequency. State-appropriate delays allow the FreeRTOS IDLE task to run,
+    // triggering automatic frequency scaling (DFS) when no work is pending.
+    switch (currentState) {
+        case UploadState::IDLE:
+        case UploadState::COOLDOWN:
+            vTaskDelay(pdMS_TO_TICKS(100));  // Low-frequency states: 100ms yield
+            break;
+        case UploadState::LISTENING:
+            vTaskDelay(pdMS_TO_TICKS(50));   // TrafficMonitor samples; 50ms is sufficient
+            break;
+        case UploadState::MONITORING:
+        case UploadState::UPLOADING:
+            vTaskDelay(pdMS_TO_TICKS(10));   // Responsive states: 10ms yield
+            break;
+        default:
+            vTaskDelay(pdMS_TO_TICKS(10));   // Transient states: brief yield
+            break;
     }
 }

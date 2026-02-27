@@ -709,8 +709,10 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
 
     const bool useKeepAlive = true;
     
-    // Ensure WiFi is in high performance mode for upload
-    WiFi.setSleep(false);
+    // Note: WiFi power saving (Modem-sleep) does NOT need to be disabled during uploads.
+    // The ESP-IDF WiFi driver automatically holds a PM lock during active TX/RX,
+    // ensuring full performance when transmitting. Modem-sleep only engages between
+    // packet bursts when the radio would be idle anyway.
     
     // Upload via multipart POST using the same byte count that was hashed
     String path = "/api/v1/imports/" + currentImportId + "/files";

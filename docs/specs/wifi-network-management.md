@@ -39,17 +39,28 @@ bool recoverConnection() {
 ### Power Options
 ```cpp
 enum class WifiTxPower {
-    POWER_LOW,    // ~2dBm output
-    POWER_MID,    // ~10dBm output  
-    POWER_HIGH    // ~20dBm output (default)
+    POWER_LOW,     // 5.0 dBm — minimum practical, router must be very close
+    POWER_MID,     // 8.5 dBm — default, good for typical bedroom placement
+    POWER_HIGH,    // 11.0 dBm — router in adjacent room or through walls
+    POWER_MAX      // 19.5 dBm — maximum power, only if other settings fail
 };
 
 enum class WifiPowerSaving {
-    SAVE_NONE,    // No power saving (default)
-    SAVE_MID,     // Moderate power saving
-    SAVE_MAX      // Maximum power saving
+    SAVE_NONE,     // No power saving — maximum responsiveness, highest power
+    SAVE_MID,      // WIFI_PS_MIN_MODEM — default, wakes every DTIM for broadcasts
+    SAVE_MAX       // WIFI_PS_MAX_MODEM — maximum WiFi savings, may miss mDNS queries
 };
 ```
+
+### Protocol Restriction
+802.11b (DSSS) is disabled at connection time via `esp_wifi_set_protocol()`. Only 802.11g/n (OFDM) is allowed. This caps peak TX current to ~205-250 mA (down from 370 mA with 802.11b).
+
+### Compile-Time Power Caps
+- `CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=11` in `sdkconfig.defaults` caps PHY-level TX power at 11 dBm even before runtime code runs
+- `CONFIG_BT_ENABLED=n` disables Bluetooth at compile time (WiFi-only firmware)
+
+### Dynamic Frequency Scaling (DFS)
+With `CONFIG_PM_ENABLE=y`, the ESP-IDF power management framework enables automatic CPU frequency scaling. After WiFi connects, `esp_pm_configure()` is called with max=160 MHz, min=80 MHz. The WiFi driver automatically holds a PM lock during active operations.
 
 ## Connection Process
 
@@ -70,23 +81,19 @@ bool begin() {
 
 ### 2. Connection Establishment
 ```cpp
-bool connect() {
-    LOGF("[WiFi] Connecting to: %s", config->getWifiSsid().c_str());
-    
+bool connectStation(ssid, password) {
     WiFi.mode(WIFI_STA);
-    WiFi.begin(config->getWifiSsid().c_str(), 
-               config->getWifiPassword().c_str());
     
-    // Wait for connection with timeout
-    uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - start) < 30000) {
-        delay(500);
-        feedUploadHeartbeat();
-    }
+    // Disable 802.11b (DSSS) — caps peak TX current from 370 mA to ~250 mA
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
     
-    return WiFi.status() == WL_CONNECTED;
+    WiFi.begin(ssid, password);
+    // Wait up to 15s for connection
 }
 ```
+
+### 2a. Early TX Power Application
+`applyTxPowerEarly()` pre-initializes WiFi STA mode and sets TX power before `connectStation()`, preventing full-power spikes during the initial scan and association.
 
 ### 3. Monitoring
 ```cpp
@@ -138,11 +145,12 @@ void setupMDNS() {
 - **IP acquisition**: 2-5 seconds via DHCP
 - **mDNS registration**: <1 second
 
-### Power Consumption
-- **High power**: ~150mA during active transmission
-- **Low power**: ~80mA with power saving enabled
-- **Sleep mode**: ~20mA (not used in this application)
-- **Idle**: ~50mA connected but not transmitting
+### Power Consumption (v0.11.0 defaults)
+- **Peak TX** (802.11n @ 8.5 dBm): ~120-150 mA
+- **Idle connected** (MIN_MODEM, 80 MHz): ~22-31 mA
+- **Idle connected** (MIN_MODEM + DFS): ~20-25 mA
+- **Boot pre-WiFi** (80 MHz, BT disabled): ~20-25 mA
+- **During upload** (DFS boosts to 160 MHz): ~80-150 mA
 
 ## Integration Points
 
