@@ -61,16 +61,28 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bt-s{color:#66c0f4;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bt-c{color:#aa66ff;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bd-i{font-size:.79em;color:#8f98a0;margin-top:4px;min-height:1.1em;padding-left:2px}
+.hdr{display:flex;align-items:center;gap:12px;margin-bottom:2px}
+.hdr svg{height:42px;width:auto;flex-shrink:0}
+#reboot-overlay{display:none;background:#1a2a1a;border:1px solid #2f8f57;border-radius:10px;padding:16px 20px;margin-bottom:14px;text-align:center;animation:rbPulse 2.5s ease-in-out infinite}
+#reboot-overlay h3{color:#44ff44;font-size:1em;margin-bottom:6px}
+#reboot-overlay p{color:#a0c0b0;font-size:.84em;line-height:1.5}
+@keyframes rbPulse{0%,100%{border-color:#2f8f57}50%{border-color:#44ff44}}
+@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+.log-spinner{display:inline-block;width:14px;height:14px;border:2px solid #2a475e;border-top-color:#66c0f4;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:6px}
+@media(max-width:600px){.hdr svg{height:34px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
 </style></head><body>
 <div class=wrap>
-<h1>CPAP Data Uploader</h1>
-<p class=sub id=sub>Connecting...</p>
+<div class=hdr>
+<svg viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1a6b8a"/><stop offset="100%" stop-color="#0d4a6b"/></linearGradient><linearGradient id="wg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2dd4bf"/><stop offset="50%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#818cf8"/></linearGradient><linearGradient id="ag" x1="0%" y1="100%" x2="0%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2dd4bf"/></linearGradient></defs><circle cx="70" cy="70" r="66" fill="none" stroke="url(#wg)" stroke-width="1.5" opacity=".4"/><circle cx="70" cy="70" r="62" fill="url(#cg)"/><circle cx="70" cy="70" r="62" fill="none" stroke="url(#wg)" stroke-width="1" opacity=".6"/><g transform="translate(44,40)"><path d="M7,0 L29,0 L36,7 L36,34 Q36,36 34,36 L2,36 Q0,36 0,34 L0,2 Q0,0 2,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width="1.2" opacity=".9"/><rect x="6" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity=".85"/><rect x="12" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity=".85"/><rect x="18" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity=".85"/><rect x="24" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity=".85"/></g><g transform="translate(86,58)"><line x1="0" y1="22" x2="0" y2="6" stroke="url(#ag)" stroke-width="3" stroke-linecap="round"/><polyline points="-6,10 0,2 6,10" fill="none" stroke="url(#ag)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="-7" y1="25" x2="7" y2="25" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" opacity=".7"/></g><g transform="translate(70,98)"><path d="M-28,0 C-24,-2 -22,-2 -18,0 C-14,2 -12,2 -8,0 C-4,-10 -2,-10 2,-4 C4,-1 5,8 8,8 C11,8 12,1 15,-4 C18,-10 20,-10 24,-4 C26,0 28,0 28,0" fill="none" stroke="url(#wg)" stroke-width="2.2" stroke-linecap="round" opacity=".85"/></g><g transform="translate(70,26)" opacity=".7"><path d="M-10,10 Q0,-2 10,10" fill="none" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/><path d="M-6,14 Q0,8 6,14" fill="none" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/><circle cx="0" cy="17" r="2" fill="#38bdf8"/></g></svg>
+<div><h1>CPAP Data Uploader</h1><p class=sub id=sub>Connecting...</p></div>
+</div>
+<div id=reboot-overlay><h3>&#8635; Device is rebooting&hellip;</h3><p>This is normal and expected. The system reboots periodically to maintain stability.<br>It will be back online in a few seconds. Please wait.</p></div>
 <nav>
 <button id=t-dash onclick="tab('dash')" class=act>Dashboard</button>
 <button id=t-logs onclick="tab('logs')">Logs</button>
 <button id=t-cfg onclick="tab('cfg')">Config</button>
 <button id=t-mon onclick="tab('mon')">Monitor</button>
-<button id=t-mem onclick="tab('mem')">Memory</button>
+<button id=t-mem onclick="tab('mem')">System</button>
 <button id=t-ota onclick="tab('ota')">OTA</button>
 </nav>
 
@@ -83,6 +95,9 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=row><span class=k>Mode</span><span id=d-mode class=v></span></div>
 <div class=row><span class=k>Time synced</span><span id=d-tsync class=v></span></div>
 <div class=row><span class=k>Upload window</span><span id=d-win class=v></span></div>
+<div class=row><span class=k>Inactivity threshold</span><span id=d-inact class=v></span></div>
+<div class=row><span class=k>Exclusive access</span><span id=d-excl class=v></span></div>
+<div class=row><span class=k>Cooldown</span><span id=d-cool class=v></span></div>
 <div class=row><span class=k>Next upload</span><span id=d-next class=v></span></div>
 </div>
 <div class=card><h2>System</h2>
@@ -92,6 +107,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=row><span class=k>WiFi</span><span id=d-wifi class=v></span></div>
 <div class=row><span class=k>IP</span><span id=d-ip class=v></span></div>
 <div class=row><span class=k>Endpoint</span><span id=d-ep class=v></span></div>
+<div class=row><span class=k>GMT offset</span><span id=d-gmt class=v></span></div>
 <div class=row><span class=k>Uptime</span><span id=d-up class=v></span></div>
 </div>
 </div>
@@ -123,7 +139,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=card style="margin-bottom:10px">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
 <h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
-<div style="display:flex;gap:6px">
+<div class=log-btns style="display:flex;gap:6px">
 <button class="btn bs" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Download persisted log files from device flash">&#11015; Download Saved Logs</button>
 <button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
 <button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
@@ -214,18 +230,27 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 </div>
 </div>
 
-<!-- MEMORY -->
+<!-- SYSTEM (was MEMORY) -->
 <div id=mem class=page>
-<div class=card style="margin-bottom:10px"><h2>Runtime Memory <span style="font-size:.7em;color:#8f98a0;font-weight:400">(live, 2s)</span></h2>
+<div class=card style="margin-bottom:10px"><h2>Runtime Overview <span style="font-size:.7em;color:#8f98a0;font-weight:400">(live, 2s)</span></h2>
 <div class=stats-grid>
 <div class=stat-box><span class=sl>Free Heap</span><span class=sv id=hd-fh style="color:#66c0f4">—</span><span class=sl style="margin-top:6px">Min (2m)</span><span class=sv id=hd-fh-min style="color:#ddaa44">—</span></div>
 <div class=stat-box><span class=sl>Max Contiguous</span><span class=sv id=hd-ma style="color:#aa66ff">—</span><span class=sl style="margin-top:6px">Min (2m)</span><span class=sv id=hd-ma-min style="color:#ddaa44">—</span></div>
+<div class=stat-box><span class=sl>CPU Core 0</span><span class=sv id=hd-c0 style="color:#ff6b6b">—</span><span class=sl style="margin-top:6px">WiFi / System</span></div>
+<div class=stat-box><span class=sl>CPU Core 1</span><span class=sv id=hd-c1 style="color:#ffd93d">—</span><span class=sl style="margin-top:6px">Application</span></div>
 </div>
 </div>
-<div class=card>
+<div class=card style="margin-bottom:10px">
 <h2>Heap History <span style="font-size:.65em;color:#8f98a0;font-weight:400">&nbsp;last ~2 min &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#5c9ade;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Free &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#aa66ff;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Max Alloc</span></h2>
 <div style="background:#0f1923;border-radius:6px;padding:8px 4px 2px">
 <svg id=heap-svg viewBox="0 0 600 200" preserveAspectRatio="none" style="width:100%;height:200px;display:block"></svg>
+</div>
+<div style="display:flex;justify-content:space-between;font-size:.72em;color:#3a5070;padding:2px 6px 0"><span>~2m ago</span><span>~1m ago</span><span>now</span></div>
+</div>
+<div class=card>
+<h2>CPU Load <span style="font-size:.65em;color:#8f98a0;font-weight:400">&nbsp;last ~2 min &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#ff6b6b;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Core 0 &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#ffd93d;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Core 1</span></h2>
+<div style="background:#0f1923;border-radius:6px;padding:8px 4px 2px">
+<svg id=cpu-svg viewBox="0 0 600 150" preserveAspectRatio="none" style="width:100%;height:150px;display:block"></svg>
 </div>
 <div style="display:flex;justify-content:space-between;font-size:.72em;color:#3a5070;padding:2px 6px 0"><span>~2m ago</span><span>~1m ago</span><span>now</span></div>
 </div>
@@ -276,7 +301,7 @@ function tab(t){
   if(t!=='mon'){stopMon();}
   if(t==='cfg'){loadCfg();}
   if(t==='mon'){checkMonUploadState();}
-  if(t==='mem'){updateHeapChart();}
+  if(t==='mem'){updateHeapChart();updateCpuChart();}
 }
 function toast(msg,mode){
   var el=document.getElementById('toast');
@@ -296,7 +321,11 @@ function badgeHtml(st){var s=st.toLowerCase(),c='bi';
 function set(id,html,inner){var el=document.getElementById(id);if(el){if(inner===false)el.innerHTML=html;else el.textContent=html;}}
 function seti(id,html){set(id,html,false);}
 
+var statusFailCount=0,rebootExpected=false;
 function renderStatus(d){
+  statusFailCount=0;
+  document.getElementById('reboot-overlay').style.display='none';
+  rebootExpected=false;
   currentFsmState=d.state||'';
   seti('d-st',badgeHtml(currentFsmState||'?'));
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
@@ -304,11 +333,16 @@ function renderStatus(d){
   set('d-tsync',d.time_synced?'Yes':'No');
   var ws=(cfg.upload_start_hour!=null&&cfg.upload_end_hour!=null)?cfg.upload_start_hour+':00 - '+cfg.upload_end_hour+':00':'—';
   set('d-win',ws);
+  set('d-inact',cfg.inactivity_seconds!=null?cfg.inactivity_seconds+'s':'—');
+  set('d-excl',cfg.exclusive_access_minutes!=null?cfg.exclusive_access_minutes+' min':'—');
+  set('d-cool',cfg.cooldown_minutes!=null?cfg.cooldown_minutes+' min':'—');
   var nx=d.next_upload;
   set('d-next',nx<0?'—':nx===0?'Now':fmtUp(nx));
   set('d-time',d.time||'—');
   set('d-fh',d.free_heap?Math.round(d.free_heap/1024)+' KB':'—');
   set('d-ma',d.max_alloc?Math.round(d.max_alloc/1024)+' KB':'—');
+  var gmtOff=cfg.gmt_offset_hours;
+  set('d-gmt',gmtOff!=null?(gmtOff>=0?'+':'')+gmtOff:'—');
   if(d.wifi){
     var rc=sigClass(d.rssi),rl=sigLabel(d.rssi);
     document.getElementById('d-wifi').innerHTML='<span class='+rc+'>'+rl+' ('+d.rssi+' dBm)</span>';
@@ -349,10 +383,19 @@ var statusTimer=null,diagTimer=null;
 function pollStatus(){
   fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     renderStatus(d);
-  }).catch(function(){set('d-st','Offline');});
+  }).catch(function(){
+    statusFailCount++;
+    if(statusFailCount>=2||rebootExpected){
+      document.getElementById('reboot-overlay').style.display='block';
+      seti('d-st','<span class="badge bc">REBOOTING</span>');
+    } else {
+      set('d-st','Offline');
+    }
+  });
 }
 function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
 
+var cpuHistory=[];
 function pollDiag(){
   fetch('/api/diagnostics',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     var fhV=d.free_heap||0,maV=d.max_alloc||0;
@@ -361,7 +404,10 @@ function pollDiag(){
     set('d-fh',fh);set('d-ma',ma);
     set('hd-fh',fh);set('hd-ma',ma);
     if(fhV){heapHistory.push({fh:fhV,ma:maV});if(heapHistory.length>MAX_HEAP_SAMPLES)heapHistory.shift();}
-    if(curTab==='mem')updateHeapChart();
+    var c0=d.cpu0||0,c1=d.cpu1||0;
+    set('hd-c0',c0+'%');set('hd-c1',c1+'%');
+    cpuHistory.push({c0:c0,c1:c1});if(cpuHistory.length>MAX_HEAP_SAMPLES)cpuHistory.shift();
+    if(curTab==='mem'){updateHeapChart();updateCpuChart();}
   }).catch(function(){});
 }
 function updateHeapChart(){
@@ -395,6 +441,28 @@ function updateHeapChart(){
     set('hd-fh-min',Math.round(minFh/1024)+' KB');
     set('hd-ma-min',Math.round(minMa/1024)+' KB');
   }
+}
+function updateCpuChart(){
+  var svg=document.getElementById('cpu-svg');
+  if(!svg||cpuHistory.length<2)return;
+  var W=600,H=150,n=cpuHistory.length;
+  var ptsC0='',ptsC1='';
+  cpuHistory.forEach(function(s,i){
+    var x=((W-2)*i/(MAX_HEAP_SAMPLES-1)+1).toFixed(1);
+    var y0=(H-(s.c0/100)*(H-14)-6).toFixed(1);
+    var y1=(H-(s.c1/100)*(H-14)-6).toFixed(1);
+    ptsC0+=(i===0?'M':'L')+x+' '+y0;
+    ptsC1+=(i===0?'M':'L')+x+' '+y1;
+  });
+  var grid='';
+  [25,50,75].forEach(function(pct){
+    var y=(H-(pct/100)*(H-14)-6).toFixed(0);
+    grid+='<line x1="0" y1="'+y+'" x2="'+W+'" y2="'+y+'" stroke="#1a2a3a" stroke-width="1"/>';
+    grid+='<text x="4" y="'+(parseInt(y)-2)+'" fill="#3a5070" font-size="9" font-family="monospace">'+pct+'%</text>';
+  });
+  svg.innerHTML=grid
+    +'<path d="'+ptsC0+'" stroke="#ff6b6b" stroke-width="1.5" fill="none"/>'
+    +'<path d="'+ptsC1+'" stroke="#ffd93d" stroke-width="1.5" fill="none"/>';
 }
 function checkMonUploadState(){
   var busy=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
@@ -473,7 +541,7 @@ function saveAndReboot(){
     if(d.ok){
       _setCfgLockUI(false);
       document.getElementById('cfg-lock-banner').style.display='none';
-      msg.style.color='#57cbde';msg.textContent='Saved — rebooting… redirecting in 10s';
+      msg.style.color='#57cbde';msg.textContent='Saved — rebooting… redirecting in 10s';rebootExpected=true;
       setTimeout(function(){fetch('/soft-reboot',{cache:'no-store'});},800);
       setTimeout(function(){window.location.href='/';},10000);
     }else{msg.style.color='#ff6060';msg.textContent='Error: '+d.error;}
@@ -585,12 +653,30 @@ function fetchLogs(){
   }).catch(function(){set('log-st','Disconnected');});
 }
 function fetchBackfill(){
-  set('log-st','Loading history\u2026');
-  fetch('/api/logs/full',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+  seti('log-st','<span class="log-spinner"></span>Loading history\u2026');
+  fetch('/api/logs/full',{cache:'no-store'}).then(function(r){
+    // Use streaming to show progressive loading feedback
+    var reader=r.body?r.body.getReader():null;
+    if(!reader) return r.text();
+    var chunks=[],totalBytes=0,decoder=new TextDecoder();
+    function pump(){
+      return reader.read().then(function(result){
+        if(result.done){return chunks.join('');}
+        var chunk=decoder.decode(result.value,{stream:true});
+        chunks.push(chunk);
+        totalBytes+=result.value.length;
+        var lines=0;for(var i=0;i<chunk.length;i++){if(chunk.charCodeAt(i)===10)lines++;}
+        seti('log-st','<span class="log-spinner"></span>Loading\u2026 '+(totalBytes/1024).toFixed(0)+' KB received');
+        return pump();
+      });
+    }
+    return pump();
+  }).then(function(t){
     _appendLogs(t);
     _renderLogBuf();
     backfillDone=true;
     backfillRetries=0;
+    set('log-st','Loaded \u2022 '+clientLogBuf.length+' lines');
     startSse();
   }).catch(function(){
     // Device might still be rebooting — retry with exponential backoff
@@ -600,7 +686,6 @@ function fetchBackfill(){
       set('log-st','Device offline \u2014 retry '+backfillRetries+'/5 in '+(delay/1000)+'s\u2026');
       setTimeout(function(){if(curTab==='logs'){fetchBackfill();}},delay);
     } else {
-      // Give up on backfill after 5 retries, fall back to polling
       backfillDone=true;
       backfillRetries=0;
       startLogPoll();
@@ -735,7 +820,7 @@ function triggerUpload(){
 }
 function softReboot(){
   var b=document.getElementById('btn-srb');
-  if(b._busy)return;b._busy=1;b.textContent='Rebooting...';
+  if(b._busy)return;b._busy=1;b.textContent='Rebooting...';rebootExpected=true;
   fetch('/soft-reboot',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     toast(d.message||'Rebooting...',true);
   }).catch(function(){toast('Failed to reboot.',false);
@@ -744,7 +829,7 @@ function softReboot(){
 function resetState(){
   if(!confirm('Reset all upload state? This cannot be undone.'))return;
   var b=document.getElementById('btn-rst');
-  if(b._busy)return;b._busy=1;b.textContent='Resetting...';
+  if(b._busy)return;b._busy=1;b.textContent='Resetting...';rebootExpected=true;
   fetch('/reset-state',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     toast(d.message||'State reset.',true);
   }).catch(function(){toast('Failed to reset state.',false);

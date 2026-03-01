@@ -1424,15 +1424,40 @@ void CpapWebServer::handleSdActivity() {
     server->send(200, "application/json", json);
 }
 
+// CPU load globals (defined in main.cpp, updated by idle hooks)
+extern volatile uint32_t g_idleCount0, g_idleCount1;
+extern uint32_t g_cpuLoad0, g_cpuLoad1;
+
 void CpapWebServer::handleApiDiagnostics() {
     addCorsHeaders(server);
     server->sendHeader("Cache-Control", "no-store");
-    
-    char json[128];
+
+    // Sample CPU idle counters and compute load % (called every ~2s by client)
+    static uint32_t prevIdle0 = 0, prevIdle1 = 0;
+    static unsigned long prevMs = 0;
+    unsigned long now = millis();
+    if (prevMs > 0 && (now - prevMs) >= 500) {
+        uint32_t d0 = g_idleCount0 - prevIdle0;
+        uint32_t d1 = g_idleCount1 - prevIdle1;
+        // Calibrate: at 240MHz, idle hook fires ~2.4M times/sec; at 80MHz ~800K/sec.
+        // Use the larger of the two deltas as the "100% idle" reference.
+        uint32_t maxD = (d0 > d1) ? d0 : d1;
+        if (maxD > 0) {
+            g_cpuLoad0 = 100 - (uint32_t)((uint64_t)d0 * 100 / maxD);
+            g_cpuLoad1 = 100 - (uint32_t)((uint64_t)d1 * 100 / maxD);
+        }
+    }
+    prevIdle0 = g_idleCount0;
+    prevIdle1 = g_idleCount1;
+    prevMs = now;
+
+    char json[160];
     snprintf(json, sizeof(json), 
-             "{\"free_heap\":%u,\"max_alloc\":%u}", 
+             "{\"free_heap\":%u,\"max_alloc\":%u,\"cpu0\":%u,\"cpu1\":%u}", 
              (unsigned)ESP.getFreeHeap(), 
-             (unsigned)ESP.getMaxAllocHeap());
+             (unsigned)ESP.getMaxAllocHeap(),
+             (unsigned)g_cpuLoad0,
+             (unsigned)g_cpuLoad1);
              
     server->send(200, "application/json", json);
 }

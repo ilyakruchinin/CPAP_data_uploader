@@ -5,6 +5,7 @@
 #include <esp_pm.h>
 #include <esp_sleep.h>
 #include <driver/gpio.h>
+#include <esp_freertos_hooks.h>
 #include <Preferences.h>
 #include <LittleFS.h>
 
@@ -80,6 +81,24 @@ const unsigned long UPLOAD_WATCHDOG_TIMEOUT_MS = 120000;  // 2 minutes
 // Power management lock — held in active states to prevent auto light-sleep.
 // Released in IDLE and COOLDOWN so the CPU can enter light-sleep between DTIM intervals.
 esp_pm_lock_handle_t g_pmLock = nullptr;
+
+// ── CPU load measurement via FreeRTOS idle hooks ──
+// Idle hooks increment counters every time the idle task runs on each core.
+// The diagnostics endpoint samples these counters to compute load %.
+volatile uint32_t g_idleCount0 = 0, g_idleCount1 = 0;
+uint32_t g_cpuLoad0 = 0, g_cpuLoad1 = 0;  // 0-100 percent, updated every 2s
+static bool _idleHook0() { g_idleCount0++; return true; }
+static bool _idleHook1() { g_idleCount1++; return true; }
+
+// ── Reboot reason helper ──
+// Stores a human-readable reason in NVS before esp_restart() so the next
+// boot can log it clearly.  The reason is read and cleared early in setup().
+static void setRebootReason(const char* reason) {
+    Preferences p;
+    p.begin("cpap_flags", false);
+    p.putString("reboot_why", reason);
+    p.end();
+}
 
 struct UploadTaskParams {
     FileUploader* uploader;
@@ -223,6 +242,10 @@ void setup() {
     esp_reset_reason_t resetReason = esp_reset_reason();
     LOG_INFOF("Reset reason: %s", getResetReasonString(resetReason));
     
+    // Register CPU idle hooks for load measurement (before any blocking waits)
+    esp_register_freertos_idle_hook_for_cpu(_idleHook0, 0);
+    esp_register_freertos_idle_hook_for_cpu(_idleHook1, 1);
+
     // Check for power-related issues
     if (resetReason == ESP_RST_BROWNOUT) {
         LOG_ERROR("WARNING: System reset due to brown-out (insufficient power supply), this could be caused by:");
@@ -300,6 +323,13 @@ void setup() {
         Preferences resetPrefs;
         resetPrefs.begin("cpap_flags", false);
         
+        // Display and clear stored reboot reason (set by setRebootReason() before esp_restart)
+        String rebootWhy = resetPrefs.getString("reboot_why", "");
+        if (rebootWhy.length() > 0) {
+            LOGF("[BOOT] Reboot reason: %s", rebootWhy.c_str());
+            resetPrefs.remove("reboot_why");
+        }
+
         // Check if software watchdog killed the upload task last boot
         bool watchdogKill = resetPrefs.getBool("watchdog_kill", false);
         if (watchdogKill) {
@@ -826,6 +856,7 @@ void handleReleasing() {
     // The fast-boot path (ESP_RST_SW) skips cold-boot delays.
     LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
          (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    setRebootReason("Heap recovery after upload session");
     Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
     Logger::getInstance().dumpPreRebootLog();
     delay(200);
@@ -953,6 +984,7 @@ void loop() {
             vTaskDelete(uploadTaskHandle);
         }
         
+        setRebootReason("Upload task hung (software watchdog, >2 min no heartbeat)");
         Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         Logger::getInstance().dumpPreRebootLog();
         delay(300);
@@ -986,6 +1018,7 @@ void loop() {
         
         // Immediate reboot — state files deleted on next clean boot
         LOG("Rebooting for clean state reset...");
+        setRebootReason("State reset requested via Web UI");
         Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         Logger::getInstance().dumpPreRebootLog();
         delay(300);  // Brief pause for web response to send
@@ -996,6 +1029,7 @@ void loop() {
     if (g_softRebootFlag) {
         LOG("=== Soft Reboot Triggered via Web Interface ===");
         g_softRebootFlag = false;
+        setRebootReason("Soft reboot requested via Web UI");
         Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         Logger::getInstance().dumpPreRebootLog();
         delay(300);
