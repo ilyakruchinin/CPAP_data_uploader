@@ -29,6 +29,7 @@ Config::Config() :
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
     enableSdCmd0Reset(false),
+    minimizeReboots(false),
     
     _hasSmbEndpoint(false),
     _hasCloudEndpoint(false),
@@ -233,6 +234,8 @@ void Config::setConfigValue(String key, String value) {
         wifiPowerSaving = parseWifiPowerSaving(value);
     } else if (key == "STORE_CREDENTIALS_PLAIN_TEXT") {
         storePlainText = (value.equalsIgnoreCase("true") || value.toInt() == 1);
+    } else if (key == "MINIMIZE_REBOOTS" || key == "SKIP_REBOOT_BETWEEN_BACKENDS") {
+        minimizeReboots = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else {
         LOGF("WARN: Unknown config key '%s'. Skipping.", key.c_str());
     }
@@ -605,6 +608,7 @@ int Config::getInactivitySeconds() const { return inactivitySeconds; }
 int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
 int Config::getCooldownMinutes() const { return cooldownMinutes; }
 bool Config::getEnableSdCmd0Reset() const { return enableSdCmd0Reset; }
+bool Config::getMinimizeReboots() const { return minimizeReboots; }
 bool Config::isSmartMode() const { return uploadMode == "smart"; }
 
 // Helper methods for enum conversion

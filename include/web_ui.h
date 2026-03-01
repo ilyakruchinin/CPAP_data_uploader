@@ -579,8 +579,9 @@ function startSse(){
   sseSource.onerror=function(){
     sseConnected=false;
     if(sseSource){sseSource.close();sseSource=null;}
-    set('log-st','SSE lost \u2014 falling back to polling');
-    startLogPoll();
+    backfillDone=false;
+    set('log-st','SSE lost \u2014 reconnecting\u2026');
+    setTimeout(function(){if(curTab==='logs'){fetchBackfill();}else{startLogPoll();}},3000);
   };
 }
 function stopSse(){

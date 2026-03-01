@@ -55,25 +55,23 @@ Each backend runs in a fresh heap. The cycling pointer (`BackendSummary.sessionS
 ### 2.1 New Config Key
 
 ```ini
-SKIP_REBOOT_BETWEEN_BACKENDS = false   # default: false (current behaviour)
+MINIMIZE_REBOOTS = false   # default: false (current behaviour)
 ```
 
-When `true`, after an upload session completes, the FSM checks heap health before deciding whether to reboot or continue to COOLDOWN → next backend.
+When `true`, the device skips elective soft-reboots after upload sessions and reuses the existing runtime (COOLDOWN → LISTENING loop). Mandatory reboots (watchdog, user-triggered state reset / soft reboot, OTA) still occur. The legacy key name `SKIP_REBOOT_BETWEEN_BACKENDS` is accepted as a backward-compatible alias.
 
 ### 2.2 Decision Logic (in `handleReleasing()`)
 
 ```
 IF g_nothingToUpload → COOLDOWN (no reboot, existing behaviour)
-IF NOT skipRebootBetweenBackends → reboot (current behaviour, default)
-IF skipRebootBetweenBackends:
-    free_heap = ESP.getFreeHeap()
-    max_alloc = ESP.getMaxAllocHeap()
-    IF max_alloc >= HEAP_HEALTHY_THRESHOLD (e.g. 50000):
-        LOG reason: "Heap healthy — skipping reboot"
-        → COOLDOWN (next cycle picks next backend)
-    ELSE:
-        LOG reason: "Heap degraded — rebooting to restore contiguous memory"
-        → reboot (with recorded reason)
+IF config.getMinimizeReboots():
+    LOG "MINIMIZE_REBOOTS: skipping elective reboot" + heap stats
+    IF max_alloc < 35000 → LOG_WARN "Heap fragmented"
+    reset uploadCycleHadTimeout
+    → COOLDOWN
+ELSE (default):
+    flush NAND logs + dump pre-reboot log
+    → esp_restart()
 ```
 
 ### 2.3 Reboot Reason Recording
@@ -435,7 +433,7 @@ All configuration values are stored as Arduino Strings. These are loaded once at
 
 | # | Item | Files | Effort | Impact |
 |:--|:-----|:------|:-------|:-------|
-| 16 | Add `SKIP_REBOOT_BETWEEN_BACKENDS` config key | `Config.h/cpp` | Trivial | — |
+| 16 | Add `MINIMIZE_REBOOTS` config key (alias: `SKIP_REBOOT_BETWEEN_BACKENDS`) | `Config.h/cpp` | Trivial | ✅ Done |
 | 17 | Reboot reason recording (NVS unified mechanism) | `main.cpp` | Small | Improves diagnostics |
 | 18 | Backend teardown logic in `handleReleasing()` | `main.cpp`, `FileUploader.cpp` | Medium | Enables rebootless cycling |
 | 19 | Re-select backend without reboot (`FileUploader`) | `FileUploader.cpp` | Medium | Core feature |
@@ -473,8 +471,8 @@ The key metric is `getMaxAllocHeap()` stability. If it stays above 50 KB after a
 ## 6. Testing Strategy
 
 1. **Phase 1–3:** After each phase, run a full SMB+CLOUD upload cycle with `DEBUG=true` and compare `fh/ma` snapshots at key points (pre-upload, post-SMB, pre-CLOUD-TLS, post-CLOUD).
-2. **Phase 5:** Enable `SKIP_REBOOT_BETWEEN_BACKENDS=true` and run 3+ consecutive backend cycles without reboot. Monitor `max_alloc` trend — it should remain stable (not monotonically decreasing).
-3. **Regression:** Ensure `SKIP_REBOOT_BETWEEN_BACKENDS=false` (default) behaviour is unchanged.
+2. **Phase 5:** Enable `MINIMIZE_REBOOTS=true` and run 3+ consecutive upload cycles without reboot. Monitor `max_alloc` trend — it should remain stable (not monotonically decreasing).
+3. **Regression:** Ensure `MINIMIZE_REBOOTS=false` (default) behaviour is unchanged (reboot after every real upload session).
 4. **Edge case:** Verify the heap health gate triggers a reboot when `max_alloc` drops below threshold (can be tested by temporarily lowering the threshold).
 
 ---

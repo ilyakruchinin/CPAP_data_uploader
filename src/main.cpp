@@ -806,11 +806,27 @@ void handleReleasing() {
         return;
     }
 
-    // Otherwise always soft-reboot after a real upload session.
+    // MINIMIZE_REBOOTS: skip elective reboot and reuse existing runtime.
+    // The device enters COOLDOWN → LISTENING and picks up work in the next cycle.
+    if (config.getMinimizeReboots()) {
+        unsigned fh = (unsigned)ESP.getFreeHeap();
+        unsigned ma = (unsigned)ESP.getMaxAllocHeap();
+        LOGF("[FSM] MINIMIZE_REBOOTS: skipping elective reboot after upload (fh=%u ma=%u)", fh, ma);
+        if (ma < 35000) {
+            LOG_WARN("[FSM] Heap fragmented — contiguous block below 35KB. Consider rebooting if uploads fail.");
+        }
+        uploadCycleHadTimeout = false;
+        cooldownStartedAt = millis();
+        transitionTo(UploadState::COOLDOWN);
+        return;
+    }
+
+    // Default: soft-reboot after a real upload session.
     // A clean reboot restores the full contiguous heap and keeps the FSM simple.
     // The fast-boot path (ESP_RST_SW) skips cold-boot delays.
     LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
          (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
     Logger::getInstance().dumpPreRebootLog();
     delay(200);
     esp_restart();
@@ -937,6 +953,7 @@ void loop() {
             vTaskDelete(uploadTaskHandle);
         }
         
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         Logger::getInstance().dumpPreRebootLog();
         delay(300);
         esp_restart();
@@ -969,6 +986,7 @@ void loop() {
         
         // Immediate reboot — state files deleted on next clean boot
         LOG("Rebooting for clean state reset...");
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         Logger::getInstance().dumpPreRebootLog();
         delay(300);  // Brief pause for web response to send
         esp_restart();
@@ -978,6 +996,7 @@ void loop() {
     if (g_softRebootFlag) {
         LOG("=== Soft Reboot Triggered via Web Interface ===");
         g_softRebootFlag = false;
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
         Logger::getInstance().dumpPreRebootLog();
         delay(300);
         esp_restart();

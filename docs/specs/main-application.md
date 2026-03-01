@@ -23,6 +23,8 @@ The main application controller (`main.cpp`) orchestrates the entire CPAP data u
 ### Heap Management & Recovery
 - **Conditional-reboot strategy**: `handleReleasing()` calls `esp_restart()` only when real upload work was done
 - When `FileUploader` returns `NOTHING_TO_DO` (all backends fully synced), FSM skips the reboot and enters `COOLDOWN` directly via `g_nothingToUpload` flag — prevents endless reboot cycles when data is already synced
+- **`MINIMIZE_REBOOTS` config key**: When `true`, skips elective soft-reboots after upload sessions and reuses the existing runtime (COOLDOWN → LISTENING loop). Mandatory reboots (watchdog, user-triggered state reset / soft reboot, OTA) still occur. Logs a warning if `max_alloc` drops below 35 KB
+- **Pre-reboot log preservation**: Before every `esp_restart()`, NAND periodic flush + pre-reboot dump are called to ensure all final log lines (session summary, reboot reason) are persisted to `syslog.A.txt` and `/last_reboot_log.txt`
 - Fast-boot path (`ESP_RST_SW`) skips cold-boot stabilization delays and Smart Wait
 - Each session runs exactly one backend — single-backend cycling prevents concurrent SMB+TLS memory pressure
 

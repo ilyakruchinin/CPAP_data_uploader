@@ -196,7 +196,10 @@ When `PERSISTENT_LOGS=true`, the circular buffer is flushed to LittleFS every **
 
 ### Tier 1: Pre-Reboot Flush to LittleFS
 
-Before every `esp_restart()`, the circular buffer is dumped to `/last_reboot_log.txt` on LittleFS **unconditionally** (regardless of `PERSISTENT_LOGS` setting). This ensures watchdog kills, state resets, soft reboots, and post-upload reboots always leave a diagnostic trail accessible via the Web UI on the next boot.
+Before every `esp_restart()`, two flush steps occur:
+
+1. **NAND periodic flush** (`dumpSavedLogsPeriodic`) — if `PERSISTENT_LOGS=true`, writes any unflushed buffer content to the rotating syslog files. This ensures the final log lines (session summary, reboot reason) appear in `syslog.A.txt` in correct chronological order, before the next boot's `=== BOOT ===` separator.
+2. **Pre-reboot dump** (`dumpPreRebootLog`) — unconditionally dumps the circular buffer to `/last_reboot_log.txt` on LittleFS (regardless of `PERSISTENT_LOGS` setting). This provides a standalone pre-reboot snapshot accessible via the Web UI on the next boot.
 
 On next boot, if `/last_reboot_log.txt` exists, a warning is logged.
 
