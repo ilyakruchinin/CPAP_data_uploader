@@ -49,7 +49,7 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 | `UPLOAD_MODE` | `smart` | Upload strategy. `smart` = continuous monitoring, upload whenever CPAP is idle. `scheduled` = only upload within the configured time window. |
 | `UPLOAD_START_HOUR` | `9` | Start of upload window (0–23, local time). Ignored in smart mode for fresh data. |
 | `UPLOAD_END_HOUR` | `21` | End of upload window (0–23, local time). Set equal to `UPLOAD_START_HOUR` for a 24/7 always-open window. |
-| `GMT_OFFSET_HOURS` | `0` | Timezone offset from UTC in whole hours (e.g. `11` for AEDT, `-5` for EST). Used for NTP time and upload window calculation. |
+| `GMT_OFFSET_HOURS` | `0` | Timezone offset from UTC in whole hours (e.g. `11` for AEDT, `-5` for EST). Used for NTP time and upload window calculation. `GMT_OFFSET` is accepted as a backward-compatible alias. |
 
 > **Tip**: In `scheduled` mode the device holds the SD card only during the upload window, giving the CPAP machine uncontested access at all other times — the safest configuration for avoiding SD card errors.
 
@@ -71,11 +71,11 @@ Power defaults are optimised for AirSense 11 compatibility (low peak current). M
 
 | Key | Default | Options | Description |
 |---|---|---|---|
-| `CPU_SPEED_MHZ` | `80` | `80`, `160`, `240` | ESP32 CPU clock speed. 80 MHz is the minimum for WiFi and sufficient for all operations. DFS automatically boosts to 160 MHz during WiFi/TLS bursts. |
-| `WIFI_TX_PWR` | `MID` | `LOW` (5 dBm), `MID` (8.5 dBm), `HIGH` (11 dBm), `MAX` (19.5 dBm) | WiFi transmit power. `MID` is sufficient for typical bedroom placement (~5-15 m). Increase to `HIGH` if your router is in another room. `MAX` may be capped by the compile-time limit (11 dBm). |
+| `CPU_SPEED_MHZ` | `80` | `80`, `160`, `240` | ESP32 CPU clock speed. At the default 80 MHz, DFS is disabled (CPU locked) — no frequency transitions, lowest power. Set to `160` to re-enable DFS (80–160 MHz) for faster TLS handshakes on non-constrained hardware. |
+| `WIFI_TX_PWR` | `LOW` | `LOW` (5 dBm), `MID` (8.5 dBm), `HIGH` (11 dBm), `MAX` (19.5 dBm) | WiFi transmit power. `LOW` minimises peak current (~100–120 mA) and is sufficient for typical bedroom placement (~5 m). Increase to `MID` or `HIGH` if your router is further away. |
 | `WIFI_PWR_SAVING` | `MID` | `NONE`, `MID`/`MODEM`, `MAX` | WiFi power-saving mode. `MID` (MIN_MODEM) wakes every DTIM for broadcasts — preserves mDNS while saving ~90 mA idle. `MAX` saves slightly more but may miss mDNS queries. |
 
-> **Note:** 802.11b is disabled at the firmware level (OFDM only). This is not configurable and eliminates the 370 mA peak TX scenario. Bluetooth is also fully disabled at compile time.
+> **Note:** 802.11b is disabled at the firmware level (OFDM only). This is not configurable and eliminates the 370 mA peak TX scenario. Bluetooth is also fully disabled at compile time. Auto light-sleep is enabled — the CPU sleeps between WiFi DTIM intervals in IDLE and COOLDOWN states, reducing idle current to ~2–3 mA. TLS uses hardware-accelerated AES-128-GCM only (ChaCha20 and AES-256 are disabled at compile time for lower CPU load).
 
 ---
 

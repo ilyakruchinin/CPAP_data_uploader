@@ -39,13 +39,17 @@ This document is for developers who want to build, modify, or contribute to the 
 - **Logger** - Circular buffer logging system with web API access
 - **WebServer** - Optional web server for development/testing
 
-### Power Management (v0.4.3+)
+### Power Management (v0.4.3+, significantly enhanced in v0.11.1)
 
-The system includes configurable power management to reduce current consumption during active use:
+The system includes aggressive power management optimised for the AirSense 11's constrained SD card power supply:
 
-- **CPU Frequency Scaling** - Configurable from 80-240MHz via `CPU_SPEED_MHZ`
-- **WiFi TX Power Control** - Adjustable transmission power via `WIFI_TX_PWR` (high/mid/low)
-- **WiFi Power Saving** - Modem sleep modes via `WIFI_PWR_SAVING` (none/mid/max)
+- **CPU Frequency** - Default 80 MHz (locked, no DFS transitions). Set `CPU_SPEED_MHZ=160` to re-enable DFS.
+- **Auto Light-Sleep** - CPU sleeps between WiFi DTIM intervals in IDLE/COOLDOWN states (~2-3 mA idle). A PM lock prevents sleep during active states (LISTENING, UPLOADING, etc.).
+- **WiFi TX Power** - Default 5 dBm (`LOW`). Configurable via `WIFI_TX_PWR`.
+- **WiFi Power Saving** - Default MIN_MODEM. Configurable via `WIFI_PWR_SAVING`.
+- **TLS Cipher Optimization** - ChaCha20 and AES-256 disabled at compile time; forces hardware-accelerated AES-128-GCM.
+- **802.11b Disabled** - OFDM only (802.11g/n), eliminating 370 mA peak TX.
+- **Bluetooth Disabled** - Compile-time (`CONFIG_BT_ENABLED=n`) + runtime memory release.
 
 Power settings are applied automatically during startup and maintain full web server functionality. The implementation uses type-safe enums with validation and fallback to safe defaults.
 
@@ -176,9 +180,9 @@ The project works with:
 The system supports configurable power management through `config.txt`:
 
 ```ini
-CPU_SPEED_MHZ = 160        # CPU frequency: 80-240MHz (default: 240)
-WIFI_TX_PWR = mid          # WiFi TX power: "high"/"mid"/"low" (default: "high")  
-WIFI_PWR_SAVING = mid      # WiFi power save: "none"/"mid"/"max" (default: "none")
+CPU_SPEED_MHZ = 80         # CPU frequency: 80-240MHz (default: 80, locks CPU — no DFS)
+WIFI_TX_PWR = low          # WiFi TX power: "low"/"mid"/"high"/"max" (default: "low")  
+WIFI_PWR_SAVING = mid      # WiFi power save: "none"/"mid"/"max" (default: "mid")
 ```
 
 **Implementation Details:**

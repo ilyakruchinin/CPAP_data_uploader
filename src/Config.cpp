@@ -39,7 +39,7 @@ Config::Config() :
     
     // Power management defaults (optimized for AirSense 11 compatibility)
     cpuSpeedMhz(80),  // Default: 80MHz (minimum for WiFi, saves ~30-40mA)
-    wifiTxPower(WifiTxPower::POWER_MID),  // Default: 8.5dBm (sufficient for bedroom range)
+    wifiTxPower(WifiTxPower::POWER_LOW),  // Default: 5.0dBm (minimum practical, reduces peak current ~20-30mA)
     wifiPowerSaving(WifiPowerSaving::SAVE_MID)  // Default: MIN_MODEM (preserves mDNS)
 {}
 
@@ -188,7 +188,7 @@ void Config::setConfigValue(String key, String value) {
         endpointUser = value;
     } else if (key == "ENDPOINT_PASSWORD") {
         endpointPassword = value;
-    } else if (key == "GMT_OFFSET_HOURS") {
+    } else if (key == "GMT_OFFSET_HOURS" || key == "GMT_OFFSET") {
         gmtOffsetHours = value.toInt();
     // LOG_TO_SD_CARD is accepted as a backward-compatible alias for SAVE_LOGS.
     } else if (key == "SAVE_LOGS" || key == "LOG_TO_SD_CARD") {
