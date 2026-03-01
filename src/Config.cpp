@@ -190,8 +190,8 @@ void Config::setConfigValue(String key, String value) {
         endpointPassword = value;
     } else if (key == "GMT_OFFSET_HOURS" || key == "GMT_OFFSET") {
         gmtOffsetHours = value.toInt();
-    // LOG_TO_SD_CARD is accepted as a backward-compatible alias for SAVE_LOGS.
-    } else if (key == "SAVE_LOGS" || key == "LOG_TO_SD_CARD") {
+    // PERSISTENT_LOGS is the primary key; SAVE_LOGS and LOG_TO_SD_CARD are backward-compatible aliases.
+    } else if (key == "PERSISTENT_LOGS" || key == "SAVE_LOGS" || key == "LOG_TO_SD_CARD") {
         saveLogs = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "DEBUG") {
         debugMode = (value.equalsIgnoreCase("true") || value.toInt() == 1);

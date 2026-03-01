@@ -36,7 +36,7 @@ This document is for developers who want to build, modify, or contribute to the 
 
 ### Supporting Components
 
-- **Logger** - Circular buffer logging system with web API access
+- **Logger** - Circular buffer logging system (8 KB static BSS) with two-tier emergency logs, SSE streaming, and web API access
 - **WebServer** - Optional web server for development/testing
 
 ### Power Management (v0.4.3+, significantly enhanced in v0.11.1)
@@ -409,22 +409,32 @@ Multiple upload backends can be enabled simultaneously. Use `ENDPOINT_TYPE` in `
 **Logging:**
 ```ini
 build_flags =
-    -DLOG_BUFFER_SIZE=32768      ; 32KB log buffer (default: 2KB)
+    -DLOG_BUFFER_SIZE=16384      ; 16KB log buffer (default: 8KB, static BSS)
     -DCORE_DEBUG_LEVEL=3         ; ESP32 core debug level (0-5)
     -DENABLE_VERBOSE_LOGGING     ; Enable debug logs (compiled out by default)
 ```
 
 **Debug Logging:** By default, `LOG_DEBUG()` and `LOG_DEBUGF()` macros are compiled out (zero overhead). Enable with `-DENABLE_VERBOSE_LOGGING` to see detailed diagnostics including progress updates, state details, and troubleshooting information. Saves ~10-15KB flash and ~35-75ms per upload session when disabled.
 
-**Persistent Log Saving:** For advanced debugging, logs can be persisted to internal LittleFS by setting `SAVE_LOGS: true` in `config.txt`. 
+**Persistent Log Saving:** For advanced debugging, logs can be persisted to internal LittleFS by setting `PERSISTENT_LOGS=true` in `config.txt` (legacy aliases `SAVE_LOGS` and `LOG_TO_SD_CARD` are also accepted).
 
 ⚠️ **WARNING: Persistent log saving is for debugging only. Enable it temporarily for troubleshooting, and only when `UPLOAD_MODE` is `"scheduled"` with an upload window outside normal therapy times. Disable it immediately afterward.**
 
 When enabled:
-- Logs are written to `/littlefs/syslog.A.txt` and rotated to `/littlefs/syslog.B.txt`
-- Crash snapshots are written to `/littlefs/crash_log.txt`
-- All log messages (including serial and buffer logs) are also persisted
+- Logs are flushed every **30 seconds** to `/syslog.A.txt` on LittleFS using direct chunk-buffer writes (zero heap allocation)
+- When `syslog.A.txt` exceeds **64 KB**, it is rotated to `/syslog.B.txt`
+- Total capacity: **128 KB** (~30–60 minutes of continuous logging)
 - If file creation fails, log persistence is automatically disabled
+
+**Two-Tier Emergency Logs (always active, regardless of PERSISTENT_LOGS):**
+- **Pre-reboot flush**: Before every `esp_restart()`, the circular buffer is dumped to `/last_reboot_log.txt` on LittleFS
+- **Boot-failure SD dump**: If config loading or WiFi connection fails during `setup()`, the buffer is dumped to `/uploader_error.txt` on the SD card with a header (reason, uptime, firmware version)
+
+**Web GUI Log Endpoints:**
+- `GET /api/logs` — circular buffer (polling fallback)
+- `GET /api/logs/full` — NAND saved logs + previous reboot log + circular buffer (initial backfill)
+- `GET /api/logs/stream` — SSE live push (single client, main-loop driven)
+- `GET /api/logs/saved` — download persisted LittleFS log files as attachment
 
 ### Memory Usage
 
@@ -839,9 +849,11 @@ CPAP machines need regular SD card access. The FSM-based exclusive access model 
 
 ### Why Circular Buffer Logging?
 
-- Fixed memory usage (configurable)
-- No SD card writes (reduces wear)
-- Thread-safe for dual-core ESP32
+- **Static BSS allocation** — 8 KB buffer lives in BSS, not heap (zero fragmentation)
+- No SD card writes during normal operation (reduces wear)
+- Thread-safe for dual-core ESP32 (FreeRTOS mutex)
+- Two-tier emergency log strategy ensures diagnostic data survives boot failures
+- SSE live streaming for real-time web-based debugging
 
 ### Why Feature Flags?
 
@@ -884,8 +896,7 @@ SleepHQ requires an import session workflow (create → upload files → process
 
 ### RAM Usage
 
-- Static allocation: ~47KB
-- Log buffer: 32KB (configurable)
+- Static allocation: ~60KB (includes 8KB log buffer in BSS)
 - SMB buffers: ~32KB during upload
 - Total available: 320KB
 

@@ -54,6 +54,8 @@ private:
     void handleLogs();            // HTML Logs Viewer (AJAX)
     void handleApiLogs();         // Raw Logs API (in-memory buffer)
     void handleApiLogsSaved();    // Saved log files from LittleFS (syslog.A/B.txt)
+    void handleApiLogsFull();     // NAND + circular buffer backfill
+    void handleApiLogsStream();   // SSE live log stream setup
     void handleNotFound();
     void handleMonitorStart();
     void handleMonitorStop();
@@ -110,5 +112,8 @@ public:
     void setOTAManager(OTAManager* ota);
 #endif
 };
+
+// Free function — call from main loop every ~100-200ms to push SSE log events
+void pushSseLogs();
 
 #endif // CPAP_WEB_SERVER_H

@@ -182,6 +182,14 @@ bool CpapWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleApiLogsSaved();
     });
+    server->on("/api/logs/full", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsFull();
+    });
+    server->on("/api/logs/stream", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsStream();
+    });
     
 #ifdef ENABLE_OTA_UPDATES
     // OTA handlers
@@ -222,6 +230,8 @@ bool CpapWebServer::begin() {
     LOG("[WebServer]   GET  /api/config         - Config snapshot JSON");
     LOG("[WebServer]   GET  /api/logs           - In-memory log buffer (plain text)");
     LOG("[WebServer]   GET  /api/logs/saved     - Download persisted LittleFS logs");
+    LOG("[WebServer]   GET  /api/logs/full      - NAND + circular buffer backfill");
+    LOG("[WebServer]   GET  /api/logs/stream    - SSE live log stream");
     LOG("[WebServer]   GET  /api/sd-activity    - SD bus activity samples JSON");
     LOG("[WebServer]   GET  /api/diagnostics    - Heap/system diagnostics JSON");
     LOG("[WebServer]   GET  /api/config-raw     - Raw config.txt contents");
@@ -541,9 +551,10 @@ void CpapWebServer::handleApiLogsSaved() {
     server->send(200, "text/plain; charset=utf-8", " ");
     ChunkedPrint chunked(server);
 
-    const char* files[] = {"/syslog.B.txt", "/syslog.A.txt"};
+    // Stream all LittleFS log files: older rotated log, active log, and pre-reboot dump
+    const char* files[] = {"/syslog.B.txt", "/syslog.A.txt", "/last_reboot_log.txt"};
     bool anyFound = false;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         File f = LittleFS.open(files[i], FILE_READ);
         if (!f) continue;
         anyFound = true;
@@ -559,9 +570,82 @@ void CpapWebServer::handleApiLogsSaved() {
         f.close();
     }
     if (!anyFound) {
-        chunked.print("[No saved log files found — enable SAVE_LOGS=true in config.txt to persist logs]\n");
+        chunked.print("[No saved log files found — enable PERSISTENT_LOGS=true in config.txt to persist logs]\n");
     }
     server->sendContent("");
+}
+
+// GET /api/logs/full — stream NAND logs + circular buffer (inline, not download)
+// Used by the Web GUI on initial Logs tab open for full historical context.
+void CpapWebServer::handleApiLogsFull() {
+    // Flush any unflushed in-memory logs before serving so content is current
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+
+    addCorsHeaders(server);
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/plain; charset=utf-8", " ");
+    ChunkedPrint chunked(server);
+
+    // Stream NAND saved logs (older first)
+    const char* files[] = {"/syslog.B.txt", "/syslog.A.txt"};
+    for (int i = 0; i < 2; i++) {
+        File f = LittleFS.open(files[i], FILE_READ);
+        if (!f) continue;
+        uint8_t buf[256];
+        while (f.available()) {
+            size_t n = f.read(buf, sizeof(buf));
+            if (n > 0) chunked.write(buf, n);
+            yield();
+        }
+        f.close();
+    }
+
+    // Stream the last_reboot_log.txt if it exists (context from previous boot)
+    File rebootLog = LittleFS.open("/last_reboot_log.txt", FILE_READ);
+    if (rebootLog) {
+        chunked.print("\n--- Previous reboot log ---\n");
+        uint8_t buf[256];
+        while (rebootLog.available()) {
+            size_t n = rebootLog.read(buf, sizeof(buf));
+            if (n > 0) chunked.write(buf, n);
+            yield();
+        }
+        rebootLog.close();
+        chunked.print("\n--- End previous reboot log ---\n");
+    }
+
+    // Append current circular buffer (live data from this boot)
+    Logger::getInstance().printLogs(chunked);
+
+    server->sendContent("");
+}
+
+// GET /api/logs/stream — SSE endpoint for live log push.
+// Takes over the client socket and stores it globally for main-loop push.
+// Declared in CpapWebServer.h; the actual push happens via pushSseLogs() called from loop().
+//
+// Global SSE client state — single client limit is acceptable (one browser tab).
+static WiFiClient g_sseClient;
+static volatile bool g_sseActive = false;
+static volatile uint32_t g_sseLastPushedIndex = 0;
+
+void CpapWebServer::handleApiLogsStream() {
+    // Take over the raw client socket from WebServer
+    g_sseClient = server->client();
+
+    // Send SSE headers manually — do NOT call server->send() after this
+    g_sseClient.print("HTTP/1.1 200 OK\r\n"
+                       "Content-Type: text/event-stream\r\n"
+                       "Cache-Control: no-cache\r\n"
+                       "Connection: keep-alive\r\n"
+                       "Access-Control-Allow-Origin: *\r\n"
+                       "\r\n");
+
+    // Snapshot current head so we only push NEW logs going forward
+    g_sseLastPushedIndex = Logger::getInstance().getHeadIndex();
+    g_sseActive = true;
+
+    // Return without calling server->send() — we own the socket now
 }
 
 // GET /config - serve SPA
@@ -1357,4 +1441,91 @@ void CpapWebServer::handleMonitorPage() {
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server->sendHeader("Connection", "close");
     server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
+}
+
+// ============================================================================
+// SSE Log Push — call from main loop every ~100-200ms
+// ============================================================================
+void pushSseLogs() {
+    if (!g_sseActive) return;
+
+    if (!g_sseClient.connected()) {
+        g_sseActive = false;
+        return;
+    }
+
+    Logger& logger = Logger::getInstance();
+    uint32_t currentHead = logger.getHeadIndex();
+
+    if (currentHead == g_sseLastPushedIndex) return;  // nothing new
+
+    // Read new bytes from circular buffer and push as SSE data events.
+    // We read under the logger's mutex via printLogsTail-style approach,
+    // but simplified: we know exactly the range [g_sseLastPushedIndex..currentHead).
+    uint32_t newBytes = currentHead - g_sseLastPushedIndex;
+    if (newBytes > LOG_BUFFER_SIZE) {
+        // Buffer wrapped — we lost some, start from current tail
+        newBytes = LOG_BUFFER_SIZE;
+        g_sseLastPushedIndex = currentHead - LOG_BUFFER_SIZE;
+    }
+
+    // Cap per-push to avoid blocking the loop too long
+    if (newBytes > 2048) newBytes = 2048;
+
+    // Build SSE "data:" lines from the buffer content.
+    // SSE format: "data: <line>\n\n" for each line.
+    // We'll batch into a single "data:" block for efficiency.
+    char chunk[320];  // "data: " + up to ~300 chars + "\n\n"
+    size_t chunkPos = 0;
+
+    // Write "data: " prefix
+    memcpy(chunk, "data: ", 6);
+    chunkPos = 6;
+
+    for (uint32_t i = 0; i < newBytes; i++) {
+        size_t physicalPos = (g_sseLastPushedIndex + i) % LOG_BUFFER_SIZE;
+        char c = Logger::s_logBuffer[physicalPos];
+
+        if (c == '\n') {
+            // End this SSE event and start a new one
+            chunk[chunkPos++] = '\n';
+            chunk[chunkPos++] = '\n';
+            // Flush chunk
+            if (g_sseClient.connected()) {
+                g_sseClient.write((const uint8_t*)chunk, chunkPos);
+            } else {
+                g_sseActive = false;
+                break;
+            }
+            // Start next "data: " prefix
+            memcpy(chunk, "data: ", 6);
+            chunkPos = 6;
+        } else {
+            chunk[chunkPos++] = c;
+            // Flush if chunk is getting full (leave room for \n\n)
+            if (chunkPos >= sizeof(chunk) - 3) {
+                chunk[chunkPos++] = '\n';
+                chunk[chunkPos++] = '\n';
+                if (g_sseClient.connected()) {
+                    g_sseClient.write((const uint8_t*)chunk, chunkPos);
+                } else {
+                    g_sseActive = false;
+                    break;
+                }
+                memcpy(chunk, "data: ", 6);
+                chunkPos = 6;
+            }
+        }
+    }
+
+    // Flush any remaining partial data
+    if (g_sseActive && chunkPos > 6) {
+        chunk[chunkPos++] = '\n';
+        chunk[chunkPos++] = '\n';
+        if (g_sseClient.connected()) {
+            g_sseClient.write((const uint8_t*)chunk, chunkPos);
+        }
+    }
+
+    g_sseLastPushedIndex += newBytes;
 }

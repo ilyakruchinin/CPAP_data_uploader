@@ -6,10 +6,12 @@ The Logging System (`Logger.cpp/.h`) provides structured logging capabilities fo
 ## Architecture
 
 ### Log Destinations
-- **Serial output**: Primary logging to USB serial
-- **LittleFS storage**: Optional persisted logging (`/littlefs/syslog.A.txt` / `/littlefs/syslog.B.txt`)
-- **Circular buffer**: In-memory buffer for web interface
-- **Conditional compilation**: Feature flags for different builds
+- **Serial output**: Primary logging to USB serial (always enabled)
+- **Circular buffer**: 8 KB static BSS array for web interface (not heap-allocated)
+- **LittleFS storage**: Optional persisted logging (`/syslog.A.txt` / `/syslog.B.txt`, 64 KB each)
+- **Pre-reboot dump**: `/last_reboot_log.txt` on LittleFS — written unconditionally before every `esp_restart()`
+- **SD card emergency dump**: `/uploader_error.txt` on SD card — written on boot-time failures (config error, WiFi failure) where the user has no network access
+- **SSE live stream**: `/api/logs/stream` endpoint pushes new log lines to the browser in real-time via Server-Sent Events
 
 ### Log Levels
 ```cpp
@@ -54,17 +56,18 @@ private:
 
 ### Log Settings
 - **LOG_LEVEL**: Minimum log level to output (default: INFO)
-- **SAVE_LOGS**: Enable persisted internal logging (default: false)
+- **PERSISTENT_LOGS**: Enable persisted internal logging (default: false). Aliases: `SAVE_LOGS`, `LOG_TO_SD_CARD`
 - **SERIAL_BAUD**: Serial baud rate (default: 115200)
-- **BUFFER_SIZE**: Circular buffer size (8KB)
+- **LOG_BUFFER_SIZE**: Circular buffer size (default: 8192 bytes, compile-time via `-DLOG_BUFFER_SIZE=N`)
 
 ### Persistent Log Saving
 ```ini
 # Enable persisted debug logging (use with caution)
-SAVE_LOGS = true
+PERSISTENT_LOGS = true
 
 # Debugging-focused feature; enable only when needed
 # Recommended only for scheduled mode outside therapy times
+# Legacy aliases SAVE_LOGS and LOG_TO_SD_CARD are also accepted
 ```
 
 ## Operations
@@ -183,42 +186,28 @@ void logPerformance(const char* operation, uint32_t durationMs) {
 
 ## Persistent Log Saving
 
-### File Management
-```cpp
-bool writeToStorage(uint32_t timestamp, const char* level, const char* message) {
-    File logFile = LittleFS.open("/littlefs/syslog.A.txt", FILE_APPEND);
-    if (!logFile) {
-        return false;
-    }
-    
-    // Format: [timestamp] LEVEL message\n
-    logFile.printf("[%lu] %s %s\n", timestamp, level, message);
-    logFile.close();
-    
-    // Rotate log file if too large
-    rotateIfNeeded();
-    
-    return true;
-}
-```
+When `PERSISTENT_LOGS=true`, the circular buffer is flushed to LittleFS every **30 seconds** using direct chunk-buffer writes (zero heap allocation). Files rotate at **64 KB**:
 
-### Log Rotation
-```cpp
-void rotateIfNeeded() {
-    File logFile = LittleFS.open("/littlefs/syslog.A.txt", FILE_READ);
-    if (logFile && logFile.size() > MAX_LOG_SIZE) {
-        logFile.close();
-        
-        // Rename current log
-        LittleFS.rename("/littlefs/syslog.A.txt", "/littlefs/syslog.B.txt");
-        
-        // Delete old log if exists
-        LittleFS.remove("/littlefs/syslog.B.txt");
-        
-        LOG_INFO("[Logger] Log file rotated");
-    }
-}
-```
+- `/syslog.A.txt` — active log file (appended to)
+- `/syslog.B.txt` — rotated older log file
+- Total capacity: **128 KB** (~30–60 minutes of continuous logging)
+
+## Two-Tier Emergency Log Strategy
+
+### Tier 1: Pre-Reboot Flush to LittleFS
+
+Before every `esp_restart()`, the circular buffer is dumped to `/last_reboot_log.txt` on LittleFS **unconditionally** (regardless of `PERSISTENT_LOGS` setting). This ensures watchdog kills, state resets, soft reboots, and post-upload reboots always leave a diagnostic trail accessible via the Web UI on the next boot.
+
+On next boot, if `/last_reboot_log.txt` exists, a warning is logged.
+
+### Tier 2: Boot-Failure Dump to SD Card
+
+When the device cannot establish WiFi (config failure, wrong credentials, hardware error), the Web UI is unreachable. The log buffer is dumped to `/uploader_error.txt` on the **SD card** so the user can pull the card and read it on a PC.
+
+- **Trigger points**: config load failure (`main.cpp`), WiFi connection failure (`main.cpp`)
+- **Format**: Appends with a header containing reason, uptime, firmware version, and free heap
+- **Size cap**: 64 KB (truncates from beginning if exceeded)
+- **Next-boot detection**: on successful boot, if `/uploader_error.txt` exists on SD, a warning is logged
 
 ## Integration Points
 
@@ -230,24 +219,25 @@ void rotateIfNeeded() {
 - **All uploaders**: Backend-specific logging
 
 ### Web Interface
-- **Log viewing**: `/logs` endpoint shows recent logs
-- **Real-time updates**: Auto-refreshing log display
-- **Filtering**: Filter by log level (future)
-- **Export**: Download log files (future)
+- **`/api/logs`**: Streams circular buffer contents (polling fallback)
+- **`/api/logs/full`**: Streams NAND saved logs + previous reboot log + circular buffer (initial backfill)
+- **`/api/logs/stream`**: SSE endpoint for real-time log push (single client)
+- **`/api/logs/saved`**: Downloads persisted LittleFS log files as attachment
+- **Log viewing**: `/logs` SPA tab — fetches backfill on first open, then SSE live stream with polling fallback
 
 ### Configuration
-- **Log level**: Configurable minimum log level
-- **SAVE_LOGS**: Optional persisted file-based logging
+- **PERSISTENT_LOGS**: Optional persisted file-based logging (aliases: `SAVE_LOGS`, `LOG_TO_SD_CARD`)
 - **Serial output**: Always enabled for debugging
-- **Buffer size**: Tunable for memory constraints
+- **Buffer size**: 8 KB static array (configurable at compile time via `LOG_BUFFER_SIZE`)
 
 ## Performance Considerations
 
 ### Memory Usage
-- **Circular buffer**: 8KB for ~100 log entries
-- **Formatting buffer**: 256 bytes for message formatting
-- **Persisted logging**: Additional file handle overhead
-- **Serial output**: Minimal memory impact
+- **Circular buffer**: 8 KB static BSS array (not heap — zero fragmentation)
+- **Formatting buffer**: 256 bytes stack for message formatting
+- **Flush chunk buffer**: 256 bytes stack for direct-to-file writes
+- **SSE push buffer**: 320 bytes stack per push cycle
+- **Net heap impact**: Negative — removes previous 2 KB malloc, eliminates up to 8 KB transient String fragmentation
 
 ### CPU Overhead
 - **String formatting**: snprintf() for message formatting
@@ -293,32 +283,20 @@ void rotateIfNeeded() {
 
 ### Production Settings
 ```ini
-LOG_LEVEL = INFO
-SAVE_LOGS = false
+PERSISTENT_LOGS = false
 ```
 
 ### Debug Settings
 ```ini
-LOG_LEVEL = DEBUG
-SAVE_LOGS = true
+PERSISTENT_LOGS = true
+DEBUG = true
 ```
 
-### Minimal Settings
-```ini
-LOG_LEVEL = ERROR
-SAVE_LOGS = false
-```
+## Files on Filesystem
 
-## Future Enhancements
-
-### Advanced Features
-- **Log filtering**: Pattern-based log filtering
-- **Remote logging**: Send logs to remote server
-- **Compression**: Compress log files for storage
-- **Encryption**: Encrypt sensitive log entries
-
-### Web Interface
-- **Live streaming**: WebSocket log streaming
-- **Search functionality**: Search log history
-- **Export options**: Download logs in various formats
-- **Alert system**: Error notifications
+| File | Location | Purpose | When Written |
+|:-----|:---------|:--------|:-------------|
+| `/syslog.A.txt` | LittleFS | Active persisted log | Every 30s when `PERSISTENT_LOGS=true` |
+| `/syslog.B.txt` | LittleFS | Rotated older log | When A exceeds 64 KB |
+| `/last_reboot_log.txt` | LittleFS | Pre-reboot buffer dump | Before every `esp_restart()` |
+| `/uploader_error.txt` | SD Card | Boot-failure emergency log | Config or WiFi failure in `setup()` |

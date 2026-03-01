@@ -908,18 +908,18 @@ void pushSseLogs() {
 
 ### 8.6 Implementation Plan for Logging
 
-| # | Item | Files | Effort | Priority |
-|:--|:-----|:------|:-------|:---------|
-| L1 | Increase `LOG_BUFFER_SIZE` to 8192, make buffer a static array | `Logger.h`, `Logger.cpp` | Trivial | High |
-| L2 | Direct-to-file flush — eliminate intermediate String (F1) | `Logger.cpp` | Small | High |
-| L3a | Add `dumpPreRebootLog()` — always flush to LittleFS before `esp_restart()` | `Logger.h/cpp`, `main.cpp` | Small | High |
-| L3b | Enhance `dumpToSD()` — header with reason/timestamp, append mode, chunk writes, next-boot detection | `Logger.h/cpp`, `main.cpp` | Small | High |
-| L4 | Increase NAND log file size to 64 KB | `Logger.cpp` | Trivial | Medium |
-| L5 | Reduce flush interval to 30 seconds | `main.cpp` | Trivial | Medium |
-| L6 | Rename `SAVE_LOGS` → `PERSISTENT_LOGS` (keep aliases) | `Config.cpp`, `CpapWebServer.cpp`, docs | Small | Medium |
-| L7 | Fix "every 10 seconds" log message | `main.cpp:381` | Trivial | Low |
-| L8 | Add `/api/logs/full` endpoint (NAND + circular buffer backfill) | `CpapWebServer.cpp` | Medium | Medium |
-| L9 | Add SSE `/api/logs/stream` endpoint + main-loop push | `CpapWebServer.cpp/h`, `main.cpp` | Medium | Medium |
-| L10 | Update Web GUI JS for hybrid backfill + SSE live stream | `web_ui.h` | Medium | Medium |
+| # | Item | Files | Effort | Priority | Status |
+|:--|:-----|:------|:-------|:---------|:-------|
+| L1 | Increase `LOG_BUFFER_SIZE` to 8192, make buffer a static array | `Logger.h`, `Logger.cpp` | Trivial | High | ✅ Done |
+| L2 | Direct-to-file flush — eliminate intermediate String (F1) | `Logger.cpp` | Small | High | ✅ Done |
+| L3a | Add `dumpPreRebootLog()` — always flush to LittleFS before `esp_restart()` | `Logger.h/cpp`, `main.cpp` | Small | High | ✅ Done |
+| L3b | Enhance `dumpToSD()` — header with reason/timestamp, append mode, chunk writes, next-boot detection | `Logger.h/cpp`, `main.cpp` | Small | High | ✅ Done |
+| L4 | Increase NAND log file size to 64 KB | `Logger.cpp` | Trivial | Medium | ✅ Done |
+| L5 | Reduce flush interval to 30 seconds | `main.cpp` | Trivial | Medium | ✅ Done |
+| L6 | Rename `SAVE_LOGS` → `PERSISTENT_LOGS` (keep aliases) | `Config.cpp`, `CpapWebServer.cpp`, docs | Small | Medium | ✅ Done |
+| L7 | Fix "every 10 seconds" log message | `main.cpp:381` | Trivial | Low | ✅ Done |
+| L8 | Add `/api/logs/full` endpoint (NAND + circular buffer backfill) | `CpapWebServer.cpp` | Medium | Medium | ✅ Done |
+| L9 | Add SSE `/api/logs/stream` endpoint + main-loop push | `CpapWebServer.cpp/h`, `main.cpp` | Medium | Medium | ✅ Done |
+| L10 | Update Web GUI JS for hybrid backfill + SSE live stream | `web_ui.h` | Medium | Medium | ✅ Done |
 
-**Dependencies:** L1–L2 are prerequisites for everything else. L8–L10 can be done together as a single feature. L3a–L3b should be done immediately (crash context is critical). L3b also requires updating `docs/specs/logging-system.md` to document the `/uploader_error.txt` convention.
+**All items implemented.** Documentation updated in: `docs/specs/logging-system.md`, `docs/CONFIG_REFERENCE.md`, `docs/DEVELOPMENT.md`, `docs/03-REQUIREMENTS.md`, `docs/specs/configuration-management.md`, `README.md`.

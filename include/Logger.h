@@ -19,7 +19,7 @@ class SDCardManager;
 
 // Compile-time configuration for circular buffer size
 #ifndef LOG_BUFFER_SIZE
-#define LOG_BUFFER_SIZE 2048  // Default: 2KB
+#define LOG_BUFFER_SIZE 8192  // Default: 8KB
 #endif
 
 // Validate buffer size at compile time
@@ -39,7 +39,7 @@ static_assert(LOG_BUFFER_SIZE > 0, "LOG_BUFFER_SIZE must be greater than zero");
  * - Configurable buffer size via LOG_BUFFER_SIZE preprocessor definition
  * 
  * Memory Impact:
- * - Buffer: LOG_BUFFER_SIZE bytes (default 2KB)
+ * - Buffer: LOG_BUFFER_SIZE bytes (default 8KB, static BSS — not heap)
  * - Overhead: ~32 bytes for state + mutex handle
  * 
  * Configuration:
@@ -152,19 +152,47 @@ public:
 
     /**
      * Dumps the current log buffer directly to a file on the provided filesystem.
-     * This is useful for emergency boot failures (e.g. bad config) where the SD card
-     * is the only way for the user to retrieve the failure reason.
+     * Used for emergency boot failures (e.g. bad config, WiFi failure) where the
+     * SD card is the only way for the user to retrieve the failure reason.
+     * Appends with a header (reason, uptime, firmware version) and uses chunk
+     * writes for SD card performance. Caps file at 64 KB.
      * @param fs The filesystem to write to (typically SD_MMC)
      * @param filename Absolute path to the file (e.g. "/uploader_error.txt")
+     * @param reason Human-readable reason for the dump (e.g. "Config load failure")
      * @return true if successful
      */
-    bool dumpToSD(fs::FS& fs, const char* filename);
+    bool dumpToSD(fs::FS& fs, const char* filename, const char* reason = "Unknown");
+
+    /**
+     * Unconditionally flush the circular buffer to /last_reboot_log.txt on LittleFS.
+     * Called before every esp_restart() regardless of PERSISTENT_LOGS setting.
+     * Uses stack chunk buffer — zero heap allocation.
+     * @return true if successful
+     */
+    bool dumpPreRebootLog();
+
+    /**
+     * Check if /uploader_error.txt exists on the given filesystem.
+     * If found, logs a warning so the user knows a prior boot failed.
+     * @param fs The filesystem to check (typically SD_MMC)
+     * @param filename The file to check for
+     */
+    void checkPreviousBootError(fs::FS& fs, const char* filename = "/uploader_error.txt");
+
+    /**
+     * Get current head index (monotonic write counter).
+     * Used by SSE stream to track what has already been pushed.
+     */
+    uint32_t getHeadIndex() const { return headIndex; }
 
     /**
      * Check if logger is properly initialized
      * Returns false if memory allocation or mutex creation failed
      */
     bool isInitialized() const { return initialized; }
+
+    // Static circular buffer — public for zero-copy SSE push (pushSseLogs)
+    static char s_logBuffer[LOG_BUFFER_SIZE];
 
 protected:
     // Protected constructor for testing - allows inheritance in test code
@@ -209,8 +237,7 @@ protected:
      */
     virtual void trackLostBytes(uint32_t bytesLost);
 
-    // Circular buffer storage
-    char* buffer;
+    char* buffer;          // Points to s_logBuffer (kept for compatibility)
     size_t bufferSize;
 
     // Monotonic 32-bit indices for circular buffer management

@@ -272,7 +272,7 @@ function tab(t){
     document.getElementById('t-'+x).classList.toggle('act',x===t);
   });
   curTab=t;
-  if(t==='logs'){startLogPoll();}else{stopLogPoll();}
+  if(t==='logs'){if(!backfillDone){fetchBackfill();}else if(!sseConnected){startLogPoll();}}else{stopLogPoll();stopSse();}
   if(t!=='mon'){stopMon();}
   if(t==='cfg'){loadCfg();}
   if(t==='mon'){checkMonUploadState();}
@@ -540,13 +540,51 @@ function _renderLogBuf(){
   b.textContent=clientLogBuf.join('\n');
   if(logAtBottom)b.scrollTop=b.scrollHeight;
 }
+var sseSource=null,sseConnected=false,backfillDone=false;
 function fetchLogs(){
   if(curTab!=='logs')return;
   fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
     _appendLogs(t);
     _renderLogBuf();
-    set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');
+    set('log-st',(sseConnected?'SSE Live':'Polling')+' \u2022 '+clientLogBuf.length+' lines');
   }).catch(function(){set('log-st','Disconnected');});
+}
+function fetchBackfill(){
+  set('log-st','Loading history\u2026');
+  fetch('/api/logs/full',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+    _appendLogs(t);
+    _renderLogBuf();
+    backfillDone=true;
+    startSse();
+  }).catch(function(){
+    backfillDone=true;
+    startLogPoll();
+  });
+}
+function startSse(){
+  if(sseSource)return;
+  if(typeof EventSource==='undefined'){startLogPoll();return;}
+  sseSource=new EventSource('/api/logs/stream');
+  sseSource.onopen=function(){
+    sseConnected=true;
+    stopLogPoll();
+    set('log-st','SSE Live \u2022 '+clientLogBuf.length+' lines');
+  };
+  sseSource.onmessage=function(e){
+    if(!e.data)return;
+    _appendLogs(e.data+'\n');
+    _renderLogBuf();
+    set('log-st','SSE Live \u2022 '+clientLogBuf.length+' lines');
+  };
+  sseSource.onerror=function(){
+    sseConnected=false;
+    if(sseSource){sseSource.close();sseSource=null;}
+    set('log-st','SSE lost \u2014 falling back to polling');
+    startLogPoll();
+  };
+}
+function stopSse(){
+  if(sseSource){sseSource.close();sseSource=null;sseConnected=false;}
 }
 function clearLogBuf(){clientLogBuf=[];lastSeenLine='';document.getElementById('log-box').textContent='';}
 function downloadSavedLogs(){
@@ -559,11 +597,11 @@ function copyLogBuf(){
   var txt=clientLogBuf.join('\n');
   if(!txt){return;}
   if(navigator.clipboard&&navigator.clipboard.writeText){
-    navigator.clipboard.writeText(txt).then(function(){set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');},2000);});
+    navigator.clipboard.writeText(txt).then(function(){set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st',(sseConnected?'SSE Live':'Polling')+' \u2022 '+clientLogBuf.length+' lines buffered');},2000);});
   } else {
     var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';
     document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
-    set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st','Live \u2022 '+clientLogBuf.length+' lines buffered');},2000);
+    set('log-st','Copied! \u2022 '+clientLogBuf.length+' lines');setTimeout(function(){set('log-st',(sseConnected?'SSE Live':'Polling')+' \u2022 '+clientLogBuf.length+' lines buffered');},2000);
   }
 }
 document.getElementById('log-box').addEventListener('scroll',function(){

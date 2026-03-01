@@ -99,7 +99,7 @@ unsigned long lastSdCardRetry = 0;
 
 // Persistent log flush timing
 unsigned long lastLogFlushTime = 0;
-const unsigned long LOG_FLUSH_INTERVAL_MS = 5 * 1000;   // 5 seconds
+const unsigned long LOG_FLUSH_INTERVAL_MS = 30 * 1000;  // 30 seconds
 
 // Runtime debug mode: set from config DEBUG=true after config load.
 // Gates [res fh= ma= fd=] heap suffix on all log lines and verbose pre-flight output.
@@ -351,7 +351,7 @@ void setup() {
         // Without config, we have no WiFi and no Web UI. We must dump the reason
         // directly to the SD card so the user can read it on their PC.
         LOG_ERROR("FATAL ERROR: System halted due to config failure. Please check config.txt.");
-        Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt");
+        Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt", "Config load failure");
         
         sdManager.releaseControl();
         
@@ -375,11 +375,22 @@ void setup() {
     LOG_DEBUGF("WiFi SSID: %s", config.getWifiSSID().c_str());
     LOG_DEBUGF("Endpoint: %s", config.getEndpoint().c_str());
 
+    // Check if a previous boot left an emergency error log on the SD card
+    Logger::getInstance().checkPreviousBootError(sdManager.getFS());
+
     // Configure internal logging if enabled (debugging only)
     if (config.getSaveLogs()) {
         LOG_WARN("Enabling persistent logging - DEBUGGING ONLY");
-        LOG_WARN("Logs will be dumped every 10 seconds to internal flash");
+        LOG_WARN("Logs will be flushed every 30 seconds to internal flash");
         Logger::getInstance().enableLogSaving(true, &LittleFS);
+        // Flush immediately so boot logs (reset reason, Smart Wait, config load)
+        // are captured to NAND before upload activity overwrites the 8KB buffer.
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+    }
+
+    // Check if a previous reboot left a log on internal flash
+    if (LittleFS.exists("/last_reboot_log.txt")) {
+        LOG_WARN("Previous reboot log available on internal flash (/last_reboot_log.txt)");
     }
 
     // Release SD card back to CPAP machine
@@ -411,7 +422,7 @@ void setup() {
         // We re-take the SD card just to dump the log buffer.
         if (sdManager.takeControl()) {
             LOG_ERROR("FATAL ERROR: System halted due to WiFi connection failure.");
-            Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt");
+            Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt", "WiFi connection failure");
             sdManager.releaseControl();
         }
         
@@ -800,7 +811,7 @@ void handleReleasing() {
     // The fast-boot path (ESP_RST_SW) skips cold-boot delays.
     LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
          (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+    Logger::getInstance().dumpPreRebootLog();
     delay(200);
     esp_restart();
 }
@@ -897,6 +908,8 @@ void loop() {
     // Handle web server requests
     if (webServer) {
         webServer->handleClient();
+        // Push SSE log events to connected client (if any)
+        pushSseLogs();
         // Refresh status snapshot every 3 s — assembles JSON using snprintf into
         // g_webStatusBuf (stack only, zero heap allocation).
         static unsigned long lastStatusSnapMs = 0;
@@ -924,7 +937,7 @@ void loop() {
             vTaskDelete(uploadTaskHandle);
         }
         
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+        Logger::getInstance().dumpPreRebootLog();
         delay(300);
         esp_restart();
     }
@@ -956,7 +969,7 @@ void loop() {
         
         // Immediate reboot — state files deleted on next clean boot
         LOG("Rebooting for clean state reset...");
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+        Logger::getInstance().dumpPreRebootLog();
         delay(300);  // Brief pause for web response to send
         esp_restart();
     }
@@ -965,7 +978,7 @@ void loop() {
     if (g_softRebootFlag) {
         LOG("=== Soft Reboot Triggered via Web Interface ===");
         g_softRebootFlag = false;
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+        Logger::getInstance().dumpPreRebootLog();
         delay(300);
         esp_restart();
     }

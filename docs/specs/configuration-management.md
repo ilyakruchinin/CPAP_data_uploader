@@ -64,7 +64,7 @@ ENDPOINT = //192.168.1.100/cpap_backups
 - `WIFI_PWR_SAVING` - "none", "mid"/"modem" (MIN_MODEM), "max" (MAX_MODEM) (default: "mid")
 
 ### Debugging
-- `SAVE_LOGS` - Enable persistent internal logging (default: false)
+- `PERSISTENT_LOGS` - Enable persistent internal logging (default: false). Aliases: `SAVE_LOGS`, `LOG_TO_SD_CARD`
 
 ## Validation Rules
 - **Ranges**: Hours (0-23), minutes (1-60), seconds (10-3600)
