@@ -481,14 +481,15 @@ function saveAndReboot(){
 }
 
 // Client-side log buffer — persists across soft-reboots in browser memory
-var logAtBottom=true,clientLogBuf=[],lastSeenLine='',LOG_BUF_MAX=2000;
+var logAtBottom=true,clientLogBuf=[],lastSeenLine='',LOG_BUF_MAX=2000,newBootDetected=false;
 function _appendLogs(text){
   if(!text)return;
+  newBootDetected=false;
   var lines=text.split('\n');
-  // Detect reboot: scan ALL lines for the boot banner (not just line 0,
-  // because the server prepends a space byte before streaming the buffer).
+  // Detect reboot: find the LAST boot banner so that when /api/logs/full
+  // contains old syslog content with ancient banners, we use the most recent one.
   var bootIdx=-1;
-  for(var i=0;i<lines.length;i++){
+  for(var i=lines.length-1;i>=0;i--){
     if(lines[i].indexOf('=== CPAP Data Auto-Uploader ===')>=0){bootIdx=i;break;}
   }
   var newLines;
@@ -506,19 +507,42 @@ function _appendLogs(text){
     if(lastSeenPos>bootIdx){
       // Same boot continuing — treat as normal poll, append only new tail
       newLines=lines.slice(lastSeenPos+1);
+    } else if(clientLogBuf.length===0){
+      // Fresh start (initial page load or post-reboot buffer clear).
+      // Include ALL lines so full NAND history + pre-reboot context is shown.
+      var startFrom=0;
+      while(startFrom<lines.length&&!lines[startFrom].trim())startFrom++;
+      newLines=lines.slice(startFrom);
     } else {
-      // Genuinely new reboot — insert separator and start from boot banner
-      if(clientLogBuf.length>0)clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
-      newLines=lines.slice(bootIdx);
+      // Genuinely new reboot — insert separator.
+      // Search backwards from boot banner for the === BOOT separator
+      // (written by enableLogSaving on boot) to capture pre-reboot context
+      // like "Rebooting for clean state reset..." that's only in NAND syslog.
+      newBootDetected=true;
+      var ctxStart=bootIdx;
+      for(var j=bootIdx-1;j>=Math.max(0,bootIdx-60);j--){
+        if(lines[j].indexOf('=== BOOT ')>=0){ctxStart=Math.max(0,j-10);break;}
+      }
+      clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
+      newLines=lines.slice(ctxStart);
     }
   } else {
-    // Normal poll — find the last line we already buffered (search from end)
-    // and only append what comes after it.
+    // No boot banner in response. Two sub-cases:
+    // (a) Same boot, buffer hasn't wrapped — lastSeenLine IS found → normal dedup
+    // (b) Reboot happened, buffer wrapped, boot banner overwritten — lastSeenLine NOT found
     var startFrom=0;
+    var lastSeenFound=false;
     if(lastSeenLine){
       for(var i=lines.length-1;i>=0;i--){
-        if(lines[i]===lastSeenLine){startFrom=i+1;break;}
+        if(lines[i]===lastSeenLine){startFrom=i+1;lastSeenFound=true;break;}
       }
+    }
+    if(lastSeenLine&&!lastSeenFound){
+      // lastSeenLine not found and no boot banner — likely a reboot where the
+      // 12KB circular buffer wrapped (boot banner overwritten by later boot logs).
+      // Signal newBootDetected so fetchLogs triggers a /api/logs/full backfill
+      // which has the complete NAND history including pre-reboot context.
+      newBootDetected=true;
     }
     newLines=lines.slice(startFrom);
   }
@@ -540,12 +564,23 @@ function _renderLogBuf(){
   b.textContent=clientLogBuf.join('\n');
   if(logAtBottom)b.scrollTop=b.scrollHeight;
 }
-var sseSource=null,sseConnected=false,backfillDone=false;
+var sseSource=null,sseConnected=false,backfillDone=false,backfillRetries=0;
 function fetchLogs(){
   if(curTab!=='logs')return;
   fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
     _appendLogs(t);
     _renderLogBuf();
+    // If polling detected a new boot (boot banner found, or lastSeenLine vanished
+    // because buffer wrapped), re-fetch /api/logs/full to get NAND pre-reboot
+    // context (reboot reason, state reset trigger, early boot lines).
+    if(newBootDetected&&backfillDone){
+      backfillDone=false;
+      stopLogPoll();
+      // Clear buffer so backfill rebuilds from scratch with full NAND context
+      clientLogBuf=[];lastSeenLine='';
+      fetchBackfill();
+      return;
+    }
     set('log-st',(sseConnected?'SSE Live':'Polling')+' \u2022 '+clientLogBuf.length+' lines');
   }).catch(function(){set('log-st','Disconnected');});
 }
@@ -555,10 +590,21 @@ function fetchBackfill(){
     _appendLogs(t);
     _renderLogBuf();
     backfillDone=true;
+    backfillRetries=0;
     startSse();
   }).catch(function(){
-    backfillDone=true;
-    startLogPoll();
+    // Device might still be rebooting — retry with exponential backoff
+    backfillRetries++;
+    if(backfillRetries<6){
+      var delay=Math.min(3000*backfillRetries,15000);
+      set('log-st','Device offline \u2014 retry '+backfillRetries+'/5 in '+(delay/1000)+'s\u2026');
+      setTimeout(function(){if(curTab==='logs'){fetchBackfill();}},delay);
+    } else {
+      // Give up on backfill after 5 retries, fall back to polling
+      backfillDone=true;
+      backfillRetries=0;
+      startLogPoll();
+    }
   });
 }
 function startSse(){
