@@ -3,6 +3,8 @@
 #include <esp_task_wdt.h>
 #include <esp_bt.h>
 #include <esp_pm.h>
+#include <esp_sleep.h>
+#include <driver/gpio.h>
 #include <Preferences.h>
 #include <LittleFS.h>
 
@@ -75,6 +77,10 @@ TaskHandle_t uploadTaskHandle = nullptr;
 volatile unsigned long g_uploadHeartbeat = 0;
 const unsigned long UPLOAD_WATCHDOG_TIMEOUT_MS = 120000;  // 2 minutes
 
+// Power management lock — held in active states to prevent auto light-sleep.
+// Released in IDLE and COOLDOWN so the CPU can enter light-sleep between DTIM intervals.
+esp_pm_lock_handle_t g_pmLock = nullptr;
+
 struct UploadTaskParams {
     FileUploader* uploader;
     SDCardManager* sdManager;
@@ -115,6 +121,23 @@ extern volatile bool g_abortUploadFlag;
 // ============================================================================
 void transitionTo(UploadState newState) {
     LOGF("[FSM] %s -> %s", getStateName(currentState), getStateName(newState));
+    
+    // ── POWER: Manage PM lock for auto light-sleep ──
+    // Hold the lock in active states (CPU must stay awake for PCNT, SD I/O, network).
+    // Release in IDLE and COOLDOWN so auto light-sleep can engage between DTIM intervals.
+    if (g_pmLock) {
+        bool newStateIsLowPower = (newState == UploadState::IDLE || newState == UploadState::COOLDOWN);
+        bool oldStateIsLowPower = (currentState == UploadState::IDLE || currentState == UploadState::COOLDOWN);
+        
+        if (newStateIsLowPower && !oldStateIsLowPower) {
+            esp_pm_lock_release(g_pmLock);
+            LOG_DEBUG("[POWER] PM lock released — light-sleep enabled");
+        } else if (!newStateIsLowPower && oldStateIsLowPower) {
+            esp_pm_lock_acquire(g_pmLock);
+            LOG_DEBUG("[POWER] PM lock acquired — light-sleep inhibited");
+        }
+    }
+    
     currentState = newState;
     stateEnteredAt = millis();
 }
@@ -167,9 +190,15 @@ void setup() {
     setCpuFrequencyMhz(80);
     
     // ── POWER: Release Bluetooth memory ──
-    // Firmware is WiFi-only. Release BT controller memory (~30 KB DRAM).
-    // CONFIG_BT_ENABLED=n in sdkconfig prevents linking, this is belt-and-suspenders.
+    // Firmware is WiFi-only. Release BT controller memory (~28 KB DRAM).
+    // Note: CONFIG_BT_ENABLED=n in sdkconfig does NOT strip BT from the Arduino
+    // framework's precompiled libraries. This runtime call is our only effective
+    // mechanism — it frees the BTDM controller's reserved DRAM regions.
+    uint32_t btHeapBefore = ESP.getFreeHeap();
+    uint32_t btMaxAllocBefore = ESP.getMaxAllocHeap();
     esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+    uint32_t btHeapAfter = ESP.getFreeHeap();
+    uint32_t btMaxAllocAfter = ESP.getMaxAllocHeap();
     
     // Initialize serial port
     Serial.begin(115200);
@@ -184,6 +213,9 @@ void setup() {
     delay(1000);
     LOG("\n\n=== CPAP Data Auto-Uploader ===");
     LOGF("Firmware Version: %s", FIRMWARE_VERSION);
+    LOGF("BT memory release: free %u->%u (+%u), max_alloc %u->%u",
+         btHeapBefore, btHeapAfter, btHeapAfter - btHeapBefore,
+         btMaxAllocBefore, btMaxAllocAfter);
     LOGF("Build Info: %s", BUILD_INFO);
     LOGF("Build Time: %s", FIRMWARE_BUILD_TIME);
     
@@ -393,20 +425,53 @@ void setup() {
     wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
     LOG("WiFi power management settings applied");
     
-    // ── POWER: Configure Dynamic Frequency Scaling (DFS) ──
+    // ── POWER: Configure Dynamic Frequency Scaling (DFS) + Auto Light-Sleep ──
     // With CONFIG_PM_ENABLE=y in sdkconfig, the CPU can automatically scale
     // between min and max frequency when tasks are idle. The WiFi driver holds
     // a PM lock during active operations, ensuring full speed when needed.
+    //
+    // When CPU_SPEED_MHZ=80 (default), max==min==80 → DFS is effectively
+    // disabled, eliminating PLL relock transients that stress the power supply.
+    // Users on non-constrained hardware can set CPU_SPEED_MHZ=160 to re-enable DFS.
+    //
+    // Auto light-sleep allows the CPU to sleep between WiFi DTIM intervals,
+    // reducing idle current from ~20 mA to ~2-3 mA. A PM lock held in active
+    // FSM states prevents sleep during PCNT counting, SD I/O, and uploads.
     esp_pm_config_esp32_t pm_config = {
-        .max_freq_mhz = 160,   // Boost to 160 MHz for WiFi/TLS bursts
-        .min_freq_mhz = 80,    // Floor at 80 MHz (WiFi PHY minimum)
-        .light_sleep_enable = false  // Phase 3 — not yet enabled
+        .max_freq_mhz = targetCpuMhz,  // Respects CPU_SPEED_MHZ config (default 80)
+        .min_freq_mhz = 80,            // Floor at 80 MHz (WiFi PHY minimum)
+        .light_sleep_enable = true      // Auto light-sleep in IDLE/COOLDOWN states
     };
     esp_err_t pm_err = esp_pm_configure(&pm_config);
     if (pm_err == ESP_OK) {
-        LOG("Dynamic Frequency Scaling enabled (80-160 MHz)");
+        if (targetCpuMhz == 80) {
+            LOG("Power management: CPU locked at 80MHz (no DFS), auto light-sleep enabled");
+        } else {
+            LOGF("Power management: DFS enabled (80-%dMHz), auto light-sleep enabled", targetCpuMhz);
+        }
     } else {
-        LOGF("DFS configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
+        LOGF("PM configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
+    }
+    
+    // ── POWER: Configure GPIO wakeup for auto light-sleep ──
+    // GPIO 33 (CS_SENSE) is an RTC GPIO that detects CPAP SD card bus activity.
+    // When the CPU is in light-sleep, a CS_SENSE edge wakes it immediately.
+    gpio_wakeup_enable((gpio_num_t)CS_SENSE, GPIO_INTR_LOW_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
+    LOG_DEBUG("GPIO wakeup configured on CS_SENSE (GPIO 33)");
+    
+    // ── POWER: Create PM lock for active FSM states ──
+    // Acquired in LISTENING/ACQUIRING/UPLOADING/RELEASING/MONITORING/COMPLETE
+    // to prevent light-sleep while PCNT counting, SD I/O, or network I/O is active.
+    // Released in IDLE and COOLDOWN to allow light-sleep.
+    if (esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "fsm_active", &g_pmLock) == ESP_OK) {
+        // Start with lock acquired — initial state (LISTENING or IDLE) will
+        // release it via transitionTo() if entering a low-power state.
+        esp_pm_lock_acquire(g_pmLock);
+        LOG_DEBUG("PM lock created and acquired for active states");
+    } else {
+        LOG_WARN("Failed to create PM lock — light-sleep management unavailable");
+        g_pmLock = nullptr;
     }
 
     // Initialize uploader
@@ -926,7 +991,10 @@ void loop() {
 #endif
     
     // ── WiFi reconnection (non-blocking with 30 second retry interval) ──
-    if (!wifiManager.isConnected()) {
+    // GUARD: Do NOT attempt reconnection while upload task is running on Core 0.
+    // The upload task manages its own WiFi recovery via tryCoordinatedWifiCycle().
+    // Concurrent reconnection from both cores corrupts the lwIP state machine.
+    if (!wifiManager.isConnected() && !uploadTaskRunning) {
         unsigned long currentTime = millis();
         if (currentTime - lastWifiReconnectAttempt >= 30000) {
             LOG_WARN("WiFi disconnected, attempting to reconnect...");
