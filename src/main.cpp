@@ -507,24 +507,15 @@ void setup() {
         g_pmLock = nullptr;
     }
 
-    // Initialize uploader
+    // Initialize uploader (no SD card needed — state is on LittleFS)
     uploader = new FileUploader(&config, &wifiManager);
-    
-    // Take control of SD card to initialize uploader components
     LOG("Initializing uploader...");
-    if (sdManager.takeControl()) {
-        if (!uploader->begin(sdManager.getFS())) {
-            LOG_ERROR("Failed to initialize uploader");
-            sdManager.releaseControl();
-            return;
-        }
-        sdManager.releaseControl();
-        g_heapRecoveryBoot = false;  // consumed — only skip delays on this one boot
-        LOG("Uploader initialized successfully");
-    } else {
-        LOG_ERROR("Failed to take SD card control for uploader initialization");
+    if (!uploader->begin()) {
+        LOG_ERROR("Failed to initialize uploader");
         return;
     }
+    g_heapRecoveryBoot = false;  // consumed — only skip delays on this one boot
+    LOG("Uploader initialized successfully");
     
 #ifdef ENABLE_OTA_UPDATES
     // Initialize OTA manager
@@ -666,43 +657,52 @@ void handleListening() {
 }
 
 void handleAcquiring() {
-    // Pre-warm TLS BEFORE SD mount so mbedTLS buffers are allocated while
-    // max_alloc is at its highest (~110KB).  SD_MMC DMA buffers (~24KB) will
-    // then be placed elsewhere, avoiding fragmentation of the TLS region.
-    //
-    // IMPORTANT: Only pre-warm when this session's backend is CLOUD.
-    // When backend is SMB, the active TLS socket causes errno:9 (EBADF) on
-    // every libsmb2 connect attempt — the lwIP socket layer conflicts between
-    // the TLS and SMB TCP connections on ESP32.  Since each session runs only
-    // one backend, we never need both sockets simultaneously.
+    // The upload task now owns the full lifecycle:
+    //   TLS pre-warm → SD mount → phased upload → SD release
+    // This ensures task stack is allocated at high max_alloc (~73KB),
+    // TLS pre-warm happens before SD mount fragments heap, and both
+    // backends run sequentially without socket conflicts.
+    transitionTo(UploadState::UPLOADING);
+}
+
+// FreeRTOS task function — runs on Core 0 so main loop (Core 1) stays responsive
+// Owns the full session lifecycle: TLS pre-warm → SD mount → upload → SD release
+void uploadTaskFunction(void* pvParameters) {
+    UploadTaskParams* params = (UploadTaskParams*)pvParameters;
+    
+    g_uploadHeartbeat = millis();
+    
+    // Phase 0: Pre-warm TLS BEFORE SD mount so mbedTLS buffers are allocated
+    // while max_alloc is at its highest (~57KB after 12KB task stack).
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (uploader && config.hasCloudEndpoint() &&
-        uploader->getActiveBackend() == UploadBackend::CLOUD) {
-        SleepHQUploader* cloud = uploader->getCloudUploader();
+    if (params->uploader->hasCloudBackend()) {
+        SleepHQUploader* cloud = params->uploader->getCloudUploader();
         if (cloud) {
             cloud->preWarmTLS();
         }
     }
 #endif
 
-    if (sdManager.takeControl()) {
-        LOG("[FSM] SD card control acquired");
-        transitionTo(UploadState::UPLOADING);
-    } else {
-        LOG_WARN("[FSM] Failed to acquire SD card, releasing to cooldown");
-        transitionTo(UploadState::RELEASING);
+    // Phase 0b: Mount SD card
+    if (!params->sdManager->takeControl()) {
+        LOG_ERROR("[Upload] Failed to acquire SD card control");
+        uploadTaskResult = UploadResult::ERROR;
+        uploadTaskComplete = true;
+        delete params;
+        vTaskDelete(NULL);
+        return;
     }
-}
+    LOG("[FSM] SD card control acquired");
 
-// FreeRTOS task function — runs on Core 0 so main loop (Core 1) stays responsive
-void uploadTaskFunction(void* pvParameters) {
-    UploadTaskParams* params = (UploadTaskParams*)pvParameters;
-    
-    g_uploadHeartbeat = millis();
-    
-    UploadResult result = params->uploader->uploadWithExclusiveAccess(
+    // Phase 1+2: Run phased upload (CLOUD first, then SMB)
+    UploadResult result = params->uploader->runFullSession(
         params->sdManager, params->maxMinutes, params->filter);
     
+    // Phase 3: Release SD card
+    if (params->sdManager->hasControl()) {
+        params->sdManager->releaseControl();
+    }
+
     uploadTaskResult = result;
     uploadTaskComplete = true;
     
@@ -758,11 +758,12 @@ void handleUploading() {
         esp_task_wdt_delete(xTaskGetIdleTaskHandleForCPU(0));
         
         // Pin to Core 0 (protocol core) — keeps Core 1 free for main loop + web server
-        // Stack: 16KB — TLS buffers are on heap, task only needs stack for locals
+        // Stack: 12KB — TLS buffers are on heap, task only needs stack for locals.
+        // Created BEFORE TLS pre-warm and SD mount so max_alloc is at its highest.
         BaseType_t rc = xTaskCreatePinnedToCore(
             uploadTaskFunction,  // Task function
             "upload",            // Name
-            16384,               // Stack size (16KB for task locals + SD I/O)
+            12288,               // Stack size (12KB — verified via HWM logging)
             params,              // Parameters
             1,                   // Priority (same as loop task)
             &uploadTaskHandle,   // Handle

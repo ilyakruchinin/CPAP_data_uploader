@@ -15,7 +15,9 @@ components/
 *.elf
 *.bin
 dependencies.lock
-sdkconfig*
+sdkconfig
+sdkconfig.old
+!sdkconfig.defaults
 compile_commands.json
 
 # Auto-generated files

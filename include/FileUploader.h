@@ -29,16 +29,7 @@ class CpapWebServer;
 #endif
 
 // Which upload backend is active this session
-enum class UploadBackend { NONE, SMB, CLOUD };
-
-// Lightweight per-backend session summary (written to LittleFS at session start and end)
-struct BackendSummary {
-    uint32_t sessionStartTs;  // Unix ts recorded at session start
-    int      foldersTotal;
-    int      foldersDone;
-    int      foldersEmpty;
-    bool     valid;
-};
+enum class UploadBackend { NONE, SMB, CLOUD, DUAL };
 
 // Result of an exclusive-access upload session
 enum class UploadResult {
@@ -62,7 +53,8 @@ private:
     UploadStateManager* cloudStateManager;  // tracks Cloud-only uploads
     ScheduleManager* scheduleManager;
     WiFiManager* wifiManager;
-    UploadBackend activeBackend;
+    // Tracks which phase is currently running (for GUI status)
+    UploadBackend currentPhase;
 
 #ifdef ENABLE_WEBSERVER
     CpapWebServer* webServer;
@@ -103,24 +95,10 @@ private:
     bool cloudImportFailed;
     int  cloudDatalogFilesUploaded;  // DATALOG files uploaded this cloud pass; 0 = skip finalize
 
-    // Backend cycling helpers
-    UploadBackend selectActiveBackend(fs::FS& sd) const;
-    BackendSummary readBackendSummary(fs::FS& sd, UploadBackend backend) const;
-    void writeBackendSummaryStart(fs::FS& sd, UploadBackend backend, uint32_t sessionTs);
-    void writeBackendSummaryFull(fs::FS& sd, UploadBackend backend, uint32_t sessionTs,
-                                 int done, int total, int empty);
-    static const char* getBackendSummaryPath(UploadBackend backend);
-
-    // Return the active session's state manager
-    UploadStateManager* activeStateManager() const {
-        if (activeBackend == UploadBackend::SMB)   return smbStateManager;
-        if (activeBackend == UploadBackend::CLOUD) return cloudStateManager;
-        if (smbStateManager)   return smbStateManager;
-        return cloudStateManager;
-    }
-
-    UploadStateManager* getCloudStateManager() {
-        return cloudStateManager;
+    // Return the "primary" state manager for web UI (prefers cloud if both exist)
+    UploadStateManager* primaryStateManager() const {
+        if (cloudStateManager) return cloudStateManager;
+        return smbStateManager;
     }
 
 public:
@@ -131,20 +109,25 @@ public:
     FileUploader(Config* cfg, WiFiManager* wifi);
     ~FileUploader();
 
-    bool begin(fs::FS &sd);
+    bool begin();
 
-    // FSM-driven exclusive access upload
-    UploadResult uploadWithExclusiveAccess(class SDCardManager* sdManager, int maxMinutes,
-                                           DataFilter filter);
+    // Full session: TLS pre-warm → SD mount → phased upload → SD release
+    UploadResult runFullSession(class SDCardManager* sdManager, int maxMinutes,
+                                DataFilter filter);
 
     // Getters for internal components (for web interface access)
-    UploadStateManager* getStateManager()    { return activeStateManager(); }
+    UploadStateManager* getStateManager()    { return primaryStateManager(); }
     UploadStateManager* getSmbStateManager() { return smbStateManager; }
+    UploadStateManager* getCloudStateManager() { return cloudStateManager; }
     ScheduleManager* getScheduleManager() { return scheduleManager; }
-    UploadBackend getActiveBackend() const { return activeBackend; }
+    UploadBackend getCurrentPhase() const { return currentPhase; }
+    bool hasCloudBackend() const { return cloudStateManager != nullptr; }
+    bool hasSmbBackend()   const { return smbStateManager   != nullptr; }
+    bool hasBothBackends() const { return hasCloudBackend() && hasSmbBackend(); }
     bool hasIncompleteFolders() {
-        UploadStateManager* sm = activeStateManager();
-        return sm && sm->getIncompleteFoldersCount() > 0;
+        bool smbInc   = smbStateManager   && smbStateManager->getIncompleteFoldersCount() > 0;
+        bool cloudInc = cloudStateManager && cloudStateManager->getIncompleteFoldersCount() > 0;
+        return smbInc || cloudInc;
     }
 
 #ifdef ENABLE_WEBSERVER

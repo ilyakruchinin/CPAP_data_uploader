@@ -370,7 +370,7 @@ function renderStatus(d){
   set('d-ep',cfg.endpoint_type||d.endpoint_type||'—');
   set('d-up',fmtUp(d.uptime||0));
   var ab=d.active_backend||'NONE';
-  var abColor=ab==='SMB'?'#66c0f4':ab==='CLOUD'?'#aa66ff':'#8f98a0';
+  var abColor=ab==='SMB'?'#66c0f4':ab==='CLOUD'?'#aa66ff':ab==='DUAL'?'#44cc88':'#8f98a0';
   var abEl=document.getElementById('d-ab-name');abEl.textContent=ab;abEl.style.color=abColor;
   var done=d.folders_done||0,total=d.folders_total||0,pend=d.folders_pending||0;
   var pct=total>0?Math.round(done*100/total):0;

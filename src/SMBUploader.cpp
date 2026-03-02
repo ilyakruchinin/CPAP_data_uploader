@@ -290,6 +290,15 @@ bool SMBUploader::allocateBuffer(size_t size) {
     return true;
 }
 
+void SMBUploader::freeBuffer() {
+    if (uploadBuffer) {
+        free(uploadBuffer);
+        uploadBuffer = nullptr;
+        uploadBufferSize = 0;
+        LOG("[SMB] Upload buffer freed");
+    }
+}
+
 bool SMBUploader::createDirectory(const String& path) {
     if (!connected) {
         LOG("[SMB] ERROR: Not connected - cannot create directory");

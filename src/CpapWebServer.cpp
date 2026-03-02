@@ -671,20 +671,17 @@ void CpapWebServer::updateStatusSnapshot() {
         nextUp = scheduleManager->getSecondsUntilNextUpload();
         timeSynced = scheduleManager->isTimeSynced();
     }
-    // Live per-file progress from the upload task
+    // Live per-file progress from the upload task — check both session statuses
+    // since the phased orchestrator runs CLOUD then SMB within one session.
     char liveFolder[33] = "";
     int  liveUp = 0, liveTotal = 0; bool liveActive = false;
-    if (g_activeBackendStatus.valid &&
-        strncmp(g_activeBackendStatus.name, "SMB", 3) == 0 &&
-        g_smbSessionStatus.uploadActive) {
-        strncpy(liveFolder, (const char*)g_smbSessionStatus.currentFolder, sizeof(liveFolder) - 1);
-        liveUp = g_smbSessionStatus.filesUploaded; liveTotal = g_smbSessionStatus.filesTotal;
-        liveActive = true;
-    } else if (g_activeBackendStatus.valid &&
-               strncmp(g_activeBackendStatus.name, "CLOUD", 5) == 0 &&
-               g_cloudSessionStatus.uploadActive) {
+    if (g_cloudSessionStatus.uploadActive) {
         strncpy(liveFolder, (const char*)g_cloudSessionStatus.currentFolder, sizeof(liveFolder) - 1);
         liveUp = g_cloudSessionStatus.filesUploaded; liveTotal = g_cloudSessionStatus.filesTotal;
+        liveActive = true;
+    } else if (g_smbSessionStatus.uploadActive) {
+        strncpy(liveFolder, (const char*)g_smbSessionStatus.currentFolder, sizeof(liveFolder) - 1);
+        liveUp = g_smbSessionStatus.filesUploaded; liveTotal = g_smbSessionStatus.filesTotal;
         liveActive = true;
     }
 

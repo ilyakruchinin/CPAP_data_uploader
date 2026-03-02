@@ -141,6 +141,12 @@ public:
     bool allocateBuffer(size_t size);
     
     /**
+     * Free the upload buffer (releases heap for other phases)
+     * Safe to call even if no buffer is allocated.
+     */
+    void freeBuffer();
+    
+    /**
      * Scan remote directory and count files (for delta scan functionality)
      * Only counts files, not subdirectories
      * 
