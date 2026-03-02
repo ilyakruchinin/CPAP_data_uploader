@@ -666,6 +666,18 @@ void handleListening() {
 }
 
 void handleAcquiring() {
+    // Pre-warm TLS BEFORE SD mount so mbedTLS buffers are allocated while
+    // max_alloc is at its highest (~110KB).  SD_MMC DMA buffers (~24KB) will
+    // then be placed elsewhere, avoiding fragmentation of the TLS region.
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (uploader && config.hasCloudEndpoint()) {
+        SleepHQUploader* cloud = uploader->getCloudUploader();
+        if (cloud) {
+            cloud->preWarmTLS();
+        }
+    }
+#endif
+
     if (sdManager.takeControl()) {
         LOG("[FSM] SD card control acquired");
         transitionTo(UploadState::UPLOADING);
