@@ -118,7 +118,7 @@ unsigned long lastSdCardRetry = 0;
 
 // Persistent log flush timing
 unsigned long lastLogFlushTime = 0;
-const unsigned long LOG_FLUSH_INTERVAL_MS = 30 * 1000;  // 30 seconds
+const unsigned long LOG_FLUSH_INTERVAL_MS = 10 * 1000;  // 10 seconds
 
 // Runtime debug mode: set from config DEBUG=true after config load.
 // Gates [res fh= ma= fd=] heap suffix on all log lines and verbose pre-flight output.
@@ -408,20 +408,12 @@ void setup() {
     // Check if a previous boot left an emergency error log on the SD card
     Logger::getInstance().checkPreviousBootError(sdManager.getFS());
 
-    // Configure internal logging if enabled (debugging only)
-    if (config.getSaveLogs()) {
-        LOG_WARN("Enabling persistent logging - DEBUGGING ONLY");
-        LOG_WARN("Logs will be flushed every 30 seconds to internal flash");
-        Logger::getInstance().enableLogSaving(true, &LittleFS);
-        // Flush immediately so boot logs (reset reason, Smart Wait, config load)
-        // are captured to NAND before upload activity overwrites the 8KB buffer.
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
-    }
-
-    // Check if a previous reboot left a log on internal flash
-    if (LittleFS.exists("/last_reboot_log.txt")) {
-        LOG_WARN("Previous reboot log available on internal flash (/last_reboot_log.txt)");
-    }
+    // Always enable persistent logging with multi-file rotation (syslog.0-3.txt)
+    // First call also migrates legacy log files (syslog.A/B, last_reboot_log, etc.)
+    Logger::getInstance().enableLogSaving(true, &LittleFS);
+    // Flush immediately so boot logs (reset reason, Smart Wait, config load)
+    // are captured to NAND before upload activity overwrites the 8KB buffer.
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
 
     // Release SD card back to CPAP machine
     sdManager.releaseControl();
@@ -857,8 +849,7 @@ void handleReleasing() {
     LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
          (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
     setRebootReason("Heap recovery after upload session");
-    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
-    Logger::getInstance().dumpPreRebootLog();
+    Logger::getInstance().flushBeforeReboot();
     delay(200);
     esp_restart();
 }
@@ -932,14 +923,12 @@ void handleMonitoring() {
 void loop() {
     // ── Always-on tasks ──
     
-    // Periodic persisted-log flush (every 5 seconds when enabled)
-    // Runs unconditionally — LittleFS is independent of SD_MMC / upload task
-    if (config.getSaveLogs()) {
+    // Periodic persisted-log flush (every 10 seconds, always-on)
+    // Uses multi-file rotation on LittleFS — independent of SD_MMC / upload task
+    {
         unsigned long currentTime = millis();
         if (currentTime - lastLogFlushTime >= LOG_FLUSH_INTERVAL_MS) {
-            if (Logger::getInstance().dumpSavedLogsPeriodic(&sdManager)) {
-                LOG_DEBUG("Periodic log flush completed");
-            }
+            Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
             lastLogFlushTime = currentTime;
         }
     }
@@ -985,8 +974,7 @@ void loop() {
         }
         
         setRebootReason("Upload task hung (software watchdog, >2 min no heartbeat)");
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
-        Logger::getInstance().dumpPreRebootLog();
+        Logger::getInstance().flushBeforeReboot();
         delay(300);
         esp_restart();
     }
@@ -1019,8 +1007,7 @@ void loop() {
         // Immediate reboot — state files deleted on next clean boot
         LOG("Rebooting for clean state reset...");
         setRebootReason("State reset requested via Web UI");
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
-        Logger::getInstance().dumpPreRebootLog();
+        Logger::getInstance().flushBeforeReboot();
         delay(300);  // Brief pause for web response to send
         esp_restart();
     }
@@ -1030,8 +1017,7 @@ void loop() {
         LOG("=== Soft Reboot Triggered via Web Interface ===");
         g_softRebootFlag = false;
         setRebootReason("Soft reboot requested via Web UI");
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
-        Logger::getInstance().dumpPreRebootLog();
+        Logger::getInstance().flushBeforeReboot();
         delay(300);
         esp_restart();
     }

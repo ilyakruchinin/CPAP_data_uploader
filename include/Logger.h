@@ -119,34 +119,44 @@ public:
      */
     size_t printLogsTail(Print& output, size_t maxBytes);
 
+    // ── Persistent log rotation constants ──
+    static constexpr int    SYSLOG_MAX_FILES = 4;       // syslog.0.txt .. syslog.3.txt
+    static constexpr size_t SYSLOG_MAX_FILE_SIZE = 32768; // 32 KB per file
+    // Total NAND budget: 4 × 32 KB = 128 KB
+
     /**
-     * Enable or disable persistent log saving.
-     * 
-     * Logs are saved to the provided filesystem (LittleFS in production) and
-     * should only be enabled for troubleshooting.
-     * 
-     * When enabled, logs are flushed periodically (every 10 seconds)
-     * by calling dumpSavedLogsPeriodic() from the main loop.
-     * 
+     * Enable persistent log saving with multi-file rotation.
+     * Should be called early in setup() with &LittleFS.
+     * Writes a boot separator and migrates legacy log files on first call.
+     *
      * @param enable True to enable log saving, false to disable
      * @param logFS Pointer to filesystem used for persisted logs (required when enabling)
      */
     void enableLogSaving(bool enable, fs::FS* logFS = nullptr);
     
     /**
-     * Periodic persisted-log flush (call from main loop every 10 seconds).
-     * Only flushes if there are new logs since last dump.
-     * 
+     * Periodic persisted-log flush — call from main loop every ~10 seconds.
+     * Appends new circular-buffer content to syslog.0.txt.
+     * Rotates files when syslog.0.txt exceeds SYSLOG_MAX_FILE_SIZE.
+     *
      * @param sdManager Unused compatibility parameter
      * @return true if logs were flushed, false if skipped or failed
      */
     bool dumpSavedLogsPeriodic(class SDCardManager* sdManager);
 
     /**
-     * Save current logs to persistent storage for critical failures.
-     * 
-     * @param reason Description of why logs are being saved (e.g., "wifi_connection_failed")
-     * @return true if logs were successfully saved, false otherwise
+     * Stream all saved log files (oldest first) to a Print destination.
+     * Used by web endpoints to serve complete log history.
+     * Streams syslog.{N-1} → syslog.0 in chronological order.
+     *
+     * @param output The Print destination to write logs to
+     * @return Number of bytes written
+     */
+    size_t streamSavedLogs(Print& output);
+
+    /**
+     * Legacy compatibility — flushes to syslog rotation.
+     * @param reason Unused (kept for API compatibility)
      */
     bool dumpSavedLogs(const String& reason);
 
@@ -164,12 +174,11 @@ public:
     bool dumpToSD(fs::FS& fs, const char* filename, const char* reason = "Unknown");
 
     /**
-     * Unconditionally flush the circular buffer to /last_reboot_log.txt on LittleFS.
-     * Called before every esp_restart() regardless of PERSISTENT_LOGS setting.
-     * Uses stack chunk buffer — zero heap allocation.
+     * Flush all pending circular-buffer content to NAND before reboot.
+     * Simply calls dumpSavedLogsPeriodic() — no separate file.
      * @return true if successful
      */
-    bool dumpPreRebootLog();
+    bool flushBeforeReboot();
 
     /**
      * Check if /uploader_error.txt exists on the given filesystem.

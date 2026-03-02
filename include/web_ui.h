@@ -61,8 +61,8 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bt-s{color:#66c0f4;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bt-c{color:#aa66ff;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bd-i{font-size:.79em;color:#8f98a0;margin-top:4px;min-height:1.1em;padding-left:2px}
-.hdr{display:flex;align-items:center;gap:12px;margin-bottom:2px}
-.hdr svg{height:42px;width:auto;flex-shrink:0}
+.hdr{margin-bottom:2px}
+.hdr svg{height:48px;width:auto;display:block}
 #reboot-overlay{display:none;background:#1a2a1a;border:1px solid #2f8f57;border-radius:10px;padding:16px 20px;margin-bottom:14px;text-align:center;animation:rbPulse 2.5s ease-in-out infinite}
 #reboot-overlay h3{color:#44ff44;font-size:1em;margin-bottom:6px}
 #reboot-overlay p{color:#a0c0b0;font-size:.84em;line-height:1.5}
@@ -73,9 +73,9 @@ nav button:hover:not(.act){background:#3a5a7e}
 </style></head><body>
 <div class=wrap>
 <div class=hdr>
-<svg viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1a6b8a"/><stop offset="100%" stop-color="#0d4a6b"/></linearGradient><linearGradient id="wg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2dd4bf"/><stop offset="50%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#818cf8"/></linearGradient><linearGradient id="ag" x1="0%" y1="100%" x2="0%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2dd4bf"/></linearGradient></defs><circle cx="70" cy="70" r="66" fill="none" stroke="url(#wg)" stroke-width="1.5" opacity=".4"/><circle cx="70" cy="70" r="62" fill="url(#cg)"/><circle cx="70" cy="70" r="62" fill="none" stroke="url(#wg)" stroke-width="1" opacity=".6"/><g transform="translate(44,40)"><path d="M7,0 L29,0 L36,7 L36,34 Q36,36 34,36 L2,36 Q0,36 0,34 L0,2 Q0,0 2,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width="1.2" opacity=".9"/><rect x="6" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity=".85"/><rect x="12" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity=".85"/><rect x="18" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity=".85"/><rect x="24" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity=".85"/></g><g transform="translate(86,58)"><line x1="0" y1="22" x2="0" y2="6" stroke="url(#ag)" stroke-width="3" stroke-linecap="round"/><polyline points="-6,10 0,2 6,10" fill="none" stroke="url(#ag)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="-7" y1="25" x2="7" y2="25" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" opacity=".7"/></g><g transform="translate(70,98)"><path d="M-28,0 C-24,-2 -22,-2 -18,0 C-14,2 -12,2 -8,0 C-4,-10 -2,-10 2,-4 C4,-1 5,8 8,8 C11,8 12,1 15,-4 C18,-10 20,-10 24,-4 C26,0 28,0 28,0" fill="none" stroke="url(#wg)" stroke-width="2.2" stroke-linecap="round" opacity=".85"/></g><g transform="translate(70,26)" opacity=".7"><path d="M-10,10 Q0,-2 10,10" fill="none" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/><path d="M-6,14 Q0,8 6,14" fill="none" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/><circle cx="0" cy="17" r="2" fill="#38bdf8"/></g></svg>
-<div><h1>CPAP Data Uploader</h1><p class=sub id=sub>Connecting...</p></div>
+<svg viewBox="0 0 420 50" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',system-ui,-apple-system,sans-serif"><defs><linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1a6b8a"/><stop offset="100%" stop-color="#0d4a6b"/></linearGradient><linearGradient id="wg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2dd4bf"/><stop offset="50%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#818cf8"/></linearGradient><linearGradient id="ag" x1="0%" y1="100%" x2="0%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2dd4bf"/></linearGradient></defs><circle cx="25" cy="25" r="23.5" fill="none" stroke="url(#wg)" stroke-width="1" opacity=".4"/><circle cx="25" cy="25" r="22" fill="url(#cg)"/><circle cx="25" cy="25" r="22" fill="none" stroke="url(#wg)" stroke-width=".7" opacity=".6"/><g transform="translate(15,15)"><path d="M2.5,0 L10,0 L13,3 L13,12.5 Q13,13 12,13 L1,13 Q0,13 0,12 L0,1 Q0,0 1,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width=".8" opacity=".9"/><rect x="2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="4.2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="6.4" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="8.6" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/></g><g transform="translate(33.5,21.5)"><line x1="0" y1="8" x2="0" y2="2" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round"/><polyline points="-2.5,4 0,.5 2.5,4" fill="none" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="-3" y1="9.5" x2="3" y2="9.5" stroke="#38bdf8" stroke-width="1.2" stroke-linecap="round" opacity=".7"/></g><g transform="translate(25,37)"><path d="M-10,0 C-8.5,-.8 -8,-.8 -6.5,0 C-5,.8 -4.5,.8 -3,0 C-1.5,-3.5 -.8,-3.5 .7,-1.5 C1.5,-.3 1.8,3 3,3 C4,3 4.3,.3 5.5,-1.5 C6.5,-3.5 7.2,-3.5 8.5,-1.5 C9.5,0 10,0 10,0" fill="none" stroke="url(#wg)" stroke-width="1" stroke-linecap="round" opacity=".85"/></g><g transform="translate(25,11)" opacity=".7"><path d="M-3.5,3.5 Q0,-.8 3.5,3.5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><path d="M-2,5 Q0,2.8 2,5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><circle cx="0" cy="6" r=".8" fill="#38bdf8"/></g><text x="56" y="22" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">CPAP<tspan fill="url(#wg)"> Data</tspan></text><text x="56" y="40" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">Uploader</text><rect x="56" y="44" width="140" height="1.5" rx=".75" fill="url(#wg)" opacity=".5"/></svg>
 </div>
+<p class=sub id=sub>Connecting...</p>
 <div id=reboot-overlay><h3>&#8635; Device is rebooting&hellip;</h3><p>This is normal and expected. The system reboots periodically to maintain stability.<br>It will be back online in a few seconds. Please wait.</p></div>
 <nav>
 <button id=t-dash onclick="tab('dash')" class=act>Dashboard</button>
@@ -92,7 +92,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=card><h2>Upload Engine</h2>
 <div class=row><span class=k>State</span><span id=d-st class=v></span></div>
 <div class=row><span class=k>In state</span><span id=d-ins class=v></span></div>
-<div class=row><span class=k>Mode</span><span id=d-mode class=v></span></div>
+<div class=row><span class=k>Upload mode</span><span id=d-mode class=v></span></div>
 <div class=row><span class=k>Time synced</span><span id=d-tsync class=v></span></div>
 <div class=row><span class=k>Upload window</span><span id=d-win class=v></span></div>
 <div class=row><span class=k>Inactivity threshold</span><span id=d-inact class=v></span></div>
@@ -111,6 +111,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=row><span class=k>Uptime</span><span id=d-up class=v></span></div>
 </div>
 </div>
+<div id=d-mode-help style="background:#16213e;border:1px solid #2a475e;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.82em;color:#8f98a0;line-height:1.5"></div>
 <div class=cards>
 <div class=card style="grid-column:1/-1"><h2>Upload Progress</h2>
 <div class=be>
@@ -140,7 +141,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
 <h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
 <div class=log-btns style="display:flex;gap:6px">
-<button class="btn bs" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Download persisted log files from device flash">&#11015; Download Saved Logs</button>
+<button class="btn bs" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Download all logs (saved + current) for troubleshooting">&#11015; Download All Logs</button>
 <button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
 <button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
 </div>
@@ -329,13 +330,31 @@ function renderStatus(d){
   currentFsmState=d.state||'';
   seti('d-st',badgeHtml(currentFsmState||'?'));
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
-  set('d-mode',cfg.upload_mode||'—');
+  var mode=(cfg.upload_mode||'—').toUpperCase();
+  set('d-mode',mode);
   set('d-tsync',d.time_synced?'Yes':'No');
-  var ws=(cfg.upload_start_hour!=null&&cfg.upload_end_hour!=null)?cfg.upload_start_hour+':00 - '+cfg.upload_end_hour+':00':'—';
-  set('d-win',ws);
+  var sh=cfg.upload_start_hour,eh=cfg.upload_end_hour;
+  var ws=(sh!=null&&eh!=null)?sh+':00 - '+eh+':00':'—';
+  var winAll=(sh!=null&&eh!=null&&sh===eh);
+  set('d-win',winAll?'24/7 (always open)':ws);
   set('d-inact',cfg.inactivity_seconds!=null?cfg.inactivity_seconds+'s':'—');
   set('d-excl',cfg.exclusive_access_minutes!=null?cfg.exclusive_access_minutes+' min':'—');
   set('d-cool',cfg.cooldown_minutes!=null?cfg.cooldown_minutes+' min':'—');
+  // Generate mode explanation helper
+  var help='';
+  if(mode==='SMART'){
+    help='\u2139\ufe0f <b>Smart mode</b>: Uploads the <b>2 most recent days</b> of CPAP data whenever the machine is idle'
+      +(winAll?' (anytime \u2014 24/7 window).':' during the upload window ('+ws+').')
+      +' After uploading, the device waits '+(cfg.cooldown_minutes||10)+' min before checking again.'
+      +' Only recent folders are re-scanned each cycle \u2014 older data uploaded previously is not re-sent.';
+  }else if(mode==='SCHEDULED'){
+    help='\u2139\ufe0f <b>Scheduled mode</b>: Uploads data <b>only</b> during the configured window'
+      +(winAll?' (24/7 \u2014 always active).':' ('+ws+').')
+      +' Outside this window the SD card is released to the CPAP machine.'
+      +' Each cycle uploads up to '+(cfg.max_days||60)+' days of data.';
+  }
+  var helpEl=document.getElementById('d-mode-help');
+  if(helpEl){helpEl.style.display=help?'':'none';helpEl.innerHTML=help;}
   var nx=d.next_upload;
   set('d-next',nx<0?'—':nx===0?'Now':fmtUp(nx));
   set('d-time',d.time||'—');
