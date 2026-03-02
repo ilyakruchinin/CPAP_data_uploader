@@ -53,7 +53,7 @@ private:
     void handleApiConfig();       // JSON Config API
     void handleLogs();            // HTML Logs Viewer (AJAX)
     void handleApiLogs();         // Raw Logs API (in-memory buffer)
-    void handleApiLogsSaved();    // Saved log files from LittleFS (syslog.A/B.txt)
+    void handleApiLogsSaved();    // Download all logs (NAND rotation + circular buffer)
     void handleApiLogsFull();     // NAND + circular buffer backfill
     void handleApiLogsStream();   // SSE live log stream setup
     void handleNotFound();

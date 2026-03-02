@@ -499,10 +499,9 @@ size_t Logger::printLogsTail(Print& output, size_t maxBytes) {
     return bytesWritten;
 }
 
-// Enable or disable persistent log saving (debugging only)
+// Enable or disable persistent log saving with multi-file rotation
 void Logger::enableLogSaving(bool enable, fs::FS* logFS) {
     if (enable && logFS == nullptr) {
-        // Cannot enable without valid filesystem
         return;
     }
     
@@ -513,58 +512,51 @@ void Logger::enableLogSaving(bool enable, fs::FS* logFS) {
         // Reset dump tracking when enabling
         lastDumpedBytes = 0;
         
-        // Write a boot separator directly to the NAND log file so that
-        // boot boundaries are clearly visible in downloaded logs.
-        File sepFile = logFS->open("/syslog.A.txt", FILE_APPEND);
+        // One-time migration: remove legacy log files from old 2-file scheme
+        logFS->remove("/syslog.A.txt");
+        logFS->remove("/syslog.B.txt");
+        logFS->remove("/last_reboot_log.txt");
+        logFS->remove("/crash_log.txt");
+        logFS->remove("/debug_log.txt");
+        
+        // Write a boot separator to syslog.0.txt so boot boundaries are visible
+        File sepFile = logFS->open("/syslog.0.txt", FILE_APPEND);
         if (sepFile) {
-            char sep[96];
+            char sep[128];
             int n = snprintf(sep, sizeof(sep),
-                             "\n\n=== BOOT %s (heap %u/%u) ===\n",
+                             "\n=== BOOT %s (heap %u/%u) ===\n",
                              FIRMWARE_VERSION,
                              (unsigned)ESP.getFreeHeap(),
                              (unsigned)ESP.getMaxAllocHeap());
             if (n > 0) sepFile.write((const uint8_t*)sep, n);
             sepFile.close();
         }
-        
-        // Log a warning message about debugging use
-        String warningMsg = getTimestamp() + "[WARN] Persistent log saving enabled - DEBUGGING ONLY - Logs will be flushed periodically\n";
-        writeToSerial(warningMsg.c_str(), warningMsg.length());
-        if (initialized && buffer != nullptr) {
-            writeToBuffer(warningMsg.c_str(), warningMsg.length());
-        }
     }
 }
 
-// Periodic internal log dump (call from main loop every 10 seconds)
+// Periodic log flush with multi-file rotation (syslog.0..3.txt)
 bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
 #ifdef UNIT_TEST
-    return false; // Not supported in unit tests
+    return false;
 #else
     (void)sdManager;
 
     if (!logSavingEnabled || logFileSystem == nullptr) {
         return false;
     }
-    
     if (!initialized || buffer == nullptr || mutex == nullptr) {
         return false;
     }
     
     // Acquire mutex to safely read headIndex
     if (xSemaphoreTake(mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
-        // Failed to acquire mutex quickly - skip this dump
         return false;
     }
     
-    // Check if there are new logs to dump
     uint32_t currentBytes = headIndex;
     uint32_t newBytes = currentBytes - lastDumpedBytes;
-    
-    // Release mutex immediately after reading
     xSemaphoreGive(mutex);
     
-    // Skip if no new logs
     if (newBytes == 0) {
         return false;
     }
@@ -574,14 +566,8 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
         return false;
     }
     
-    // Calculate available data in buffer
-    uint32_t availableBytes = headIndex - tailIndex;
-    
-    // Check if we've lost data since last dump
+    // If writer overtook our read pointer, skip to tail on a clean line boundary
     if (lastDumpedBytes < tailIndex) {
-        // Some logs were overwritten before we could dump them.
-        // Start from tail (oldest available data) but skip past the first
-        // newline so we don't write a truncated partial line to the file.
         lastDumpedBytes = tailIndex;
         uint32_t scanLimit = (headIndex - tailIndex);
         if (scanLimit > 512) scanLimit = 512;
@@ -594,32 +580,20 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
         }
     }
     
-    // Calculate how much we can actually dump
     uint32_t bytesToDump = headIndex - lastDumpedBytes;
-    
-    // Safety check
     if (bytesToDump > bufferSize) {
         bytesToDump = bufferSize;
         lastDumpedBytes = headIndex - bufferSize;
     }
     
-    // Snapshot indices under mutex for direct-to-file writing
     uint32_t dumpStart = lastDumpedBytes;
-    uint32_t dumpEnd = headIndex;
     lastDumpedBytes = headIndex;
-    
-    // Release mutex — we'll read the buffer in chunks below.
-    // The buffer content at [dumpStart..dumpEnd) is safe because the buffer
-    // is large enough that the writer won't overtake us in a single flush.
     xSemaphoreGive(mutex);
     
-    // Write directly to LittleFS using a stack chunk buffer (zero heap allocation)
-    static const char* activeLogFile = "/syslog.A.txt";
-    static const char* inactiveLogFile = "/syslog.B.txt";
-    
-    File logFile = logFileSystem->open(activeLogFile, FILE_APPEND);
+    // Append to syslog.0.txt (the active log file)
+    File logFile = logFileSystem->open("/syslog.0.txt", FILE_APPEND);
     if (!logFile) {
-        logFile = logFileSystem->open(activeLogFile, FILE_WRITE);
+        logFile = logFileSystem->open("/syslog.0.txt", FILE_WRITE);
         if (!logFile) {
             return false;
         }
@@ -642,14 +616,48 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
     size_t fileSize = logFile.size();
     logFile.close();
     
-    // Simple rotation: if file A is > 64KB, rename it to B (overwriting B),
-    // so the next write creates a fresh file A.
-    if (fileSize > 65536) {
-        logFileSystem->remove(inactiveLogFile);
-        logFileSystem->rename(activeLogFile, inactiveLogFile);
+    // Rotate when syslog.0.txt exceeds the per-file limit
+    if (fileSize > SYSLOG_MAX_FILE_SIZE) {
+        // Shift files: delete oldest, rename each one level down
+        char oldPath[24], newPath[24];
+        // Delete the oldest file (N-1)
+        snprintf(oldPath, sizeof(oldPath), "/syslog.%d.txt", SYSLOG_MAX_FILES - 1);
+        logFileSystem->remove(oldPath);
+        // Rename N-2 → N-1, N-3 → N-2, ... , 0 → 1
+        for (int i = SYSLOG_MAX_FILES - 2; i >= 0; i--) {
+            snprintf(oldPath, sizeof(oldPath), "/syslog.%d.txt", i);
+            snprintf(newPath, sizeof(newPath), "/syslog.%d.txt", i + 1);
+            logFileSystem->rename(oldPath, newPath);
+        }
+        // syslog.0.txt is now free for the next flush
     }
     
     return true;
+#endif
+}
+
+// Stream all saved log files (oldest first) to a Print destination
+size_t Logger::streamSavedLogs(Print& output) {
+#ifdef UNIT_TEST
+    return 0;
+#else
+    if (!logFileSystem) return 0;
+    size_t total = 0;
+    char path[24];
+    uint8_t buf[256];
+    // Stream from oldest (highest index) to newest (0)
+    for (int i = SYSLOG_MAX_FILES - 1; i >= 0; i--) {
+        snprintf(path, sizeof(path), "/syslog.%d.txt", i);
+        File f = logFileSystem->open(path, FILE_READ);
+        if (!f) continue;
+        while (f.available()) {
+            size_t n = f.read(buf, sizeof(buf));
+            if (n > 0) { output.write(buf, n); total += n; }
+            yield();
+        }
+        f.close();
+    }
+    return total;
 #endif
 }
 
@@ -729,60 +737,10 @@ bool Logger::dumpToSD(fs::FS& fs, const char* filename, const char* reason) {
     return true;
 }
 
-// Unconditionally flush the circular buffer to /last_reboot_log.txt on LittleFS.
-// Called before every esp_restart() regardless of PERSISTENT_LOGS setting.
-bool Logger::dumpPreRebootLog() {
-#ifdef UNIT_TEST
-    return false;
-#else
-    if (!initialized || !this->buffer) return false;
-
-    xSemaphoreTake(mutex, portMAX_DELAY);
-
-    // Always write to LittleFS — overwrite previous reboot log
-    File f = LittleFS.open("/last_reboot_log.txt", FILE_WRITE);
-    if (!f) {
-        xSemaphoreGive(mutex);
-        return false;
-    }
-
-    // Write header
-    char hdr[192];
-    snprintf(hdr, sizeof(hdr),
-             "=== Pre-Reboot Log Dump ===\n"
-             "Uptime: %lu ms\n"
-             "Firmware: %s\n"
-             "Free heap: %lu / Max alloc: %lu\n"
-             "===========================\n",
-             (unsigned long)millis(), FIRMWARE_VERSION,
-             (unsigned long)ESP.getFreeHeap(),
-             (unsigned long)ESP.getMaxAllocHeap());
-    f.write((const uint8_t*)hdr, strlen(hdr));
-
-    uint32_t availableBytes = headIndex - tailIndex;
-    if (availableBytes > bufferSize) availableBytes = bufferSize;
-
-    // Chunk-buffer writes (zero heap allocation)
-    if (availableBytes > 0) {
-        char chunk[256];
-        size_t chunkPos = 0;
-        for (uint32_t i = 0; i < availableBytes; i++) {
-            size_t physicalPos = (tailIndex + i) % bufferSize;
-            chunk[chunkPos++] = this->buffer[physicalPos];
-            if (chunkPos == sizeof(chunk)) {
-                f.write((const uint8_t*)chunk, chunkPos);
-                chunkPos = 0;
-            }
-        }
-        if (chunkPos > 0) {
-            f.write((const uint8_t*)chunk, chunkPos);
-        }
-    }
-
-    f.close();
-    xSemaphoreGive(mutex);
-    return true;
-#endif
+// Flush all pending circular-buffer content to NAND before reboot.
+// Simply calls the periodic flush — no separate file needed.
+bool Logger::flushBeforeReboot() {
+    return dumpSavedLogsPeriodic(nullptr);
 }
 
 // Check if a previous boot failure left an emergency log on the SD card
@@ -798,51 +756,8 @@ void Logger::checkPreviousBootError(fs::FS& fs, const char* filename) {
 #endif
 }
 
-// Dump current logs to internal FS for critical failures
+// Legacy compatibility — flush to syslog rotation
 bool Logger::dumpSavedLogs(const String& reason) {
-#ifdef UNIT_TEST
-    return false; // Not supported in unit tests
-#else
-    if (!logFileSystem) {
-        return false;
-    }
-    
-    // Get current logs from logger
-    LogData logData = retrieveLogs();
-    
-    if (logData.content.isEmpty()) {
-        return false;
-    }
-    
-    // Write logs to internal FS
-    String filename = "/crash_log.txt";
-    
-    // Write logs to FS (append mode to preserve previous dumps)
-    File logFile = logFileSystem->open(filename, FILE_APPEND);
-    if (!logFile) {
-        // If file doesn't exist, create it
-        logFile = logFileSystem->open(filename, FILE_WRITE);
-        if (!logFile) {
-            return false;
-        }
-    }
-    
-    // Write separator and reason header
-    logFile.println("\n===== CRASH REASON: " + reason + " =====");
-    logFile.println("Timestamp: " + String(millis()) + "ms");
-    logFile.println("Free heap: " + String(ESP.getFreeHeap()) + " bytes");
-    logFile.println("=== Log Content ===");
-    logFile.print(logData.content);
-    logFile.println("=== End of Log Dump ===\n");
-    logFile.close();
-    
-    // Log success message
-    String successMsg = getTimestamp() + "[INFO] Crash logs saved to " + filename + "\n";
-    writeToSerial(successMsg.c_str(), successMsg.length());
-    if (initialized && buffer != nullptr) {
-        writeToBuffer(successMsg.c_str(), successMsg.length());
-    }
-    
-    return true;
-#endif
+    (void)reason;
+    return dumpSavedLogsPeriodic(nullptr);
 }

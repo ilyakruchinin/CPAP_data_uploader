@@ -540,9 +540,9 @@ void CpapWebServer::handleApiLogs() {
     server->sendContent("");
 }
 
-// GET /api/logs/saved — flush, then stream syslog.B.txt (older) + syslog.A.txt (newer) from LittleFS
+// GET /api/logs/saved — flush, then download ALL logs (NAND + circular buffer)
 void CpapWebServer::handleApiLogsSaved() {
-    // Flush any unflushed in-memory logs before serving so the download is current
+    // Flush circular buffer to NAND so the download includes everything
     Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
 
     addCorsHeaders(server);
@@ -551,34 +551,23 @@ void CpapWebServer::handleApiLogsSaved() {
     server->send(200, "text/plain; charset=utf-8", " ");
     ChunkedPrint chunked(server);
 
-    // Stream all LittleFS log files: older rotated log, active log, and pre-reboot dump
-    const char* files[] = {"/syslog.B.txt", "/syslog.A.txt", "/last_reboot_log.txt"};
-    bool anyFound = false;
-    for (int i = 0; i < 3; i++) {
-        File f = LittleFS.open(files[i], FILE_READ);
-        if (!f) continue;
-        anyFound = true;
-        chunked.print("\n=== ");
-        chunked.print(files[i]);
-        chunked.print(" ===\n");
-        uint8_t buf[256];
-        while (f.available()) {
-            size_t n = f.read(buf, sizeof(buf));
-            if (n > 0) chunked.write(buf, n);
-            yield();
-        }
-        f.close();
-    }
-    if (!anyFound) {
-        chunked.print("[No saved log files found — enable PERSISTENT_LOGS=true in config.txt to persist logs]\n");
+    // Stream all syslog rotation files (oldest → newest, chronological)
+    size_t nandBytes = Logger::getInstance().streamSavedLogs(chunked);
+
+    // Append any circular-buffer content not yet flushed (race window)
+    Logger::getInstance().printLogs(chunked);
+
+    if (nandBytes == 0) {
+        chunked.print("[No saved log files found on internal flash]\n");
     }
     server->sendContent("");
 }
 
 // GET /api/logs/full — stream NAND logs + circular buffer (inline, not download)
 // Used by the Web GUI on initial Logs tab open for full historical context.
+// All content is strictly chronological — no out-of-order reboot log insertion.
 void CpapWebServer::handleApiLogsFull() {
-    // Flush any unflushed in-memory logs before serving so content is current
+    // Flush circular buffer to NAND so content is current
     Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
 
     addCorsHeaders(server);
@@ -586,35 +575,10 @@ void CpapWebServer::handleApiLogsFull() {
     server->send(200, "text/plain; charset=utf-8", " ");
     ChunkedPrint chunked(server);
 
-    // Stream NAND saved logs (older first)
-    const char* files[] = {"/syslog.B.txt", "/syslog.A.txt"};
-    for (int i = 0; i < 2; i++) {
-        File f = LittleFS.open(files[i], FILE_READ);
-        if (!f) continue;
-        uint8_t buf[256];
-        while (f.available()) {
-            size_t n = f.read(buf, sizeof(buf));
-            if (n > 0) chunked.write(buf, n);
-            yield();
-        }
-        f.close();
-    }
+    // Stream all syslog rotation files (oldest → newest)
+    Logger::getInstance().streamSavedLogs(chunked);
 
-    // Stream the last_reboot_log.txt if it exists (context from previous boot)
-    File rebootLog = LittleFS.open("/last_reboot_log.txt", FILE_READ);
-    if (rebootLog) {
-        chunked.print("\n--- Previous reboot log ---\n");
-        uint8_t buf[256];
-        while (rebootLog.available()) {
-            size_t n = rebootLog.read(buf, sizeof(buf));
-            if (n > 0) chunked.write(buf, n);
-            yield();
-        }
-        rebootLog.close();
-        chunked.print("\n--- End previous reboot log ---\n");
-    }
-
-    // Append current circular buffer (live data from this boot)
+    // Append current circular buffer (captures any content since last flush)
     Logger::getInstance().printLogs(chunked);
 
     server->sendContent("");
