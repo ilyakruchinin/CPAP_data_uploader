@@ -658,32 +658,27 @@ void handleListening() {
 
 void handleAcquiring() {
     // The upload task now owns the full lifecycle:
-    //   TLS pre-warm → SD mount → phased upload → SD release
-    // This ensures task stack is allocated at high max_alloc (~73KB),
-    // TLS pre-warm happens before SD mount fragments heap, and both
-    // backends run sequentially without socket conflicts.
+    //   SD mount → pre-flight scan → phased upload → SD release
+    // Task stack is allocated at high max_alloc (~73KB).  TLS connects
+    // on-demand only when pre-flight confirms cloud work (asymmetric
+    // mbedTLS buffers fit at post-SD-mount heap levels).
     transitionTo(UploadState::UPLOADING);
 }
 
 // FreeRTOS task function — runs on Core 0 so main loop (Core 1) stays responsive
-// Owns the full session lifecycle: TLS pre-warm → SD mount → upload → SD release
+// Owns the full session lifecycle: SD mount → pre-flight → upload → SD release
 void uploadTaskFunction(void* pvParameters) {
     UploadTaskParams* params = (UploadTaskParams*)pvParameters;
     
     g_uploadHeartbeat = millis();
     
-    // Phase 0: Pre-warm TLS BEFORE SD mount so mbedTLS buffers are allocated
-    // while max_alloc is at its highest (~57KB after 12KB task stack).
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (params->uploader->hasCloudBackend()) {
-        SleepHQUploader* cloud = params->uploader->getCloudUploader();
-        if (cloud) {
-            cloud->preWarmTLS();
-        }
-    }
-#endif
+    // NOTE: TLS pre-warm was removed here.  With custom asymmetric mbedTLS
+    // (16 KB IN / 4 KB OUT), the largest single TLS allocation is ~16.7 KB
+    // which fits comfortably at ma≈38900 after SD mount.  The cloud phase's
+    // begin() handles on-demand TLS connection, saving ~11 s and ~28 KB of
+    // heap when pre-flight finds no cloud work.
 
-    // Phase 0b: Mount SD card
+    // Mount SD card
     if (!params->sdManager->takeControl()) {
         LOG_ERROR("[Upload] Failed to acquire SD card control");
         uploadTaskResult = UploadResult::ERROR;

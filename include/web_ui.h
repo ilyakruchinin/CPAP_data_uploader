@@ -340,18 +340,43 @@ function renderStatus(d){
   set('d-inact',cfg.inactivity_seconds!=null?cfg.inactivity_seconds+'s':'—');
   set('d-excl',cfg.exclusive_access_minutes!=null?cfg.exclusive_access_minutes+' min':'—');
   set('d-cool',cfg.cooldown_minutes!=null?cfg.cooldown_minutes+' min':'—');
-  // Generate mode explanation helper
+  // Generate mode explanation helper — dynamic based on current state
   var help='';
+  var iw=d.in_window;
+  var rd=cfg.recent_folder_days||2;
+  var cool=cfg.cooldown_minutes||10;
+  var maxd=cfg.max_days||365;
   if(mode==='SMART'){
-    help='\u2139\ufe0f <b>Smart mode</b>: Uploads the <b>2 most recent days</b> of CPAP data whenever the machine is idle'
-      +(winAll?' (anytime \u2014 24/7 window).':' during the upload window ('+ws+').')
-      +' After uploading, the device waits '+(cfg.cooldown_minutes||10)+' min before checking again.'
-      +' Only recent folders are re-scanned each cycle \u2014 older data uploaded previously is not re-sent.';
+    if(winAll){
+      help='<b>\u25b6 Smart mode \u2014 24/7 window</b><br>'
+        +'Uploads up to <b>'+maxd+' days</b> of data whenever CPAP is idle.<br>'
+        +'<span style="color:#8f8">Trigger Upload</span> \u2192 scans all eligible folders and uploads any new/changed files.';
+    }else if(iw){
+      help='<b>\u25b6 Smart mode \u2014 inside upload window</b> ('+ws+')<br>'
+        +'Uploads up to <b>'+maxd+' days</b> of data (recent + older backlog).<br>'
+        +'<span style="color:#8f8">Trigger Upload</span> \u2192 uploads all eligible data now.<br>'
+        +'<span style="color:#aaa">After the window closes at '+eh+':00, only the '+rd+' most recent day(s) will sync.</span>';
+    }else{
+      help='<b>\u25b6 Smart mode \u2014 outside upload window</b><br>'
+        +'Only the <b>'+rd+' most recent day(s)</b> of data will be uploaded until <b>'+sh+':00</b>.<br>'
+        +'Older data (if any) will be uploaded during the regular window ('+ws+').<br>'
+        +'<span style="color:#8f8">Trigger Upload</span> \u2192 uploads recent data only.';
+    }
   }else if(mode==='SCHEDULED'){
-    help='\u2139\ufe0f <b>Scheduled mode</b>: Uploads data <b>only</b> during the configured window'
-      +(winAll?' (24/7 \u2014 always active).':' ('+ws+').')
-      +' Outside this window the SD card is released to the CPAP machine.'
-      +' Each cycle uploads up to '+(cfg.max_days||60)+' days of data.';
+    if(winAll){
+      help='<b>\u25b6 Scheduled mode \u2014 24/7 window</b><br>'
+        +'Uploads up to <b>'+maxd+' days</b> of data whenever CPAP is idle.<br>'
+        +'<span style="color:#8f8">Trigger Upload</span> \u2192 scans all folders and uploads new/changed files.';
+    }else if(iw){
+      help='<b>\u25b6 Scheduled mode \u2014 inside upload window</b> ('+ws+')<br>'
+        +'Uploading up to <b>'+maxd+' days</b> of data until <b>'+eh+':00</b>.<br>'
+        +'<span style="color:#8f8">Trigger Upload</span> \u2192 uploads all eligible data now.';
+    }else{
+      help='<b>\u25b6 Scheduled mode \u2014 outside upload window</b><br>'
+        +'No automatic uploads until <b>'+sh+':00</b>.<br>'
+        +'<span style="color:#8f8">Trigger Upload</span> \u2192 forces an upload of recent data now.<br>'
+        +'<span style="color:#aaa">Full upload resumes during the window ('+ws+').</span>';
+    }
   }
   var helpEl=document.getElementById('d-mode-help');
   if(helpEl){helpEl.style.display=help?'':'none';helpEl.innerHTML=help;}

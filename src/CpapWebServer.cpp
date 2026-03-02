@@ -666,10 +666,11 @@ void CpapWebServer::updateStatusSnapshot() {
         foldersPending = stateManager->getPendingFoldersCount();
         foldersTotal   = foldersDone + stateManager->getIncompleteFoldersCount();
     }
-    long nextUp = -1; bool timeSynced = false;
+    long nextUp = -1; bool timeSynced = false; bool inWindow = false;
     if (scheduleManager) {
         nextUp = scheduleManager->getSecondsUntilNextUpload();
         timeSynced = scheduleManager->isTimeSynced();
+        inWindow = scheduleManager->isInUploadWindow();
     }
     // Live per-file progress from the upload task — check both session statuses
     // since the phased orchestrator runs CLOUD then SMB within one session.
@@ -694,6 +695,7 @@ void CpapWebServer::updateStatusSnapshot() {
         ",\"active_backend\":\"%s\",\"folders_done\":%d,\"folders_total\":%d,\"folders_pending\":%d"
         ",\"next_backend\":\"%s\",\"next_done\":%d,\"next_total\":%d,\"next_empty\":%d,\"next_ts\":%lu"
         ",\"next_upload\":%ld"
+        ",\"in_window\":%s"
         ",\"live_active\":%s,\"live_folder\":\"%s\",\"live_up\":%d,\"live_total\":%d"
         ",\"firmware\":\"%s\"}",
         st, inStateSec, upSec,
@@ -705,6 +707,7 @@ void CpapWebServer::updateStatusSnapshot() {
         g_inactiveBackendStatus.foldersTotal, g_inactiveBackendStatus.foldersEmpty,
         (unsigned long)g_inactiveBackendStatus.sessionStartTs,
         nextUp,
+        inWindow ? "true" : "false",
         liveActive ? "true" : "false", liveFolder, liveUp, liveTotal,
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
@@ -726,7 +729,7 @@ void CpapWebServer::initConfigSnapshot() {
         ",\"upload_start_hour\":%d,\"upload_end_hour\":%d"
         ",\"inactivity_seconds\":%d"
         ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
-        ",\"gmt_offset_hours\":%d,\"max_days\":%d"
+        ",\"gmt_offset_hours\":%d,\"max_days\":%d,\"recent_folder_days\":%d"
         ",\"cloud_configured\":%s"
         ",\"firmware\":\"%s\"}",
         config->getWifiSSID().c_str(),
@@ -737,7 +740,7 @@ void CpapWebServer::initConfigSnapshot() {
         config->getUploadStartHour(), config->getUploadEndHour(),
         config->getInactivitySeconds(),
         config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),
-        config->getGmtOffsetHours(), config->getMaxDays(),
+        config->getGmtOffsetHours(), config->getMaxDays(), config->getRecentFolderDays(),
         hasCloud ? "true" : "false",
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {

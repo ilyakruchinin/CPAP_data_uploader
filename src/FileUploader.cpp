@@ -313,7 +313,7 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
     };
 
     // ═══════════════════════════════════════════════════════════════════════
-    // PHASE 1: CLOUD (pre-warmed TLS connection is alive from task setup)
+    // PHASE 1: CLOUD (TLS connects on-demand in begin() — no pre-warm)
     // ═══════════════════════════════════════════════════════════════════════
 #ifdef ENABLE_SLEEPHQ_UPLOAD
     if (cloudWork && sleephqUploader && cloudStateManager) {
