@@ -452,6 +452,16 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
     // ═══════════════════════════════════════════════════════════════════════
 #ifdef ENABLE_SMB_UPLOAD
     if (activeBackend == UploadBackend::SMB && smbUploader && smbStateManager) {
+        // Safety: if a pre-flight redirect changed the backend from CLOUD to SMB,
+        // a pre-warmed TLS socket may still be active.  The open TLS TCP socket
+        // causes errno:9 (EBADF) on every libsmb2 connect via lwIP conflict.
+        // Tear it down before starting SMB operations.
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+        if (sleephqUploader) {
+            sleephqUploader->resetConnection();
+            LOG("[FileUploader] Released TLS resources before SMB session");
+        }
+#endif
         LOG("[FileUploader] === SMB Session ===");
 
         std::vector<String> freshFolders, oldFolders;
@@ -598,6 +608,13 @@ UploadResult FileUploader::uploadWithExclusiveAccess(SDCardManager* sdManager, i
             }
         }
         cloudStateManager->save(stateFs);
+
+        // Release TLS resources after cloud session so the next cycle's SMB
+        // session (if any) starts with a clean lwIP socket table.  The buffers
+        // will be re-allocated via preWarmTLS() at high max_alloc before the
+        // next CLOUD session.
+        sleephqUploader->resetConnection();
+        LOG("[FileUploader] Released TLS resources after cloud session");
 
         g_cloudSessionStatus.uploadActive     = false;
         g_cloudSessionStatus.filesUploaded    = 0;

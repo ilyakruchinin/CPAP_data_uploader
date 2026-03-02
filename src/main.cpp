@@ -669,8 +669,15 @@ void handleAcquiring() {
     // Pre-warm TLS BEFORE SD mount so mbedTLS buffers are allocated while
     // max_alloc is at its highest (~110KB).  SD_MMC DMA buffers (~24KB) will
     // then be placed elsewhere, avoiding fragmentation of the TLS region.
+    //
+    // IMPORTANT: Only pre-warm when this session's backend is CLOUD.
+    // When backend is SMB, the active TLS socket causes errno:9 (EBADF) on
+    // every libsmb2 connect attempt — the lwIP socket layer conflicts between
+    // the TLS and SMB TCP connections on ESP32.  Since each session runs only
+    // one backend, we never need both sockets simultaneously.
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (uploader && config.hasCloudEndpoint()) {
+    if (uploader && config.hasCloudEndpoint() &&
+        uploader->getActiveBackend() == UploadBackend::CLOUD) {
         SleepHQUploader* cloud = uploader->getCloudUploader();
         if (cloud) {
             cloud->preWarmTLS();
