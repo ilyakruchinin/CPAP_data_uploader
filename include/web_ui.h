@@ -63,6 +63,14 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bd-i{font-size:.79em;color:#8f98a0;margin-top:4px;min-height:1.1em;padding-left:2px}
 .hdr{margin-bottom:2px}
 .hdr svg{height:48px;width:auto;display:block}
+.hdr-spin{transform-origin:25px 25px;animation:hSpin 8s linear infinite}
+@keyframes hSpin{100%{transform:rotate(360deg)}}
+.hdr-arrow{animation:hUp 2s ease-in-out infinite}
+@keyframes hUp{0%{transform:translateY(1.5px);opacity:0}40%{opacity:1}100%{transform:translateY(-4px);opacity:0}}
+.hdr-wave{animation:hPulse 3.5s ease-in-out infinite}
+@keyframes hPulse{0%,100%{opacity:.6}50%{opacity:1}}
+.hw1{animation:hWifi 1.5s infinite 0s}.hw2{animation:hWifi 1.5s infinite .25s}.hw3{animation:hWifi 1.5s infinite .5s}
+@keyframes hWifi{0%,100%{opacity:.4}50%{opacity:1}}
 #reboot-overlay{display:none;background:#1a2a1a;border:1px solid #2f8f57;border-radius:10px;padding:16px 20px;margin-bottom:14px;text-align:center;animation:rbPulse 2.5s ease-in-out infinite}
 #reboot-overlay h3{color:#44ff44;font-size:1em;margin-bottom:6px}
 #reboot-overlay p{color:#a0c0b0;font-size:.84em;line-height:1.5}
@@ -73,7 +81,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 </style></head><body>
 <div class=wrap>
 <div class=hdr>
-<svg viewBox="0 0 420 50" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',system-ui,-apple-system,sans-serif"><defs><linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1a6b8a"/><stop offset="100%" stop-color="#0d4a6b"/></linearGradient><linearGradient id="wg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2dd4bf"/><stop offset="50%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#818cf8"/></linearGradient><linearGradient id="ag" x1="0%" y1="100%" x2="0%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2dd4bf"/></linearGradient></defs><circle cx="25" cy="25" r="23.5" fill="none" stroke="url(#wg)" stroke-width="1" opacity=".4"/><circle cx="25" cy="25" r="22" fill="url(#cg)"/><circle cx="25" cy="25" r="22" fill="none" stroke="url(#wg)" stroke-width=".7" opacity=".6"/><g transform="translate(15,15)"><path d="M2.5,0 L10,0 L13,3 L13,12.5 Q13,13 12,13 L1,13 Q0,13 0,12 L0,1 Q0,0 1,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width=".8" opacity=".9"/><rect x="2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="4.2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="6.4" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="8.6" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/></g><g transform="translate(33.5,21.5)"><line x1="0" y1="8" x2="0" y2="2" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round"/><polyline points="-2.5,4 0,.5 2.5,4" fill="none" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="-3" y1="9.5" x2="3" y2="9.5" stroke="#38bdf8" stroke-width="1.2" stroke-linecap="round" opacity=".7"/></g><g transform="translate(25,37)"><path d="M-10,0 C-8.5,-.8 -8,-.8 -6.5,0 C-5,.8 -4.5,.8 -3,0 C-1.5,-3.5 -.8,-3.5 .7,-1.5 C1.5,-.3 1.8,3 3,3 C4,3 4.3,.3 5.5,-1.5 C6.5,-3.5 7.2,-3.5 8.5,-1.5 C9.5,0 10,0 10,0" fill="none" stroke="url(#wg)" stroke-width="1" stroke-linecap="round" opacity=".85"/></g><g transform="translate(25,11)" opacity=".7"><path d="M-3.5,3.5 Q0,-.8 3.5,3.5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><path d="M-2,5 Q0,2.8 2,5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><circle cx="0" cy="6" r=".8" fill="#38bdf8"/></g><text x="56" y="22" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">CPAP<tspan fill="url(#wg)"> Data</tspan></text><text x="56" y="40" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">Uploader</text><rect x="56" y="44" width="140" height="1.5" rx=".75" fill="url(#wg)" opacity=".5"/></svg>
+<svg viewBox="0 0 420 50" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',system-ui,-apple-system,sans-serif"><defs><linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1a6b8a"/><stop offset="100%" stop-color="#0d4a6b"/></linearGradient><linearGradient id="wg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2dd4bf"/><stop offset="50%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#818cf8"/></linearGradient><linearGradient id="ag" x1="0%" y1="100%" x2="0%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2dd4bf"/></linearGradient></defs><circle class="hdr-spin" cx="25" cy="25" r="23.5" fill="none" stroke="url(#wg)" stroke-width="1.2" stroke-dasharray="7 5 12 5 19 5 31 5 50 5" stroke-linecap="round" opacity=".85"/><circle cx="25" cy="25" r="22" fill="url(#cg)"/><circle cx="25" cy="25" r="22" fill="none" stroke="url(#wg)" stroke-width=".7" opacity=".6"/><g transform="translate(15,15)"><path d="M2.5,0 L10,0 L13,3 L13,12.5 Q13,13 12,13 L1,13 Q0,13 0,12 L0,1 Q0,0 1,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width=".8" opacity=".9"/><rect x="2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="4.2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="6.4" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="8.6" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/></g><g transform="translate(33.5,21.5)"><g class="hdr-arrow"><line x1="0" y1="8" x2="0" y2="2" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round"/><polyline points="-2.5,4 0,.5 2.5,4" fill="none" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></g><line x1="-3" y1="9.5" x2="3" y2="9.5" stroke="#38bdf8" stroke-width="1.2" stroke-linecap="round" opacity=".7"/></g><g transform="translate(25,37)"><path class="hdr-wave" d="M-10,0 C-8.5,-.8 -8,-.8 -6.5,0 C-5,.8 -4.5,.8 -3,0 C-1.5,-3.5 -.8,-3.5 .7,-1.5 C1.5,-.3 1.8,3 3,3 C4,3 4.3,.3 5.5,-1.5 C6.5,-3.5 7.2,-3.5 8.5,-1.5 C9.5,0 10,0 10,0" fill="none" stroke="url(#wg)" stroke-width="1" stroke-linecap="round"/></g><g transform="translate(25,11)"><path class="hw1" d="M-3.5,3.5 Q0,-.8 3.5,3.5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><path class="hw2" d="M-2,5 Q0,2.8 2,5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><circle class="hw3" cx="0" cy="6" r=".8" fill="#38bdf8"/></g><text x="56" y="22" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">CPAP<tspan fill="url(#wg)"> Data</tspan></text><text x="56" y="40" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">Uploader</text><rect x="56" y="44" width="140" height="1.5" rx=".75" fill="url(#wg)" opacity=".5"/></svg>
 </div>
 <p class=sub id=sub>Connecting...</p>
 <div id=reboot-overlay><h3>&#8635; Device is rebooting&hellip;</h3><p>This is normal and expected. The system reboots periodically to maintain stability.<br>It will be back online in a few seconds. Please wait.</p></div>
@@ -111,7 +119,6 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=row><span class=k>Uptime</span><span id=d-up class=v></span></div>
 </div>
 </div>
-<div id=d-mode-help style="background:#16213e;border:1px solid #2a475e;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.82em;color:#8f98a0;line-height:1.5"></div>
 <div class=cards>
 <div class=card style="grid-column:1/-1"><h2>Upload Progress</h2>
 <div class=be>
@@ -127,10 +134,18 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=row style="border-top:1px solid #2a475e;padding-top:8px;margin-top:2px"><span class=k>Status</span><span id=d-fst class=v></span></div>
 </div>
 </div>
-<div class=card style="margin-bottom:14px"><h2>Actions</h2>
-<div class=actions>
-<button id=btn-up class="btn bp" onclick=triggerUpload()>&#9650; Trigger Upload</button>
+<div id=d-mode-help style="background:#16213e;border:1px solid #2a475e;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.82em;color:#8f98a0;line-height:1.5"></div>
+<div style="border:1px solid #8b2020;border-radius:10px;padding:15px;margin-bottom:14px">
+<h2 style="font-size:.8em;text-transform:uppercase;letter-spacing:1px;color:#e04030;margin-bottom:10px;border-bottom:1px solid #8b2020;padding-bottom:6px">Danger Zone</h2>
+<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+<div style="flex:1;min-width:200px">
+<button id=btn-up class="btn bd" onclick=triggerUpload() style="background:#c07830;margin-bottom:8px">&#9650; Force Upload</button>
+<p style="font-size:.78em;color:#8f98a0;line-height:1.45" id=d-danger-upload>The firmware automatically detects when your CPAP finishes therapy and uploads new data. Forcing an upload bypasses this detection and immediately takes control of the SD card, which <strong style="color:#ddaa44">increases the risk of an SD card error</strong> if the CPAP is actively writing. Only use this if automatic uploads have not run for an unusual amount of time.</p>
+</div>
+<div style="flex:1;min-width:200px;text-align:right">
 <button id=btn-rst class="btn bd" onclick=resetState()>Reset State</button>
+<p style="font-size:.78em;color:#8f98a0;line-height:1.45;text-align:left;margin-top:8px" id=d-danger-reset>Erases all upload tracking state and reboots. Every folder will be re-scanned and re-uploaded from scratch. Under normal use (CPAP used daily), this is <strong style="color:#ddaa44">never needed</strong>. Only use this if uploads are stuck in a de-sync state &mdash; e.g. files appear uploaded but are missing on your server, or the progress counter is wrong.</p>
+</div>
 </div>
 </div>
 </div>
@@ -147,6 +162,27 @@ nav button:hover:not(.act){background:#3a5a7e}
 </div>
 </div>
 <div id=log-box>Loading...</div>
+</div>
+</div>
+
+<!-- CONFIG SD-ACCESS WARNING MODAL -->
+<div id="cfg-warn-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;align-items:center;justify-content:center">
+<div style="background:#1b2838;border:1px solid #aa9900;border-radius:12px;padding:25px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(170,153,0,0.2)">
+<h2 style="color:#ffcc44;margin-bottom:10px;font-size:1.2em">&#9888; SD Card Access Warning</h2>
+<p style="font-size:.88em;color:#c7d5e0;line-height:1.6;margin-bottom:16px">
+Editing and saving config requires <strong>reading from and writing to the CPAP&rsquo;s SD card</strong>. This carries a small risk of an SD card error if the CPAP machine is actively writing at the same time.
+</p>
+<div style="background:#0f1923;padding:14px;border-radius:8px;margin-bottom:18px;border:1px solid #2a475e">
+<ul style="font-size:.84em;color:#8f98a0;padding-left:18px;line-height:1.7;margin:0">
+<li><strong style="color:#44ff44">Safest:</strong> Edit config when the CPAP machine is <strong>off</strong> or between therapy sessions.</li>
+<li><strong style="color:#ddcc44">Acceptable:</strong> Quick edits during the day while CPAP is idle (not in therapy).</li>
+<li><strong style="color:#ff6b6b">Risky:</strong> Editing while the CPAP is actively recording therapy data.</li>
+</ul>
+</div>
+<div style="display:flex;gap:10px;justify-content:flex-end">
+<button class="btn bs" onclick="document.getElementById('cfg-warn-modal').style.display='none'">Cancel</button>
+<button class="btn bp" onclick="document.getElementById('cfg-warn-modal').style.display='none';_doCfgLock();" style="background:#aa8800;color:#fff">I Understand, Edit Config</button>
+</div>
 </div>
 </div>
 
@@ -192,8 +228,21 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=stat-box><span class=sl>Longest Idle</span><span class=sv id=m-l>--</span></div>
 <div class=stat-box><span class=sl>Active/Idle</span><span class=sv id=m-r>--</span></div>
 </div>
-<div class=card><h2>Activity Timeline (Last 60s)</h2>
-<div class=chart id=m-ch><em>Waiting for data...</em></div>
+<div class=card style="margin-bottom:10px">
+<h2>Activity Timeline <span style="font-size:.65em;color:#8f98a0;font-weight:400">&nbsp;last ~2 min &nbsp;<span style="display:inline-block;width:12px;height:3px;background:#ff4444;vertical-align:middle;margin-right:3px;border-radius:2px"></span>Bus Activity</span></h2>
+<div style="background:#0f1923;border-radius:6px;padding:8px 4px 2px">
+<svg id=mon-svg viewBox="0 0 600 120" preserveAspectRatio="none" style="width:100%;height:120px;display:block"></svg>
+</div>
+<div style="display:flex;justify-content:space-between;font-size:.72em;color:#3a5070;padding:2px 6px 0"><span>~2m ago</span><span>~1m ago</span><span>now</span></div>
+</div>
+<div class=card>
+<h2>Card Activity Log <span style="font-size:.65em;color:#8f98a0;font-weight:400">(client-side, up to 2000 entries / 24h)</span></h2>
+<div style="overflow-y:auto;max-height:300px;margin-top:8px">
+<table id=mon-log-tbl style="width:100%;border-collapse:collapse;font-family:monospace;font-size:.78em">
+<thead><tr style="color:#66c0f4;border-bottom:1px solid #2a475e;text-align:left"><th style="padding:4px 8px">Timestamp</th><th style="padding:4px 8px">Pulses</th><th style="padding:4px 8px">Idle (s)</th><th style="padding:4px 8px">Since Last</th></tr></thead>
+<tbody id=mon-log-body><tr><td colspan=4 style="padding:8px;color:#8f98a0"><em>Start monitoring to collect data...</em></td></tr></tbody>
+</table>
+</div>
 </div>
 </div>
 
@@ -350,31 +399,31 @@ function renderStatus(d){
     if(winAll){
       help='<b>\u25b6 Smart mode \u2014 24/7 window</b><br>'
         +'Uploads up to <b>'+maxd+' days</b> of data whenever CPAP is idle.<br>'
-        +'<span style="color:#8f8">Trigger Upload</span> \u2192 scans all eligible folders and uploads any new/changed files.';
+        +'<span style="color:#8f8">Force Upload</span> \u2192 scans all eligible folders and uploads any new/changed files.';
     }else if(iw){
       help='<b>\u25b6 Smart mode \u2014 inside upload window</b> ('+ws+')<br>'
         +'Uploads up to <b>'+maxd+' days</b> of data (recent + older backlog).<br>'
-        +'<span style="color:#8f8">Trigger Upload</span> \u2192 uploads all eligible data now.<br>'
+        +'<span style="color:#8f8">Force Upload</span> \u2192 uploads all eligible data now.<br>'
         +'<span style="color:#aaa">After the window closes at '+eh+':00, only the '+rd+' most recent day(s) will sync.</span>';
     }else{
       help='<b>\u25b6 Smart mode \u2014 outside upload window</b><br>'
         +'Only the <b>'+rd+' most recent day(s)</b> of data will be uploaded until <b>'+sh+':00</b>.<br>'
         +'Older data (if any) will be uploaded during the regular window ('+ws+').<br>'
-        +'<span style="color:#8f8">Trigger Upload</span> \u2192 uploads recent data only.';
+        +'<span style="color:#8f8">Force Upload</span> \u2192 uploads recent data only.';
     }
   }else if(mode==='SCHEDULED'){
     if(winAll){
       help='<b>\u25b6 Scheduled mode \u2014 24/7 window</b><br>'
         +'Uploads up to <b>'+maxd+' days</b> of data whenever CPAP is idle.<br>'
-        +'<span style="color:#8f8">Trigger Upload</span> \u2192 scans all folders and uploads new/changed files.';
+        +'<span style="color:#8f8">Force Upload</span> \u2192 scans all folders and uploads new/changed files.';
     }else if(iw){
       help='<b>\u25b6 Scheduled mode \u2014 inside upload window</b> ('+ws+')<br>'
         +'Uploading up to <b>'+maxd+' days</b> of data until <b>'+eh+':00</b>.<br>'
-        +'<span style="color:#8f8">Trigger Upload</span> \u2192 uploads all eligible data now.';
+        +'<span style="color:#8f8">Force Upload</span> \u2192 uploads all eligible data now.';
     }else{
       help='<b>\u25b6 Scheduled mode \u2014 outside upload window</b><br>'
         +'No automatic uploads until <b>'+sh+':00</b>.<br>'
-        +'<span style="color:#8f8">Trigger Upload</span> \u2192 forces an upload of recent data now.<br>'
+        +'<span style="color:#8f8">Force Upload</span> \u2192 forces an upload of recent data now.<br>'
         +'<span style="color:#aaa">Full upload resumes during the window ('+ws+').</span>';
     }
   }
@@ -532,6 +581,9 @@ function _setCfgLockUI(locked){
   document.getElementById('btn-cfg-cancel').style.display=locked?'':'none';
 }
 function acquireCfgLock(){
+  document.getElementById('cfg-warn-modal').style.display='flex';
+}
+function _doCfgLock(){
   var active=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
   if(active&&!confirm('An upload is currently in progress.\n\nThe upload will continue running. You can edit config and Save & Reboot when ready.\n\nContinue?'))return;
   _setCfgLockUI(true);
@@ -813,14 +865,36 @@ function fetchMon(){
     var dot=document.getElementById('mon-dot');
     dot.className='dot '+(d.is_busy?'busy':'idle');
     if(d.samples&&d.samples.length){
-      var h='';
+      monHistory=[];
       d.samples.forEach(function(s){
-        var w=Math.min(Math.max(s.p/10,1),100);
-        var sec=s.t%3600,m=Math.floor(sec/60),ss=sec%60;
-        var l=String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');
-        h+='<div class=br2><span class=bl2>'+l+'</span><div class=bt><div class="bf '+(s.a?'a':'i')+'" style="width:'+w+'%"></div></div></div>';
+        monHistory.push({p:s.p});
       });
-      document.getElementById('m-ch').innerHTML=h;
+      while(monHistory.length>MON_HIST_MAX)monHistory.shift();
+      updateMonChart();
+      var last=d.samples[d.samples.length-1];
+      if(last){
+        var now=new Date();
+        var ts=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0')+':'+String(now.getSeconds()).padStart(2,'0');
+        var idleS=(d.consecutive_idle_ms/1000).toFixed(1);
+        var sinceStr='—';
+        if(last.a&&monLogLastWriteTs>0){
+          var gap=Math.round((Date.now()-monLogLastWriteTs)/1000);
+          sinceStr=gap+'s ago';
+        }
+        if(last.a)monLogLastWriteTs=Date.now();
+        var shouldLog=true;
+        if(monLog.length>0){
+          var prev=monLog[monLog.length-1];
+          if(prev.rawP===last.p&&prev.rawP===0)shouldLog=false;
+        }
+        if(shouldLog){
+          monLog.push({ts:ts,p:last.p,idle:idleS+'s',since:sinceStr,rawP:last.p});
+          if(monLog.length>MON_LOG_MAX)monLog.shift();
+          var cutoff=Date.now()-24*3600*1000;
+          while(monLog.length>0&&monLog[0].epoch&&monLog[0].epoch<cutoff)monLog.shift();
+          renderMonLog();
+        }
+      }
     }
     if(profActive){
       var li=d.longest_idle_ms/1000;
@@ -834,6 +908,43 @@ function fetchMon(){
   }).catch(function(){});
 }
 
+var monHistory=[],MON_HIST_MAX=120,monLog=[],MON_LOG_MAX=2000,monLogLastWriteTs=0;
+function updateMonChart(){
+  var svg=document.getElementById('mon-svg');
+  if(!svg||monHistory.length<2)return;
+  var W=600,H=120,n=monHistory.length;
+  var maxP=1;
+  monHistory.forEach(function(s){if(s.p>maxP)maxP=s.p;});
+  maxP=Math.max(maxP,10);
+  var pts='';
+  monHistory.forEach(function(s,i){
+    var x=((W-2)*i/(MON_HIST_MAX-1)+1).toFixed(1);
+    var y=(H-(s.p/maxP)*(H-14)-6).toFixed(1);
+    pts+=(i===0?'M':'L')+x+' '+y;
+  });
+  var fill=pts+'L'+((W-2)*(n-1)/(MON_HIST_MAX-1)+1).toFixed(1)+' '+(H-6)+'L1 '+(H-6)+'Z';
+  var grid='';
+  [0.25,0.5,0.75].forEach(function(f){
+    var y=(H-f*(H-14)-6).toFixed(0);
+    var v=Math.round(maxP*f);
+    grid+='<line x1="0" y1="'+y+'" x2="'+W+'" y2="'+y+'" stroke="#1a2a3a" stroke-width="1"/>';
+    grid+='<text x="4" y="'+(parseInt(y)-2)+'" fill="#3a5070" font-size="9" font-family="monospace">'+v+'</text>';
+  });
+  svg.innerHTML=grid
+    +'<path d="'+fill+'" fill="rgba(255,68,68,0.15)" stroke="none"/>'
+    +'<path d="'+pts+'" stroke="#ff4444" stroke-width="1.5" fill="none"/>';
+}
+function renderMonLog(){
+  var body=document.getElementById('mon-log-body');
+  if(!body||monLog.length===0)return;
+  var h='';var show=Math.min(monLog.length,200);
+  for(var i=monLog.length-1;i>=Math.max(0,monLog.length-show);i--){
+    var e=monLog[i];
+    var pc=e.p>0?'color:#ff6b6b':'color:#44ff44';
+    h+='<tr style="border-bottom:1px solid #1a2a3a"><td style="padding:3px 8px;color:#8f98a0">'+e.ts+'</td><td style="padding:3px 8px;'+pc+'">'+e.p+'</td><td style="padding:3px 8px;color:#c7d5e0">'+e.idle+'</td><td style="padding:3px 8px;color:#8f98a0">'+e.since+'</td></tr>';
+  }
+  body.innerHTML=h;
+}
 var profActive=false,profMaxIdle=0;
 function openProfilerWizard(){
   document.getElementById('prof-wiz').style.display='flex';
@@ -860,7 +971,7 @@ function triggerUpload(){
     var mode=d.status==='success'?'ok':d.status==='scheduled'?'warn':'er';
     toast(d.message||'Upload triggered.',mode);
   }).catch(function(){toast('Failed to trigger upload.','er');
-  }).finally(function(){setTimeout(function(){b._busy=0;b.textContent='\u25b2 Trigger Upload';},700);});
+  }).finally(function(){setTimeout(function(){b._busy=0;b.textContent='\u25b2 Force Upload';},700);});
 }
 function softReboot(){
   var b=document.getElementById('btn-srb');
