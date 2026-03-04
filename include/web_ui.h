@@ -62,7 +62,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bt-c{color:#aa66ff;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bd-i{font-size:.79em;color:#8f98a0;margin-top:4px;min-height:1.1em;padding-left:2px}
 .hdr{margin-bottom:2px}
-.hdr svg{height:48px;width:auto;display:block}
+.hdr svg{height:72px;width:auto;display:block}
 .hdr-spin{transform-origin:25px 25px;animation:hSpin 8s linear infinite}
 @keyframes hSpin{100%{transform:rotate(360deg)}}
 .hdr-arrow{animation:hUp 2s ease-in-out infinite}
@@ -77,7 +77,11 @@ nav button:hover:not(.act){background:#3a5a7e}
 @keyframes rbPulse{0%,100%{border-color:#2f8f57}50%{border-color:#44ff44}}
 @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
 .log-spinner{display:inline-block;width:14px;height:14px;border:2px solid #2a475e;border-top-color:#66c0f4;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:6px}
-@media(max-width:600px){.hdr svg{height:34px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
+#mon-active-banner{display:none;background:#2a1a2a;border:1px solid #8b4dbb;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center;animation:monPulse 2.5s ease-in-out infinite}
+#mon-active-banner h3{color:#bb88ff;font-size:1em;margin-bottom:6px}
+#mon-active-banner p{color:#b0a0c0;font-size:.84em;line-height:1.5}
+@keyframes monPulse{0%,100%{border-color:#8b4dbb}50%{border-color:#bb88ff}}
+@media(max-width:600px){.hdr svg{height:52px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
 </style></head><body>
 <div class=wrap>
 <div class=hdr>
@@ -85,11 +89,12 @@ nav button:hover:not(.act){background:#3a5a7e}
 </div>
 <p class=sub id=sub>Connecting...</p>
 <div id=reboot-overlay><h3>&#8635; Device is rebooting&hellip;</h3><p>This is normal and expected. The system reboots periodically to maintain stability.<br>It will be back online in a few seconds. Please wait.</p></div>
+<div id=mon-active-banner><h3>&#128270; SD Access Monitoring is active</h3><p>All automatic uploads are <strong>paused</strong> while monitoring is running.<br>Go to the <strong>SD Access</strong> tab and click <strong>Stop</strong> to resume normal operation.</p></div>
 <nav>
 <button id=t-dash onclick="tab('dash')" class=act>Dashboard</button>
 <button id=t-logs onclick="tab('logs')">Logs</button>
 <button id=t-cfg onclick="tab('cfg')">Config</button>
-<button id=t-mon onclick="tab('mon')">Monitor</button>
+<button id=t-mon onclick="tab('mon')">SD Access</button>
 <button id=t-mem onclick="tab('mem')">System</button>
 <button id=t-ota onclick="tab('ota')">OTA</button>
 </nav>
@@ -139,12 +144,14 @@ nav button:hover:not(.act){background:#3a5a7e}
 <h2 style="font-size:.8em;text-transform:uppercase;letter-spacing:1px;color:#e04030;margin-bottom:10px;border-bottom:1px solid #8b2020;padding-bottom:6px">Danger Zone</h2>
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
 <div style="flex:1;min-width:200px">
-<button id=btn-up class="btn bd" onclick=triggerUpload() style="background:#c07830;margin-bottom:8px">&#9650; Force Upload</button>
-<p style="font-size:.78em;color:#8f98a0;line-height:1.45" id=d-danger-upload>The firmware automatically detects when your CPAP finishes therapy and uploads new data. Forcing an upload bypasses this detection and immediately takes control of the SD card, which <strong style="color:#ddaa44">increases the risk of an SD card error</strong> if the CPAP is actively writing. Only use this if automatic uploads have not run for an unusual amount of time.</p>
+<button id=btn-up class="btn bd" onclick=triggerUpload() style="background:#aa6622;margin-bottom:0">&#9650; Force Upload</button>
+<div style="border-top:2px solid #aa6622;margin:8px 0;width:100%"></div>
+<p style="font-size:.78em;color:#8f98a0;line-height:1.45" id=d-danger-upload>The firmware automatically detects when your CPAP finishes therapy and uploads new data. Forcing an upload bypasses this detection and immediately takes control of the SD card, which <strong style="color:#ffaa44">increases the risk of an SD card error</strong> if the CPAP is actively writing <strong style="color:#ffaa44">or attempts to write at any point</strong> during the upload (which may take several minutes). Only use this if automatic uploads have not run for an unusual amount of time and you are confident the CPAP will remain idle.</p>
 </div>
 <div style="flex:1;min-width:200px;text-align:right">
-<button id=btn-rst class="btn bd" onclick=resetState()>Reset State</button>
-<p style="font-size:.78em;color:#8f98a0;line-height:1.45;text-align:left;margin-top:8px" id=d-danger-reset>Erases all upload tracking state and reboots. Every folder will be re-scanned and re-uploaded from scratch. Under normal use (CPAP used daily), this is <strong style="color:#ddaa44">never needed</strong>. Only use this if uploads are stuck in a de-sync state &mdash; e.g. files appear uploaded but are missing on your server, or the progress counter is wrong.</p>
+<button id=btn-rst class="btn bd" onclick=resetState()>&#9762; Reset State</button>
+<div style="border-top:2px solid #c0392b;margin:8px 0;width:100%"></div>
+<p style="font-size:.78em;color:#8f98a0;line-height:1.45;text-align:left" id=d-danger-reset>Erases all upload tracking state and reboots the device. Every data folder will be re-scanned and re-uploaded from scratch on the next cycle. Under normal use (CPAP used daily with regular uploads), this is <strong style="color:#ffaa44">never needed</strong>. Only use this if uploads are stuck in a persistent de-sync state &mdash; for example, files appear as uploaded in the dashboard but are missing on your server, or the progress counter is clearly wrong after multiple upload cycles.</p>
 </div>
 </div>
 </div>
@@ -215,7 +222,7 @@ Editing and saving config requires <strong>reading from and writing to the CPAP&
 <div id=mon class=page>
 <div class=card style="margin-bottom:10px"><h2>SD Activity Monitor <span id=mon-dot class="dot idle"></span></h2>
 <p style="font-size:.85em;color:#c7d5e0;line-height:1.5;margin-bottom:10px">Monitors SD card bus activity. Use when CPAP machine is on. Red = CPAP writing, Green = safe to upload.</p>
-<div id=mon-upwarn style="display:none;background:#2a2a1a;border:1px solid #665522;border-radius:6px;padding:9px 13px;margin-bottom:10px;font-size:.84em;color:#ddcc88">&#9889; Upload in progress — monitoring will start automatically when the upload finishes.</div>
+<div id=mon-upwarn style="display:none;background:#2a2a1a;border:1px solid #665522;border-radius:6px;padding:9px 13px;margin-bottom:10px;font-size:.84em;color:#ddcc88">&#9889; Upload in progress &mdash; monitoring cannot start until the upload finishes.</div>
 <div class=actions>
 <button id=btn-mst class="btn bp" onclick=startMon()>Start Monitoring</button>
 <button id=btn-msp class="btn bd" onclick=stopMon() style=display:none>Stop</button>
@@ -256,11 +263,11 @@ This tool will measure your CPAP machine's specific SD card writing behavior to 
 </p>
 <div style="background:#0f1923;padding:15px;border-radius:8px;margin-bottom:20px;border:1px solid #2a475e">
 <ol style="font-size:0.85em;color:#8f98a0;padding-left:20px;line-height:1.6">
-<li>Ensure the CPAP machine is <strong>turned ON</strong> and actively blowing air.</li>
 <li>Ensure the SD card is physically inserted into the CPAP.</li>
-<li>Click <strong>Start Profiling</strong>.</li>
-<li><strong style="color:#ffcc44">Breathe in and out continuously as you would during normal therapy</strong> — do not pause or hold your breath. The profiler measures real SD write gaps during active therapy.</li>
-<li>Wait 2–3 minutes. The wizard will record the longest continuous silence between SD writes and suggest an <strong>INACTIVITY_SECONDS</strong> value.</li>
+<li>Put on your CPAP mask, turn the machine <strong>ON</strong>, and <strong style="color:#ffcc44">start a therapy session</strong> &mdash; breathe in and out as you would during normal sleep. If your machine does not auto-start airflow on breath detection, press its start button.</li>
+<li>Once the machine is actively blowing air and you are breathing normally, click <strong>Start Profiling</strong> below.</li>
+<li><strong style="color:#ffcc44">Continue breathing steadily</strong> &mdash; do not pause or hold your breath. The profiler measures real SD write gaps during active therapy.</li>
+<li>Wait 2&ndash;3 minutes. The wizard will record the longest continuous silence between SD writes and suggest an <strong>INACTIVITY_SECONDS</strong> value.</li>
 </ol>
 </div>
 <div style="text-align:center;margin-bottom:20px">
@@ -271,7 +278,7 @@ This tool will measure your CPAP machine's specific SD card writing behavior to 
 <div style="font-size:0.9em;color:#c7d5e0">
 Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id="prof-rec-val" style="font-weight:bold;font-size:1.2em;color:#fff">--</span>
 </div>
-<div style="font-size:0.75em;color:#8f98a0;margin-top:4px">(Longest silence + 5 second safety margin)</div>
+<div style="font-size:0.75em;color:#8f98a0;margin-top:4px">(Longest silence + 4 second safety margin)</div>
 </div>
 <div style="display:flex;gap:10px;justify-content:flex-end">
 <button id="btn-prof-cancel" class="btn bs" onclick="document.getElementById('prof-wiz').style.display='none'">Close</button>
@@ -348,10 +355,10 @@ function tab(t){
   });
   curTab=t;
   if(t==='logs'){if(!backfillDone){fetchBackfill();}else if(!sseConnected){startLogPoll();}}else{stopLogPoll();stopSse();}
-  if(t!=='mon'){stopMon();}
   if(t==='cfg'){loadCfg();}
-  if(t==='mon'){checkMonUploadState();}
+  if(t==='mon'){checkMonUploadState();syncMonBtn();}
   if(t==='mem'){updateHeapChart();updateCpuChart();}
+  _updateMonBanner();
 }
 function toast(msg,mode){
   var el=document.getElementById('toast');
@@ -395,35 +402,38 @@ function renderStatus(d){
   var rd=cfg.recent_folder_days||2;
   var cool=cfg.cooldown_minutes||10;
   var maxd=cfg.max_days||365;
+  var mBadge='<span style="display:inline-block;background:#1a3a4a;border:1px solid #2a6a8a;border-radius:4px;padding:1px 8px;color:#66c0f4;font-weight:700;font-size:.95em">';
+  var mEnd='</span>';
+  var fBtn='<span style="color:#ffaa44">Force Upload</span> <span style="color:#aa7733;font-size:.9em">(not recommended)</span>';
   if(mode==='SMART'){
     if(winAll){
-      help='<b>\u25b6 Smart mode \u2014 24/7 window</b><br>'
+      help=mBadge+'\u25b6 Smart mode \u2014 24/7 window'+mEnd+'<br>'
         +'Uploads up to <b>'+maxd+' days</b> of data whenever CPAP is idle.<br>'
-        +'<span style="color:#8f8">Force Upload</span> \u2192 scans all eligible folders and uploads any new/changed files.';
+        +fBtn+' \u2192 scans all eligible folders and uploads any new/changed files.';
     }else if(iw){
-      help='<b>\u25b6 Smart mode \u2014 inside upload window</b> ('+ws+')<br>'
+      help=mBadge+'\u25b6 Smart mode \u2014 currently inside upload window'+mEnd+' <span style="color:#66c0f4;font-size:.9em">('+ws+')</span><br>'
         +'Uploads up to <b>'+maxd+' days</b> of data (recent + older backlog).<br>'
-        +'<span style="color:#8f8">Force Upload</span> \u2192 uploads all eligible data now.<br>'
+        +fBtn+' \u2192 uploads all eligible data now.<br>'
         +'<span style="color:#aaa">After the window closes at '+eh+':00, only the '+rd+' most recent day(s) will sync.</span>';
     }else{
-      help='<b>\u25b6 Smart mode \u2014 outside upload window</b><br>'
+      help=mBadge+'\u25b6 Smart mode \u2014 currently outside upload window'+mEnd+'<br>'
         +'Only the <b>'+rd+' most recent day(s)</b> of data will be uploaded until <b>'+sh+':00</b>.<br>'
         +'Older data (if any) will be uploaded during the regular window ('+ws+').<br>'
-        +'<span style="color:#8f8">Force Upload</span> \u2192 uploads recent data only.';
+        +fBtn+' \u2192 uploads recent data only.';
     }
   }else if(mode==='SCHEDULED'){
     if(winAll){
-      help='<b>\u25b6 Scheduled mode \u2014 24/7 window</b><br>'
+      help=mBadge+'\u25b6 Scheduled mode \u2014 24/7 window'+mEnd+'<br>'
         +'Uploads up to <b>'+maxd+' days</b> of data whenever CPAP is idle.<br>'
-        +'<span style="color:#8f8">Force Upload</span> \u2192 scans all folders and uploads new/changed files.';
+        +fBtn+' \u2192 scans all folders and uploads new/changed files.';
     }else if(iw){
-      help='<b>\u25b6 Scheduled mode \u2014 inside upload window</b> ('+ws+')<br>'
+      help=mBadge+'\u25b6 Scheduled mode \u2014 currently inside upload window'+mEnd+' <span style="color:#66c0f4;font-size:.9em">('+ws+')</span><br>'
         +'Uploading up to <b>'+maxd+' days</b> of data until <b>'+eh+':00</b>.<br>'
-        +'<span style="color:#8f8">Force Upload</span> \u2192 uploads all eligible data now.';
+        +fBtn+' \u2192 uploads all eligible data now.';
     }else{
-      help='<b>\u25b6 Scheduled mode \u2014 outside upload window</b><br>'
+      help=mBadge+'\u25b6 Scheduled mode \u2014 currently outside upload window'+mEnd+'<br>'
         +'No automatic uploads until <b>'+sh+':00</b>.<br>'
-        +'<span style="color:#8f8">Force Upload</span> \u2192 forces an upload of recent data now.<br>'
+        +fBtn+' \u2192 forces an upload of recent data now.<br>'
         +'<span style="color:#aaa">Full upload resumes during the window ('+ws+').</span>';
     }
   }
@@ -469,7 +479,7 @@ function renderStatus(d){
   var fst=inc>0?'&#9888; '+inc+' folder(s) pending':(done>0?'&#10003; All synced':'Waiting for first scan');
   seti('d-fst',fst);
   set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
-  if(curTab==='mon')checkMonUploadState();
+  checkMonUploadState();
 }
 
 var statusTimer=null,diagTimer=null;
@@ -557,10 +567,31 @@ function updateCpuChart(){
     +'<path d="'+ptsC0+'" stroke="#ff6b6b" stroke-width="1.5" fill="none"/>'
     +'<path d="'+ptsC1+'" stroke="#ffd93d" stroke-width="1.5" fill="none"/>';
 }
+function syncMonBtn(){
+  var busy=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
+  var btnSt=document.getElementById('btn-mst');
+  if(!btnSt)return;
+  if(monActive){
+    btnSt.style.display='none';
+  }else if(busy){
+    btnSt.style.display='inline-flex';
+    btnSt.disabled=true;
+    btnSt.style.opacity='.4';
+    btnSt.style.cursor='not-allowed';
+    btnSt.textContent='Start Monitoring';
+  }else{
+    btnSt.style.display='inline-flex';
+    btnSt.disabled=false;
+    btnSt.style.opacity='1';
+    btnSt.style.cursor='pointer';
+    btnSt.textContent='Start Monitoring';
+  }
+}
 function checkMonUploadState(){
   var busy=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
   var w=document.getElementById('mon-upwarn');
   if(w)w.style.display=busy?'':'none';
+  syncMonBtn();
 }
 function startDiagPoll(){if(!diagTimer){pollDiag();diagTimer=setInterval(pollDiag,2000);}}
 startDiagPoll();
@@ -839,12 +870,15 @@ function startLogPoll(){if(!logPoll){fetchLogs();logPoll=setInterval(fetchLogs,4
 function stopLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}}
 
 function startMon(){
+  var busy=currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';
+  if(busy){toast('Cannot start monitoring while upload is in progress.','warn');return;}
   monActive=true;
   fetch('/api/monitor-start',{cache:'no-store'});
   document.getElementById('btn-mst').style.display='none';
   document.getElementById('btn-msp').style.display='inline-flex';
   if(!monPoll)monPoll=setInterval(fetchMon,2000);
   fetchMon();
+  _updateMonBanner();
 }
 function stopMon(){
   if(monActive){
@@ -854,9 +888,13 @@ function stopMon(){
   document.getElementById('btn-mst').style.display='inline-flex';
   document.getElementById('btn-msp').style.display='none';
   if(monPoll){clearInterval(monPoll);monPoll=null;}
+  _updateMonBanner();
+}
+function _updateMonBanner(){
+  var b=document.getElementById('mon-active-banner');
+  if(b)b.style.display=(monActive&&curTab!=='mon')?'block':'none';
 }
 function fetchMon(){
-  if(curTab!=='mon')return;
   fetch('/api/sd-activity',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     set('m-p',d.last_pulse_count);
     set('m-i',(d.consecutive_idle_ms/1000).toFixed(1)+'s');
@@ -902,7 +940,7 @@ function fetchMon(){
       document.getElementById('prof-max-idle').textContent=profMaxIdle.toFixed(1)+'s';
       if(profMaxIdle>0){
         document.getElementById('prof-rec-box').style.display='block';
-        document.getElementById('prof-rec-val').textContent=Math.ceil(profMaxIdle+5)+'';
+        document.getElementById('prof-rec-val').textContent=Math.ceil(profMaxIdle+4)+'';
       }
     }
   }).catch(function(){});
@@ -988,7 +1026,7 @@ function resetState(){
   fetch('/reset-state',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     toast(d.message||'State reset.',true);
   }).catch(function(){toast('Failed to reset state.',false);
-  }).finally(function(){setTimeout(function(){b._busy=0;b.textContent='Reset State';},1000);});
+  }).finally(function(){setTimeout(function(){b._busy=0;b.innerHTML='&#9762; Reset State';},1000);});
 }
 
 var otaBusy=false;
