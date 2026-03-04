@@ -130,6 +130,15 @@ uint32_t TrafficMonitor::getConsecutiveIdleMs() {
 
 void TrafficMonitor::resetIdleTracking() {
     _consecutiveIdleMs = 0;
+    _lastSampleTime = millis();          // Prevent stale elapsed after COOLDOWN
+    _secondPulseAccumulator = 0;
+    _lastSecondTime = millis();
+    // Drain any pulses accumulated during COOLDOWN/IDLE so the first
+    // update() sample starts clean.  Without this, a 16-bit PCNT overflow
+    // during a 10-minute COOLDOWN could read as 0 → false idle.
+    int16_t drain = 0;
+    pcnt_get_counter_value(TRAFFIC_PCNT_UNIT, &drain);
+    pcnt_counter_clear(TRAFFIC_PCNT_UNIT);
 }
 
 const ActivitySample* TrafficMonitor::getSampleBuffer() const {
