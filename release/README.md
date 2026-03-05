@@ -565,12 +565,11 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 ---
 
 ### Dashboard Tab
-- Live upload state machine status with glowing badges (LISTENING, ACQUIRING, UPLOADING, COOLDOWN, MONITORING, etc.)
-- WiFi signal strength with color coding
-- Upload progress: current file, bytes transferred, folder counts per backend
+- **Upload Engine** card: live FSM state with glowing badges (LISTENING, ACQUIRING, UPLOADING, COOLDOWN, MONITORING, etc.), upload mode, window, thresholds, and next full upload countdown
+- **System** card: current time, time sync status, heap/alloc stats, WiFi signal strength with color coding, endpoint, GMT offset, uptime
+- **Upload Progress**: current file, bytes transferred, folder counts per backend (active + inactive)
 - Mode explanation helper with dynamic context (current window state, upload scope)
 - **Danger Zone**: Force Upload and Reset State buttons with risk descriptions
-- Soft Reboot button, live clock, and uptime
 
 ### Logs Tab
 - **Live streaming** log feed via Server-Sent Events (SSE) with automatic reconnect and fallback polling
@@ -596,7 +595,7 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 - Live `Free Heap` and `Max Contiguous Alloc` readings with rolling **2-minute minimum** values
 - **CPU load graphs** (Core 0 and Core 1) with 2-minute history
 - **Heap History** chart: SVG line graph of free heap and max contiguous allocation over time
-- Updates every 3 seconds
+- Diagnostics data merged into the status endpoint — single 3-second poll for all dashboard and system data
 
 ### OTA Tab *(OTA firmware only)*
 - Upload new firmware binary (`firmware-ota-upgrade.bin`) directly from the browser
