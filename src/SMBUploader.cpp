@@ -713,7 +713,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         if (success) {
             bytesTransferred = attemptBytesTransferred;
             float transferRate = uploadTime > 0 ? (attemptBytesTransferred / 1024.0f) / (uploadTime / 1000.0f) : 0.0f;
-            LOGF("[SMB] Upload complete: %lu bytes in %lu ms (%.2f KB/s)",
+            LOG_DEBUGF("[SMB] Upload complete: %lu bytes in %lu ms (%.2f KB/s)",
                  attemptBytesTransferred, uploadTime, transferRate);
             LOG_DEBUGF("[SMB] File size verification: SD=%u bytes, Transferred=%lu bytes, Match=%s",
                        (unsigned int)fileSize,

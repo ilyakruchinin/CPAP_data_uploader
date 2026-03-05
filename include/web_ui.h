@@ -39,7 +39,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 .prog{background:#2a475e;border-radius:5px;height:8px;margin-top:5px;overflow:hidden}
 .pf{background:linear-gradient(90deg,#66c0f4,#44aaff);height:100%;border-radius:5px;transition:width .5s}
 .actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:7px}
-.btn{display:inline-flex;align-items:center;gap:5px;padding:8px 15px;border-radius:6px;font-size:.83em;font-weight:600;text-decoration:none;border:none;cursor:pointer;transition:all .2s}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:6px;font-size:.84em;font-weight:600;text-decoration:none;border:none;cursor:pointer;transition:all .2s}
 .bp{background:#66c0f4;color:#0f1923}.bp:hover{background:#88d0ff}
 .bs{background:#2a475e;color:#c7d5e0}.bs:hover{background:#3a5a7e}
 .bd{background:#c0392b;color:#fff}.bd:hover{background:#e04030}
@@ -153,12 +153,12 @@ nav button:hover:not(.act){background:#3a5a7e}
 <h2 style="font-size:.8em;text-transform:uppercase;letter-spacing:1px;color:#e04030;margin-bottom:10px;border-bottom:1px solid #8b2020;padding-bottom:6px">Danger Zone</h2>
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
 <div style="flex:1;min-width:200px">
-<button id=btn-up class="btn bo" onclick=triggerUpload() style="min-height:38px;line-height:1.2">&#9650; Force Upload</button>
+<button id=btn-up class="btn bo" onclick=triggerUpload()>&#9650; Force Upload</button>
 <div style="border-top:2px solid #aa6622;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45" id=d-danger-upload>The firmware automatically detects when your CPAP finishes therapy and uploads new data. Forcing an upload bypasses this detection and immediately takes control of the SD card, which <strong style="color:#ffaa44">increases the risk of an SD card error</strong> if the CPAP is actively writing <strong style="color:#ffaa44">or attempts to write at any point</strong> during the upload (which may take several minutes). Only use this if automatic uploads have not run for an unusual amount of time and you are confident the CPAP will remain idle.</p>
 </div>
 <div style="flex:1;min-width:200px;text-align:right">
-<button id=btn-rst class="btn bd" onclick=resetState() style="min-height:38px;line-height:1.2">&#9762; Reset State</button>
+<button id=btn-rst class="btn bd" onclick=resetState()>&#9762; Reset State</button>
 <div style="border-top:2px solid #c0392b;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45;text-align:left" id=d-danger-reset>Erases all upload tracking state and reboots the device. Every data folder will be re-scanned and re-uploaded from scratch on the next cycle. Under normal use (CPAP used daily with regular uploads), this is <strong style="color:#ffaa44">never needed</strong>. Only use this if uploads are stuck in a persistent de-sync state &mdash; for example, files appear as uploaded in the dashboard but are missing on your server, or the progress counter is clearly wrong after multiple upload cycles.</p>
 </div>
@@ -169,12 +169,12 @@ nav button:hover:not(.act){background:#3a5a7e}
 <!-- LOGS -->
 <div id=logs class=page>
 <div class=card style="margin-bottom:10px">
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px">
 <h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
-<div class=log-btns style="display:flex;gap:6px">
-<button class="btn bg" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Download all logs (saved + current) for troubleshooting">&#11015; Download All Logs</button>
-<button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
-<button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
+<div class=log-btns style="display:flex;gap:6px;flex-wrap:wrap">
+<button class="btn bg" onclick=downloadSavedLogs() title="Download all logs (saved + current) for troubleshooting">&#11015; Download All Logs</button>
+<button class="btn bs" onclick=copyLogBuf() title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
+<button class="btn bs" onclick=clearLogBuf()>&#128465; Clear buffer</button>
 </div>
 </div>
 <div id=log-box>Loading...</div>
@@ -217,10 +217,10 @@ Editing and saving config requires <strong>reading from and writing to the CPAP&
 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
 <span id=cfg-raw-cnt style="font-size:.8em;color:#8f98a0">0 / 4096 bytes</span>
 <div class=actions style=margin:0>
-<button id=btn-cfg-edit class="btn bp" onclick=acquireCfgLock() style="padding:6px 14px">&#9998; Edit</button>
-<button id=btn-cfg-reload class="btn bs" onclick=loadRawCfg() style="padding:6px 14px;display:none">&#8635; Reload</button>
-<button id=btn-cfg-savereboot class="btn bd" onclick=saveAndReboot() style="padding:6px 14px;display:none">Save &amp; Reboot</button>
-<button id=btn-cfg-cancel class="btn bs" onclick=releaseCfgLock() style="padding:6px 14px;display:none">&#10005; Cancel</button>
+<button id=btn-cfg-edit class="btn bp" onclick=acquireCfgLock()>&#9998; Edit</button>
+<button id=btn-cfg-reload class="btn bs" onclick=loadRawCfg() style="display:none">&#8635; Reload</button>
+<button id=btn-cfg-savereboot class="btn bd" onclick=saveAndReboot() style="display:none">Save &amp; Reboot</button>
+<button id=btn-cfg-cancel class="btn bs" onclick=releaseCfgLock() style="display:none">&#10005; Cancel</button>
 </div>
 </div>
 <div id=cfg-raw-msg style="margin-top:6px;font-size:.83em"></div>
