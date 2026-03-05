@@ -312,7 +312,7 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - End of upload window (0-23, local time)
 - If start == end, uploads are allowed 24/7
 
-**INACTIVITY_SECONDS** (optional, default: 125)
+**INACTIVITY_SECONDS** (optional, default: 62)
 - Required SD bus idle time before smart mode starts uploading
 - Range: 10-3600
 
@@ -347,14 +347,14 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 
 **CPU_SPEED_MHZ** (optional, default: 80)
 - CPU frequency in MHz (80, 160, 240)
-- 80 MHz is the minimum for WiFi and sufficient for all operations
-- Dynamic Frequency Scaling (DFS) automatically boosts to 160 MHz during WiFi/TLS activity
+- At the default 80 MHz, DFS is disabled (CPU locked) — no frequency transitions, lowest power
+- Set to 160 to re-enable DFS (80–160 MHz) for faster TLS handshakes on non-constrained hardware
 
-**WIFI_TX_PWR** (optional, default: "mid")
+**WIFI_TX_PWR** (optional, default: "LOW")
 - WiFi transmit power level:
-  - `LOW` — 5 dBm (router must be very close)
-  - `MID` — 8.5 dBm (default, good for typical bedroom placement)
-  - `HIGH` — 11 dBm (router in adjacent room or through walls)
+  - `LOW` — 5 dBm (default, sufficient for typical bedroom placement ~5 m)
+  - `MID` — 8.5 dBm (good for adjacent rooms)
+  - `HIGH` — 11 dBm (router through walls)
   - `MAX` — 19.5 dBm (maximum power, only if other settings fail)
 - Increase if you experience WiFi connection issues
 
@@ -377,9 +377,9 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - Example: `DEBUG = true`
 
 **SAVE_LOGS** (optional, default: false)
-- Persist logs to internal flash (`syslog.A.txt` / `syslog.B.txt` on LittleFS) for retrieval across reboots
-- Logs flush every **5 seconds**, continuously — including during active uploads — and immediately before every reboot
-- Use the **⬇ Download Saved Logs** button on the Logs tab to download persisted log files directly to your browser
+- Persist logs to internal flash (4-file rotation: `syslog.0..3.txt`, 32 KB each, 128 KB total on LittleFS) for retrieval across reboots
+- Logs flush every **30 seconds**, continuously — including during active uploads — and immediately before every reboot
+- Use the **⬇ Download All Logs** button on the Logs tab to download persisted + current log files directly to your browser
 - Useful for diagnosing issues that only appear after a reboot or crash
 - Automatically disabled if flash write operations fail
 - Example: `SAVE_LOGS = true`
@@ -445,7 +445,7 @@ ENDPOINT_PASSWORD = password
 UPLOAD_MODE = scheduled
 UPLOAD_START_HOUR = 8
 UPLOAD_END_HOUR = 22
-INACTIVITY_SECONDS = 125
+INACTIVITY_SECONDS = 62
 EXCLUSIVE_ACCESS_MINUTES = 5
 COOLDOWN_MINUTES = 10
 GMT_OFFSET_HOURS = -8
@@ -462,7 +462,7 @@ ENDPOINT_PASSWORD = password
 UPLOAD_MODE = scheduled
 UPLOAD_START_HOUR = 7
 UPLOAD_END_HOUR = 21
-INACTIVITY_SECONDS = 125
+INACTIVITY_SECONDS = 62
 EXCLUSIVE_ACCESS_MINUTES = 5
 COOLDOWN_MINUTES = 10
 GMT_OFFSET_HOURS = 1
@@ -479,7 +479,7 @@ ENDPOINT_PASSWORD =
 UPLOAD_MODE = smart
 UPLOAD_START_HOUR = 8
 UPLOAD_END_HOUR = 22
-INACTIVITY_SECONDS = 125
+INACTIVITY_SECONDS = 62
 EXCLUSIVE_ACCESS_MINUTES = 5
 COOLDOWN_MINUTES = 10
 GMT_OFFSET_HOURS = 0
@@ -501,16 +501,17 @@ GMT_OFFSET_HOURS = 0
    - Scheduled mode: during configured upload window
 2. **Pre-flight scan** checks for new/changed files (SD-only, no network)
 3. Takes control of SD card (only when CPAP is idle)
-4. **Staged upload processing** (optimizes memory usage):
-   - SMB pass: Upload to network share
-   - Cloud pass: Upload to SleepHQ (only if files exist)
+4. **Phased dual-backend upload** (optimizes memory usage):
+   - **Phase 1 — Cloud**: Upload to SleepHQ (on-demand TLS, highest heap for handshake)
+   - **Phase 2 — SMB**: Upload to network share (TLS torn down, clean sockets for libsmb2)
+   - Time budget auto-scales to 2× configured minutes when both backends enabled
 5. Uploads new/changed files in priority order:
    - **SMB**: Root/SETTINGS files first, then DATALOG folders (newest first)
    - **Cloud**: DATALOG folders first (newest first), then Root/SETTINGS files (only if DATALOG files uploaded)
 6. **SMB:** Automatically creates directories on remote share
    **Cloud:** Associates data with your SleepHQ account (OAuth only if needed)
 7. Releases SD card after session or time budget exhausted
-8. **Automatic heap recovery** reboots if memory fragmented (seamless fast-boot)
+8. Enters COOLDOWN → LISTENING loop for the next cycle (elective reboots skipped by default; set `MINIMIZE_REBOOTS=false` to restore post-upload reboots)
 9. Saves progress to separate internal state files for each backend (`/littlefs/.upload_state.v2.smb`/`.cloud` + journals)
 
 ### Smart File Tracking
@@ -564,15 +565,18 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 ---
 
 ### Dashboard Tab
-- Live upload state machine status (LISTENING, ACQUIRING, UPLOADING, COOLDOWN, etc.)
+- Live upload state machine status with glowing badges (LISTENING, ACQUIRING, UPLOADING, COOLDOWN, MONITORING, etc.)
 - WiFi signal strength with color coding
-- Upload progress: current file, bytes transferred, folder counts
-- Quick-action buttons: Trigger Upload, Soft Reboot, Reset State
-- Live clock and uptime
+- Upload progress: current file, bytes transferred, folder counts per backend
+- Mode explanation helper with dynamic context (current window state, upload scope)
+- **Danger Zone**: Force Upload and Reset State buttons with risk descriptions
+- Soft Reboot button, live clock, and uptime
 
 ### Logs Tab
-- Live scrolling log feed, polled every 4 seconds from the device's in-memory buffer
-- **⬇ Download Saved Logs** — flushes current logs to flash and downloads `syslog.A.txt` + `syslog.B.txt` as a single `cpap_logs.txt` file (requires `SAVE_LOGS=true`)
+- **Live streaming** log feed via Server-Sent Events (SSE) with automatic reconnect and fallback polling
+- On first visit, backfills full log history from internal flash (streaming progress indicator with KB counter)
+- Automatic reboot detection: re-fetches NAND history when a new boot is detected
+- **⬇ Download All Logs** — flushes current logs to flash and downloads all saved + current logs as a single `cpap_logs.txt` file (requires `SAVE_LOGS=true`)
 - Copy to clipboard / Clear buffer buttons
 - Up to 2000 lines buffered client-side across page reloads
 
@@ -582,14 +586,16 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 - **Save & Reboot** writes the file and reboots the device; browser auto-redirects after 10 seconds
 - Passwords replaced with `***STORED_IN_FLASH***` — leave unchanged to keep existing credentials
 
-### Monitor Tab
-- Real-time SD bus activity graph (pulses from the SD data lines)
-- **Start Monitoring** / **Stop** buttons
-- **⚙ Profiler Wizard** — measures your CPAP machine's SD write gap pattern and recommends a safe `INACTIVITY_SECONDS` value. Requires CPAP on and blowing air; breathe continuously during the 2–3 minute measurement.
+### SD Access Tab
+- Real-time SD bus activity graph (pulses from the SD data lines) with CSV-style activity log
+- **Start Monitoring** / **Stop** buttons (monitoring persists across tab switches with a banner on other tabs)
+- Monitoring is automatically disabled during active uploads
+- **⚙ Profiler Wizard** — measures your CPAP machine’s SD write gap pattern and recommends a safe `INACTIVITY_SECONDS` value. Requires CPAP on and blowing air; breathe continuously during the 2–3 minute measurement.
 
-### Memory Tab
-- Live `Free Heap` and `Max Contiguous Alloc` readings
-- Rolling **2-minute minimum** values (amber) to highlight worst-case memory conditions
+### System Tab
+- Live `Free Heap` and `Max Contiguous Alloc` readings with rolling **2-minute minimum** values
+- **CPU load graphs** (Core 0 and Core 1) with 2-minute history
+- **Heap History** chart: SVG line graph of free heap and max contiguous allocation over time
 - Updates every 3 seconds
 
 ### OTA Tab *(OTA firmware only)*
@@ -689,10 +695,9 @@ In scheduled mode the uploader **only runs during the configured window** (e.g. 
 - View logs for specific API error messages
 
 **Frequent Reboots**
-- Normal: Automatic heap recovery reboots when memory fragmented
-- Check logs for "Heap fragmented" messages
-- Reboots are seamless and preserve upload state
-- If excessive, check for large file uploads or mixed backend usage
+- With the default `MINIMIZE_REBOOTS=true`, elective post-upload reboots are skipped; only mandatory reboots (watchdog, OTA, user-triggered) occur
+- If you see "Heap fragmented" warnings in logs, the device will still operate but you can set `MINIMIZE_REBOOTS=false` to restore post-upload heap recovery reboots
+- Reboots are seamless (fast-boot path) and preserve upload state
 
 **Nothing Uploads**
 - Check if files have actually changed (pre-flight scan skips unchanged files)
@@ -796,8 +801,10 @@ http://<device-ip>/logs
 /littlefs/.upload_state.v2.cloud.log
 /littlefs/.backend_summary.smb
 /littlefs/.backend_summary.cloud
-/littlefs/syslog.A.txt
-/littlefs/syslog.B.txt
+/littlefs/syslog.0.txt
+/littlefs/syslog.1.txt
+/littlefs/syslog.2.txt
+/littlefs/syslog.3.txt
 /littlefs/crash_log.txt
 ```
 

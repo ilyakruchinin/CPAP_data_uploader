@@ -29,10 +29,13 @@ nav button:hover:not(.act){background:#3a5a7e}
 .ba,.bu{background:#1a2a4a;color:#66c0f4;animation:puB 2.5s ease-in-out infinite}
 .bc,.br{background:#3a2a1a;color:#ffaa44;animation:puA 2.5s ease-in-out infinite}
 .bco{background:#1a3a1a;color:#44ff44;animation:puG 2.5s ease-in-out infinite}
+.bm{background:#2a1a3a;color:#bb88ff;animation:puP 2.5s ease-in-out infinite}
 @keyframes puG{0%,100%{box-shadow:0 0 3px rgba(68,255,68,.3)}50%{box-shadow:0 0 10px rgba(68,255,68,.6)}}
 @keyframes puB{0%,100%{box-shadow:0 0 3px rgba(102,192,244,.3)}50%{box-shadow:0 0 10px rgba(102,192,244,.6)}}
 @keyframes puA{0%,100%{box-shadow:0 0 3px rgba(255,170,68,.3)}50%{box-shadow:0 0 10px rgba(255,170,68,.6)}}
-.mode-badge{display:inline-block;background:#1a3a4a;border:1px solid #2a6a8a;border-radius:4px;padding:1px 8px;color:#66c0f4;font-weight:700;font-size:.95em;animation:puB 2.5s ease-in-out infinite}
+@keyframes puP{0%,100%{box-shadow:0 0 3px rgba(187,136,255,.3)}50%{box-shadow:0 0 10px rgba(187,136,255,.6)}}
+@keyframes puM{0%,100%{box-shadow:0 0 4px rgba(255,204,68,.2);border-color:#2a6a8a}50%{box-shadow:0 0 14px rgba(255,204,68,.5);border-color:#ccaa33}}
+.mode-badge{display:inline-block;background:#1a3a4a;border:1px solid #2a6a8a;border-radius:4px;padding:1px 8px;color:#66c0f4;font-weight:700;font-size:.95em;animation:puM 2.5s ease-in-out infinite}
 .prog{background:#2a475e;border-radius:5px;height:8px;margin-top:5px;overflow:hidden}
 .pf{background:linear-gradient(90deg,#66c0f4,#44aaff);height:100%;border-radius:5px;transition:width .5s}
 .actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:7px}
@@ -40,6 +43,8 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bp{background:#66c0f4;color:#0f1923}.bp:hover{background:#88d0ff}
 .bs{background:#2a475e;color:#c7d5e0}.bs:hover{background:#3a5a7e}
 .bd{background:#c0392b;color:#fff}.bd:hover{background:#e04030}
+.bo{background:#aa6622;color:#fff}.bo:hover{background:#cc8833}
+.bg{background:#2f8f57;color:#fff}.bg:hover{background:#3aaa6a}
 .sig-exc{color:#44ff44}.sig-good{color:#88dd44}.sig-fair{color:#ddcc44}.sig-weak{color:#dd8844}.sig-vweak{color:#dd4444}
 .toast{position:fixed;right:12px;bottom:12px;max-width:310px;background:#1b2838;border:1px solid #2a475e;color:#c7d5e0;padding:9px 11px;border-radius:8px;font-size:.82em;box-shadow:0 5px 20px rgba(0,0,0,.4);opacity:0;transform:translateY(7px);transition:opacity .2s,transform .2s;pointer-events:none;z-index:9999}
 .toast.on{opacity:1;transform:translateY(0)}.toast.ok{border-color:#2f8f57}.toast.er{border-color:#c0392b}.toast.warn{border-color:#c07830;color:#f0c070}
@@ -148,12 +153,12 @@ nav button:hover:not(.act){background:#3a5a7e}
 <h2 style="font-size:.8em;text-transform:uppercase;letter-spacing:1px;color:#e04030;margin-bottom:10px;border-bottom:1px solid #8b2020;padding-bottom:6px">Danger Zone</h2>
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
 <div style="flex:1;min-width:200px">
-<button id=btn-up class="btn bd" onclick=triggerUpload() style="background:#aa6622;width:100%;justify-content:center">&#9650; Force Upload</button>
+<button id=btn-up class="btn bo" onclick=triggerUpload()>&#9650; Force Upload</button>
 <div style="border-top:2px solid #aa6622;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45" id=d-danger-upload>The firmware automatically detects when your CPAP finishes therapy and uploads new data. Forcing an upload bypasses this detection and immediately takes control of the SD card, which <strong style="color:#ffaa44">increases the risk of an SD card error</strong> if the CPAP is actively writing <strong style="color:#ffaa44">or attempts to write at any point</strong> during the upload (which may take several minutes). Only use this if automatic uploads have not run for an unusual amount of time and you are confident the CPAP will remain idle.</p>
 </div>
 <div style="flex:1;min-width:200px;text-align:right">
-<button id=btn-rst class="btn bd" onclick=resetState() style="width:100%;justify-content:center">&#9762; Reset State</button>
+<button id=btn-rst class="btn bd" onclick=resetState()>&#9762; Reset State</button>
 <div style="border-top:2px solid #c0392b;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45;text-align:left" id=d-danger-reset>Erases all upload tracking state and reboots the device. Every data folder will be re-scanned and re-uploaded from scratch on the next cycle. Under normal use (CPAP used daily with regular uploads), this is <strong style="color:#ffaa44">never needed</strong>. Only use this if uploads are stuck in a persistent de-sync state &mdash; for example, files appear as uploaded in the dashboard but are missing on your server, or the progress counter is clearly wrong after multiple upload cycles.</p>
 </div>
@@ -167,7 +172,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
 <h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
 <div class=log-btns style="display:flex;gap:6px">
-<button class="btn" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em;background:#2f8f57;color:#fff" title="Download all logs (saved + current) for troubleshooting">&#11015; Download All Logs</button>
+<button class="btn bg" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Download all logs (saved + current) for troubleshooting">&#11015; Download All Logs</button>
 <button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
 <button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
 </div>
@@ -263,7 +268,7 @@ Editing and saving config requires <strong>reading from and writing to the CPAP&
 <div style="background:#1b2838;border:1px solid #66c0f4;border-radius:12px;padding:20px;max-width:550px;width:100%;box-sizing:border-box;box-shadow:0 10px 40px rgba(102,192,244,0.2);margin:auto">
 <h2 style="color:#fff;margin-bottom:10px;font-size:1.4em">&#9881; CPAP Profiler Wizard</h2>
 <p style="font-size:0.9em;color:#c7d5e0;line-height:1.5;margin-bottom:20px">
-This tool will measure your CPAP machine's specific SD card writing behavior to help you tune <strong style="color:#66c0f4">INACTIVITY_SECONDS</strong> (SMART_WAIT).
+This tool will measure your CPAP machine's specific SD card writing behavior to help you tune <strong style="color:#66c0f4">INACTIVITY_SECONDS</strong>.
 </p>
 <div style="background:#0f1923;padding:15px;border-radius:8px;margin-bottom:20px;border:1px solid #2a475e">
 <ol style="font-size:0.85em;color:#8f98a0;padding-left:20px;line-height:1.6">
@@ -351,7 +356,7 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 
 <script>
 var cfg={},monPoll=null,logPoll=null,curTab='dash',monActive=false;
-var heapHistory=[],MAX_HEAP_SAMPLES=60,currentFsmState='';
+var heapHistory=[],MAX_HEAP_SAMPLES=60,currentFsmState='',prevHelpHtml='';
 function tab(t){
   ['dash','logs','cfg','mon','mem','ota'].forEach(function(x){
     document.getElementById(x).classList.toggle('on',x===t);
@@ -377,6 +382,7 @@ function sigLabel(r){if(r>=-65)return 'Excellent';if(r>=-75)return 'Good';if(r>=
 function badgeHtml(st){var s=st.toLowerCase(),c='bi';
   if(s==='listening')c='bl';else if(s==='acquiring'||s==='uploading')c='bu';
   else if(s==='cooldown'||s==='releasing')c='bc';else if(s==='complete')c='bco';
+  else if(s==='monitoring')c='bm';
   return '<span class="badge '+c+'">'+st+'</span>';
 }
 function set(id,html,inner){var el=document.getElementById(id);if(el){if(inner===false)el.innerHTML=html;else el.textContent=html;}}
@@ -442,7 +448,7 @@ function renderStatus(d){
     }
   }
   var helpEl=document.getElementById('d-mode-help');
-  if(helpEl){helpEl.style.display=help?'':'none';helpEl.innerHTML=help;}
+  if(helpEl){helpEl.style.display=help?'':'none';if(help!==prevHelpHtml){prevHelpHtml=help;helpEl.innerHTML=help;}}
   var nx=d.next_upload;
   set('d-next',nx<0?'—':nx===0?'Now':fmtUp(nx));
   set('d-time',d.time||'—');
