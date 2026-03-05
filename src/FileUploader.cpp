@@ -934,7 +934,7 @@ bool FileUploader::uploadDatalogFolderSmb(SDCardManager* sdManager, const String
         if (isRecent) smbStateManager->markFileUploaded(localPath, "", fileSize);
         uploadedCount++;
         g_smbSessionStatus.filesUploaded = uploadedCount;
-        LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), smbBytes);
+        if (g_debugMode) LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), smbBytes);
 #ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
@@ -1115,7 +1115,7 @@ bool FileUploader::uploadDatalogFolderCloud(SDCardManager* sdManager, const Stri
         uploadedCount++;
         cloudDatalogFilesUploaded++;
         g_cloudSessionStatus.filesUploaded = uploadedCount;
-        LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), cloudBytes);
+        if (g_debugMode) LOGF("[FileUploader] Uploaded: %s (%lu bytes)", fileName.c_str(), cloudBytes);
 #ifdef ENABLE_WEBSERVER
         if (webServer) webServer->handleClient();
 #endif
