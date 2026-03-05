@@ -3,7 +3,7 @@
 
 // Auto-served from flash via server->send_P() — zero heap allocation.
 // All rendering is client-side JS. ESP32 only serves this once per page load,
-// then the browser polls /api/status, /api/logs, /api/config, /api/sd-activity.
+// then the browser polls /api/status (includes diagnostics), /api/logs, /api/config, /api/sd-activity.
 
 static const char WEB_UI_HTML[] PROGMEM = R"HTMLEOF(<!DOCTYPE html><html><head>
 <title>CPAP Uploader</title><meta charset=utf-8>
@@ -40,6 +40,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 .pf{background:linear-gradient(90deg,#66c0f4,#44aaff);height:100%;border-radius:5px;transition:width .5s}
 .actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:7px}
 .btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:6px;font-size:.84em;font-weight:600;text-decoration:none;border:none;cursor:pointer;transition:all .2s}
+.btn .ic{display:inline-flex;align-items:center;justify-content:center;width:1.1em;height:1em;line-height:1;font-style:normal}
 .bp{background:#66c0f4;color:#0f1923}.bp:hover{background:#88d0ff}
 .bs{background:#2a475e;color:#c7d5e0}.bs:hover{background:#3a5a7e}
 .bd{background:#c0392b;color:#fff}.bd:hover{background:#e04030}
@@ -153,12 +154,12 @@ nav button:hover:not(.act){background:#3a5a7e}
 <h2 style="font-size:.8em;text-transform:uppercase;letter-spacing:1px;color:#e04030;margin-bottom:10px;border-bottom:1px solid #8b2020;padding-bottom:6px">Danger Zone</h2>
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
 <div style="flex:1;min-width:200px">
-<button id=btn-up class="btn bo" onclick=triggerUpload()>&#9650; Force Upload</button>
+<button id=btn-up class="btn bo" onclick=triggerUpload()><span class=ic>&#9650;</span> Force Upload</button>
 <div style="border-top:2px solid #aa6622;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45" id=d-danger-upload>The firmware automatically detects when your CPAP finishes therapy and uploads new data. Forcing an upload bypasses this detection and immediately takes control of the SD card, which <strong style="color:#ffaa44">increases the risk of an SD card error</strong> if the CPAP is actively writing <strong style="color:#ffaa44">or attempts to write at any point</strong> during the upload (which may take several minutes). Only use this if automatic uploads have not run for an unusual amount of time and you are confident the CPAP will remain idle.</p>
 </div>
 <div style="flex:1;min-width:200px;text-align:right">
-<button id=btn-rst class="btn bd" onclick=resetState()>&#9762; Reset State</button>
+<button id=btn-rst class="btn bd" onclick=resetState()><span class=ic>&#9762;</span> Reset State</button>
 <div style="border-top:2px solid #c0392b;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45;text-align:left" id=d-danger-reset>Erases all upload tracking state and reboots the device. Every data folder will be re-scanned and re-uploaded from scratch on the next cycle. Under normal use (CPAP used daily with regular uploads), this is <strong style="color:#ffaa44">never needed</strong>. Only use this if uploads are stuck in a persistent de-sync state &mdash; for example, files appear as uploaded in the dashboard but are missing on your server, or the progress counter is clearly wrong after multiple upload cycles.</p>
 </div>
@@ -490,9 +491,19 @@ function renderStatus(d){
   seti('d-fst',fst);
   set('sub','Firmware '+d.firmware+' \u00b7 '+fmtUp(d.uptime||0)+' uptime');
   checkMonUploadState();
+  var fhV=d.free_heap||0,maV=d.max_alloc||0;
+  var fh=fhV?Math.round(fhV/1024)+' KB':'\u2014';
+  var ma=maV?Math.round(maV/1024)+' KB':'\u2014';
+  set('d-fh',fh);set('d-ma',ma);
+  set('hd-fh',fh);set('hd-ma',ma);
+  if(fhV){heapHistory.push({fh:fhV,ma:maV});if(heapHistory.length>MAX_HEAP_SAMPLES)heapHistory.shift();}
+  var c0=d.cpu0||0,c1=d.cpu1||0;
+  set('hd-c0',c0+'%');set('hd-c1',c1+'%');
+  cpuHistory.push({c0:c0,c1:c1});if(cpuHistory.length>MAX_HEAP_SAMPLES)cpuHistory.shift();
+  if(curTab==='mem'){updateHeapChart();updateCpuChart();}
 }
 
-var statusTimer=null,diagTimer=null;
+var statusTimer=null;
 function pollStatus(){
   fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     renderStatus(d);
@@ -509,20 +520,6 @@ function pollStatus(){
 function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
 
 var cpuHistory=[];
-function pollDiag(){
-  fetch('/api/diagnostics',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
-    var fhV=d.free_heap||0,maV=d.max_alloc||0;
-    var fh=fhV?Math.round(fhV/1024)+' KB':'\u2014';
-    var ma=maV?Math.round(maV/1024)+' KB':'\u2014';
-    set('d-fh',fh);set('d-ma',ma);
-    set('hd-fh',fh);set('hd-ma',ma);
-    if(fhV){heapHistory.push({fh:fhV,ma:maV});if(heapHistory.length>MAX_HEAP_SAMPLES)heapHistory.shift();}
-    var c0=d.cpu0||0,c1=d.cpu1||0;
-    set('hd-c0',c0+'%');set('hd-c1',c1+'%');
-    cpuHistory.push({c0:c0,c1:c1});if(cpuHistory.length>MAX_HEAP_SAMPLES)cpuHistory.shift();
-    if(curTab==='mem'){updateHeapChart();updateCpuChart();}
-  }).catch(function(){});
-}
 function updateHeapChart(){
   var svg=document.getElementById('heap-svg');
   if(!svg||heapHistory.length<2)return;
@@ -603,8 +600,6 @@ function checkMonUploadState(){
   if(w)w.style.display=busy?'':'none';
   syncMonBtn();
 }
-function startDiagPoll(){if(!diagTimer){pollDiag();diagTimer=setInterval(pollDiag,2000);}}
-startDiagPoll();
 
 var cfgLocked=false;
 function _setCfgLockUI(locked){
@@ -1019,7 +1014,7 @@ function triggerUpload(){
     var mode=d.status==='success'?'ok':d.status==='scheduled'?'warn':'er';
     toast(d.message||'Upload triggered.',mode);
   }).catch(function(){toast('Failed to trigger upload.','er');
-  }).finally(function(){setTimeout(function(){b._busy=0;b.textContent='\u25b2 Force Upload';},700);});
+  }).finally(function(){setTimeout(function(){b._busy=0;b.innerHTML='<span class=ic>&#9650;</span> Force Upload';},700);});
 }
 function softReboot(){
   var b=document.getElementById('btn-srb');
@@ -1036,7 +1031,7 @@ function resetState(){
   fetch('/reset-state',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     toast(d.message||'State reset.',true);
   }).catch(function(){toast('Failed to reset state.',false);
-  }).finally(function(){setTimeout(function(){b._busy=0;b.innerHTML='&#9762; Reset State';},1000);});
+  }).finally(function(){setTimeout(function(){b._busy=0;b.innerHTML='<span class=ic>&#9762;</span> Reset State';},1000);});
 }
 
 var otaBusy=false;

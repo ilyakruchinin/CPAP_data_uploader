@@ -60,7 +60,7 @@ private:
     void handleMonitorStart();
     void handleMonitorStop();
     void handleSdActivity();
-    void handleApiDiagnostics();
+    // handleApiDiagnostics() removed — merged into /api/status
     void handleMonitorPage();
     void handleApiConfigRawGet();   // GET /api/config-raw
     void handleApiConfigRawPost();  // POST /api/config-raw
