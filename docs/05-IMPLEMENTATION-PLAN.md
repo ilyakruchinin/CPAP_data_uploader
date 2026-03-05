@@ -50,8 +50,8 @@ This document outlines the prioritized implementation plan for resolving the unr
 - **Remove Legacy Code**: Strip out the legacy `CPAPMonitor` backend code and the 24-hour graph to eliminate false-positive `[INFO] CPAP monitor disabled (CS_SENSE hardware issue)` errors from the logs.
 
 ### 10. Runtime Heap Diagnostics UI
-- **Lightweight API**: Create an endpoint (`/api/diagnostics`) returning `ESP.getFreeHeap()` and `ESP.getMaxAllocHeap()`.
-- **Client-Side Rendering**: The Web UI will poll this endpoint and render a memory health indicator. No historical memory tracking will be kept in the ESP32's RAM.
+- **Lightweight API**: Heap and CPU diagnostics (`free_heap`, `max_alloc`, `cpu0`, `cpu1`) are merged into the `/api/status` endpoint to reduce polling overhead.
+- **Client-Side Rendering**: The Web UI polls `/api/status` and renders memory health indicators and CPU load graphs. No historical memory tracking is kept in the ESP32's RAM.
 
 ### 11. CPAP Profiler Wizard
 - **Empirical Tuning**: Create a wizard in the Web UI that leverages the `TrafficMonitor` to graph the CPAP's actual writing bursts and cooldown periods. This will guide users in securely setting their `UPLOAD_WINDOW` and `SMART_WAIT_SECONDS` parameters.

@@ -58,7 +58,7 @@ void handleMonitor() {
 - **Heap monitoring**: Free heap and max contiguous heap
 - **Upload progress**: Separate SMB and Cloud progress bars
 - **Network status**: WiFi connectivity and signal strength
-- **Next upload**: Time until next scheduled upload
+- **Next full upload**: Time until next scheduled upload
 
 ### Upload Controls
 - **Manual trigger**: Bypass schedule for immediate upload

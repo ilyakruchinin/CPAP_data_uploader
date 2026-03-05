@@ -36,16 +36,20 @@ This document is for developers who want to build, modify, or contribute to the 
 
 ### Supporting Components
 
-- **Logger** - Circular buffer logging system with web API access
+- **Logger** - Circular buffer logging system (8 KB static BSS) with two-tier emergency logs, SSE streaming, and web API access
 - **WebServer** - Optional web server for development/testing
 
-### Power Management (v0.4.3+)
+### Power Management (v0.4.3+, significantly enhanced in v0.11.1)
 
-The system includes configurable power management to reduce current consumption during active use:
+The system includes aggressive power management optimised for the AirSense 11's constrained SD card power supply:
 
-- **CPU Frequency Scaling** - Configurable from 80-240MHz via `CPU_SPEED_MHZ`
-- **WiFi TX Power Control** - Adjustable transmission power via `WIFI_TX_PWR` (high/mid/low)
-- **WiFi Power Saving** - Modem sleep modes via `WIFI_PWR_SAVING` (none/mid/max)
+- **CPU Frequency** - Default 80 MHz (locked, no DFS transitions). Set `CPU_SPEED_MHZ=160` to re-enable DFS.
+- **Auto Light-Sleep** - CPU sleeps between WiFi DTIM intervals in IDLE/COOLDOWN states (~2-3 mA idle). A PM lock prevents sleep during active states (LISTENING, UPLOADING, etc.).
+- **WiFi TX Power** - Default 5 dBm (`LOW`). Configurable via `WIFI_TX_PWR`.
+- **WiFi Power Saving** - Default MIN_MODEM. Configurable via `WIFI_PWR_SAVING`.
+- **TLS Cipher Optimization** - ChaCha20 and AES-256 disabled at compile time; forces hardware-accelerated AES-128-GCM.
+- **802.11b Disabled** - OFDM only (802.11g/n), eliminating 370 mA peak TX.
+- **Bluetooth Disabled** - Compile-time (`CONFIG_BT_ENABLED=n`) + runtime memory release.
 
 Power settings are applied automatically during startup and maintain full web server functionality. The implementation uses type-safe enums with validation and fallback to safe defaults.
 
@@ -176,9 +180,9 @@ The project works with:
 The system supports configurable power management through `config.txt`:
 
 ```ini
-CPU_SPEED_MHZ = 160        # CPU frequency: 80-240MHz (default: 240)
-WIFI_TX_PWR = mid          # WiFi TX power: "high"/"mid"/"low" (default: "high")  
-WIFI_PWR_SAVING = mid      # WiFi power save: "none"/"mid"/"max" (default: "none")
+CPU_SPEED_MHZ = 80         # CPU frequency: 80-240MHz (default: 80, locks CPU — no DFS)
+WIFI_TX_PWR = low          # WiFi TX power: "low"/"mid"/"high"/"max" (default: "low")  
+WIFI_PWR_SAVING = mid      # WiFi power save: "none"/"mid"/"max" (default: "mid")
 ```
 
 **Implementation Details:**
@@ -405,22 +409,32 @@ Multiple upload backends can be enabled simultaneously. Use `ENDPOINT_TYPE` in `
 **Logging:**
 ```ini
 build_flags =
-    -DLOG_BUFFER_SIZE=32768      ; 32KB log buffer (default: 2KB)
+    -DLOG_BUFFER_SIZE=16384      ; 16KB log buffer (default: 8KB, static BSS)
     -DCORE_DEBUG_LEVEL=3         ; ESP32 core debug level (0-5)
     -DENABLE_VERBOSE_LOGGING     ; Enable debug logs (compiled out by default)
 ```
 
 **Debug Logging:** By default, `LOG_DEBUG()` and `LOG_DEBUGF()` macros are compiled out (zero overhead). Enable with `-DENABLE_VERBOSE_LOGGING` to see detailed diagnostics including progress updates, state details, and troubleshooting information. Saves ~10-15KB flash and ~35-75ms per upload session when disabled.
 
-**Persistent Log Saving:** For advanced debugging, logs can be persisted to internal LittleFS by setting `SAVE_LOGS: true` in `config.txt`. 
+**Persistent Log Saving:** For advanced debugging, logs can be persisted to internal LittleFS by setting `PERSISTENT_LOGS=true` in `config.txt` (legacy aliases `SAVE_LOGS` and `LOG_TO_SD_CARD` are also accepted).
 
 ⚠️ **WARNING: Persistent log saving is for debugging only. Enable it temporarily for troubleshooting, and only when `UPLOAD_MODE` is `"scheduled"` with an upload window outside normal therapy times. Disable it immediately afterward.**
 
 When enabled:
-- Logs are written to `/littlefs/syslog.A.txt` and rotated to `/littlefs/syslog.B.txt`
-- Crash snapshots are written to `/littlefs/crash_log.txt`
-- All log messages (including serial and buffer logs) are also persisted
+- Logs are flushed every **30 seconds** to `/syslog.A.txt` on LittleFS using direct chunk-buffer writes (zero heap allocation)
+- When `syslog.A.txt` exceeds **64 KB**, it is rotated to `/syslog.B.txt`
+- Total capacity: **128 KB** (~30–60 minutes of continuous logging)
 - If file creation fails, log persistence is automatically disabled
+
+**Two-Tier Emergency Logs (always active, regardless of PERSISTENT_LOGS):**
+- **Pre-reboot flush**: Before every `esp_restart()`, the circular buffer is dumped to `/last_reboot_log.txt` on LittleFS
+- **Boot-failure SD dump**: If config loading or WiFi connection fails during `setup()`, the buffer is dumped to `/uploader_error.txt` on the SD card with a header (reason, uptime, firmware version)
+
+**Web GUI Log Endpoints:**
+- `GET /api/logs` — circular buffer (polling fallback)
+- `GET /api/logs/full` — NAND saved logs + previous reboot log + circular buffer (initial backfill)
+- `GET /api/logs/stream` — SSE live push (single client, main-loop driven)
+- `GET /api/logs/saved` — download persisted LittleFS log files as attachment
 
 ### Memory Usage
 
@@ -835,9 +849,11 @@ CPAP machines need regular SD card access. The FSM-based exclusive access model 
 
 ### Why Circular Buffer Logging?
 
-- Fixed memory usage (configurable)
-- No SD card writes (reduces wear)
-- Thread-safe for dual-core ESP32
+- **Static BSS allocation** — 8 KB buffer lives in BSS, not heap (zero fragmentation)
+- No SD card writes during normal operation (reduces wear)
+- Thread-safe for dual-core ESP32 (FreeRTOS mutex)
+- Two-tier emergency log strategy ensures diagnostic data survives boot failures
+- SSE live streaming for real-time web-based debugging
 
 ### Why Feature Flags?
 
@@ -880,8 +896,7 @@ SleepHQ requires an import session workflow (create → upload files → process
 
 ### RAM Usage
 
-- Static allocation: ~47KB
-- Log buffer: 32KB (configurable)
+- Static allocation: ~60KB (includes 8KB log buffer in BSS)
 - SMB buffers: ~32KB during upload
 - Total available: 320KB
 

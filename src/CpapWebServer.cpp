@@ -26,6 +26,10 @@ extern unsigned long stateEnteredAt;
 extern unsigned long cooldownStartedAt;
 extern volatile bool uploadTaskRunning;
 
+// CPU load globals (defined in main.cpp, updated by idle hooks)
+extern volatile uint32_t g_idleCount0, g_idleCount1;
+extern uint32_t g_cpuLoad0, g_cpuLoad1;
+
 namespace {
 static constexpr unsigned long kUploadLogsMinRefreshMs = 3000;
 static constexpr size_t kUploadLogsTailBytes = 2048;
@@ -164,10 +168,7 @@ bool CpapWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleSdActivity();
     });
-    server->on("/api/diagnostics", [this]() {
-        if (this->redirectToIpIfMdnsRequest()) return;
-        this->handleApiDiagnostics();
-    });
+    // /api/diagnostics removed — cpu0/cpu1 merged into /api/status
     server->on("/reset-state", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleResetState();
@@ -181,6 +182,14 @@ bool CpapWebServer::begin() {
     server->on("/api/logs/saved", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleApiLogsSaved();
+    });
+    server->on("/api/logs/full", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsFull();
+    });
+    server->on("/api/logs/stream", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsStream();
     });
     
 #ifdef ENABLE_OTA_UPDATES
@@ -222,8 +231,9 @@ bool CpapWebServer::begin() {
     LOG("[WebServer]   GET  /api/config         - Config snapshot JSON");
     LOG("[WebServer]   GET  /api/logs           - In-memory log buffer (plain text)");
     LOG("[WebServer]   GET  /api/logs/saved     - Download persisted LittleFS logs");
+    LOG("[WebServer]   GET  /api/logs/full      - NAND + circular buffer backfill");
+    LOG("[WebServer]   GET  /api/logs/stream    - SSE live log stream");
     LOG("[WebServer]   GET  /api/sd-activity    - SD bus activity samples JSON");
-    LOG("[WebServer]   GET  /api/diagnostics    - Heap/system diagnostics JSON");
     LOG("[WebServer]   GET  /api/config-raw     - Raw config.txt contents");
     LOG("[WebServer]   POST /api/config-raw     - Save raw config.txt");
     LOG("[WebServer]   GET  /api/monitor-start  - Start SD activity monitoring");
@@ -331,7 +341,7 @@ void CpapWebServer::handleTriggerUpload() {
 
     addCorsHeaders(server);
     server->send(200, "application/json",
-        "{\"status\":\"success\",\"message\":\"Upload triggered. Check serial output for progress.\"}");
+        "{\"status\":\"success\",\"message\":\"Upload triggered. Check the Logs tab for progress.\"}");
 }
 
 // GET /status - JSON status information (Legacy - Removed, use handleApiStatus)
@@ -356,7 +366,7 @@ void CpapWebServer::handleResetState() {
     // Add CORS headers
     addCorsHeaders(server);
     
-    String response = "{\"status\":\"success\",\"message\":\"Upload state will be reset. Check serial output for confirmation.\"}";
+    String response = "{\"status\":\"success\",\"message\":\"Upload state will be reset. Check the Logs tab for confirmation.\"}";
     server->send(200, "application/json", response);
 }
 
@@ -530,9 +540,9 @@ void CpapWebServer::handleApiLogs() {
     server->sendContent("");
 }
 
-// GET /api/logs/saved — flush, then stream syslog.B.txt (older) + syslog.A.txt (newer) from LittleFS
+// GET /api/logs/saved — flush, then download ALL logs (NAND + circular buffer)
 void CpapWebServer::handleApiLogsSaved() {
-    // Flush any unflushed in-memory logs before serving so the download is current
+    // Flush circular buffer to NAND so the download includes everything
     Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
 
     addCorsHeaders(server);
@@ -541,27 +551,65 @@ void CpapWebServer::handleApiLogsSaved() {
     server->send(200, "text/plain; charset=utf-8", " ");
     ChunkedPrint chunked(server);
 
-    const char* files[] = {"/syslog.B.txt", "/syslog.A.txt"};
-    bool anyFound = false;
-    for (int i = 0; i < 2; i++) {
-        File f = LittleFS.open(files[i], FILE_READ);
-        if (!f) continue;
-        anyFound = true;
-        chunked.print("\n=== ");
-        chunked.print(files[i]);
-        chunked.print(" ===\n");
-        uint8_t buf[256];
-        while (f.available()) {
-            size_t n = f.read(buf, sizeof(buf));
-            if (n > 0) chunked.write(buf, n);
-            yield();
-        }
-        f.close();
-    }
-    if (!anyFound) {
-        chunked.print("[No saved log files found — enable SAVE_LOGS=true in config.txt to persist logs]\n");
+    // Stream all syslog rotation files (oldest → newest, chronological)
+    size_t nandBytes = Logger::getInstance().streamSavedLogs(chunked);
+
+    // Append any circular-buffer content not yet flushed (race window)
+    Logger::getInstance().printLogs(chunked);
+
+    if (nandBytes == 0) {
+        chunked.print("[No saved log files found on internal flash]\n");
     }
     server->sendContent("");
+}
+
+// GET /api/logs/full — stream NAND logs + circular buffer (inline, not download)
+// Used by the Web GUI on initial Logs tab open for full historical context.
+// All content is strictly chronological — no out-of-order reboot log insertion.
+void CpapWebServer::handleApiLogsFull() {
+    // Flush circular buffer to NAND so content is current
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+
+    addCorsHeaders(server);
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/plain; charset=utf-8", " ");
+    ChunkedPrint chunked(server);
+
+    // Stream all syslog rotation files (oldest → newest)
+    Logger::getInstance().streamSavedLogs(chunked);
+
+    // Append current circular buffer (captures any content since last flush)
+    Logger::getInstance().printLogs(chunked);
+
+    server->sendContent("");
+}
+
+// GET /api/logs/stream — SSE endpoint for live log push.
+// Takes over the client socket and stores it globally for main-loop push.
+// Declared in CpapWebServer.h; the actual push happens via pushSseLogs() called from loop().
+//
+// Global SSE client state — single client limit is acceptable (one browser tab).
+static WiFiClient g_sseClient;
+static volatile bool g_sseActive = false;
+static volatile uint32_t g_sseLastPushedIndex = 0;
+
+void CpapWebServer::handleApiLogsStream() {
+    // Take over the raw client socket from WebServer
+    g_sseClient = server->client();
+
+    // Send SSE headers manually — do NOT call server->send() after this
+    g_sseClient.print("HTTP/1.1 200 OK\r\n"
+                       "Content-Type: text/event-stream\r\n"
+                       "Cache-Control: no-cache\r\n"
+                       "Connection: keep-alive\r\n"
+                       "Access-Control-Allow-Origin: *\r\n"
+                       "\r\n");
+
+    // Snapshot current head so we only push NEW logs going forward
+    g_sseLastPushedIndex = Logger::getInstance().getHeadIndex();
+    g_sseActive = true;
+
+    // Return without calling server->send() — we own the socket now
 }
 
 // GET /config - serve SPA
@@ -618,25 +666,40 @@ void CpapWebServer::updateStatusSnapshot() {
         foldersPending = stateManager->getPendingFoldersCount();
         foldersTotal   = foldersDone + stateManager->getIncompleteFoldersCount();
     }
-    long nextUp = -1; bool timeSynced = false;
+    long nextUp = -1; bool timeSynced = false; bool inWindow = false;
     if (scheduleManager) {
         nextUp = scheduleManager->getSecondsUntilNextUpload();
         timeSynced = scheduleManager->isTimeSynced();
+        inWindow = scheduleManager->isInUploadWindow();
     }
-    // Live per-file progress from the upload task
+    // CPU load computation (moved from handleApiDiagnostics — merged into status)
+    static uint32_t prevIdle0 = 0, prevIdle1 = 0;
+    static unsigned long prevCpuMs = 0;
+    unsigned long nowMs = millis();
+    if (prevCpuMs > 0 && (nowMs - prevCpuMs) >= 500) {
+        uint32_t d0 = g_idleCount0 - prevIdle0;
+        uint32_t d1 = g_idleCount1 - prevIdle1;
+        uint32_t maxD = (d0 > d1) ? d0 : d1;
+        if (maxD > 0) {
+            g_cpuLoad0 = 100 - (uint32_t)((uint64_t)d0 * 100 / maxD);
+            g_cpuLoad1 = 100 - (uint32_t)((uint64_t)d1 * 100 / maxD);
+        }
+    }
+    prevIdle0 = g_idleCount0;
+    prevIdle1 = g_idleCount1;
+    prevCpuMs = nowMs;
+
+    // Live per-file progress from the upload task — check both session statuses
+    // since the phased orchestrator runs CLOUD then SMB within one session.
     char liveFolder[33] = "";
     int  liveUp = 0, liveTotal = 0; bool liveActive = false;
-    if (g_activeBackendStatus.valid &&
-        strncmp(g_activeBackendStatus.name, "SMB", 3) == 0 &&
-        g_smbSessionStatus.uploadActive) {
-        strncpy(liveFolder, (const char*)g_smbSessionStatus.currentFolder, sizeof(liveFolder) - 1);
-        liveUp = g_smbSessionStatus.filesUploaded; liveTotal = g_smbSessionStatus.filesTotal;
-        liveActive = true;
-    } else if (g_activeBackendStatus.valid &&
-               strncmp(g_activeBackendStatus.name, "CLOUD", 5) == 0 &&
-               g_cloudSessionStatus.uploadActive) {
+    if (g_cloudSessionStatus.uploadActive) {
         strncpy(liveFolder, (const char*)g_cloudSessionStatus.currentFolder, sizeof(liveFolder) - 1);
         liveUp = g_cloudSessionStatus.filesUploaded; liveTotal = g_cloudSessionStatus.filesTotal;
+        liveActive = true;
+    } else if (g_smbSessionStatus.uploadActive) {
+        strncpy(liveFolder, (const char*)g_smbSessionStatus.currentFolder, sizeof(liveFolder) - 1);
+        liveUp = g_smbSessionStatus.filesUploaded; liveTotal = g_smbSessionStatus.filesTotal;
         liveActive = true;
     }
 
@@ -649,7 +712,9 @@ void CpapWebServer::updateStatusSnapshot() {
         ",\"active_backend\":\"%s\",\"folders_done\":%d,\"folders_total\":%d,\"folders_pending\":%d"
         ",\"next_backend\":\"%s\",\"next_done\":%d,\"next_total\":%d,\"next_empty\":%d,\"next_ts\":%lu"
         ",\"next_upload\":%ld"
+        ",\"in_window\":%s"
         ",\"live_active\":%s,\"live_folder\":\"%s\",\"live_up\":%d,\"live_total\":%d"
+        ",\"cpu0\":%u,\"cpu1\":%u"
         ",\"firmware\":\"%s\"}",
         st, inStateSec, upSec,
         timeBuf, timeSynced ? "true" : "false",
@@ -660,7 +725,9 @@ void CpapWebServer::updateStatusSnapshot() {
         g_inactiveBackendStatus.foldersTotal, g_inactiveBackendStatus.foldersEmpty,
         (unsigned long)g_inactiveBackendStatus.sessionStartTs,
         nextUp,
+        inWindow ? "true" : "false",
         liveActive ? "true" : "false", liveFolder, liveUp, liveTotal,
+        (unsigned)g_cpuLoad0, (unsigned)g_cpuLoad1,
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webStatusBuf, buf, n + 1);
@@ -681,7 +748,7 @@ void CpapWebServer::initConfigSnapshot() {
         ",\"upload_start_hour\":%d,\"upload_end_hour\":%d"
         ",\"inactivity_seconds\":%d"
         ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
-        ",\"gmt_offset_hours\":%d,\"max_days\":%d"
+        ",\"gmt_offset_hours\":%d,\"max_days\":%d,\"recent_folder_days\":%d"
         ",\"cloud_configured\":%s"
         ",\"firmware\":\"%s\"}",
         config->getWifiSSID().c_str(),
@@ -692,7 +759,7 @@ void CpapWebServer::initConfigSnapshot() {
         config->getUploadStartHour(), config->getUploadEndHour(),
         config->getInactivitySeconds(),
         config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),
-        config->getGmtOffsetHours(), config->getMaxDays(),
+        config->getGmtOffsetHours(), config->getMaxDays(), config->getRecentFolderDays(),
         hasCloud ? "true" : "false",
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
@@ -1340,21 +1407,97 @@ void CpapWebServer::handleSdActivity() {
     server->send(200, "application/json", json);
 }
 
-void CpapWebServer::handleApiDiagnostics() {
-    addCorsHeaders(server);
-    server->sendHeader("Cache-Control", "no-store");
-    
-    char json[128];
-    snprintf(json, sizeof(json), 
-             "{\"free_heap\":%u,\"max_alloc\":%u}", 
-             (unsigned)ESP.getFreeHeap(), 
-             (unsigned)ESP.getMaxAllocHeap());
-             
-    server->send(200, "application/json", json);
-}
+// handleApiDiagnostics() removed — cpu0/cpu1 merged into /api/status
 
 void CpapWebServer::handleMonitorPage() {
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server->sendHeader("Connection", "close");
     server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
+}
+
+// ============================================================================
+// SSE Log Push — call from main loop every ~100-200ms
+// ============================================================================
+void pushSseLogs() {
+    if (!g_sseActive) return;
+
+    if (!g_sseClient.connected()) {
+        g_sseActive = false;
+        return;
+    }
+
+    Logger& logger = Logger::getInstance();
+    uint32_t currentHead = logger.getHeadIndex();
+
+    if (currentHead == g_sseLastPushedIndex) return;  // nothing new
+
+    // Read new bytes from circular buffer and push as SSE data events.
+    // We read under the logger's mutex via printLogsTail-style approach,
+    // but simplified: we know exactly the range [g_sseLastPushedIndex..currentHead).
+    uint32_t newBytes = currentHead - g_sseLastPushedIndex;
+    if (newBytes > LOG_BUFFER_SIZE) {
+        // Buffer wrapped — we lost some, start from current tail
+        newBytes = LOG_BUFFER_SIZE;
+        g_sseLastPushedIndex = currentHead - LOG_BUFFER_SIZE;
+    }
+
+    // Cap per-push to avoid blocking the loop too long
+    if (newBytes > 2048) newBytes = 2048;
+
+    // Build SSE "data:" lines from the buffer content.
+    // SSE format: "data: <line>\n\n" for each line.
+    // We'll batch into a single "data:" block for efficiency.
+    char chunk[320];  // "data: " + up to ~300 chars + "\n\n"
+    size_t chunkPos = 0;
+
+    // Write "data: " prefix
+    memcpy(chunk, "data: ", 6);
+    chunkPos = 6;
+
+    for (uint32_t i = 0; i < newBytes; i++) {
+        size_t physicalPos = (g_sseLastPushedIndex + i) % LOG_BUFFER_SIZE;
+        char c = Logger::s_logBuffer[physicalPos];
+
+        if (c == '\n') {
+            // End this SSE event and start a new one
+            chunk[chunkPos++] = '\n';
+            chunk[chunkPos++] = '\n';
+            // Flush chunk
+            if (g_sseClient.connected()) {
+                g_sseClient.write((const uint8_t*)chunk, chunkPos);
+            } else {
+                g_sseActive = false;
+                break;
+            }
+            // Start next "data: " prefix
+            memcpy(chunk, "data: ", 6);
+            chunkPos = 6;
+        } else {
+            chunk[chunkPos++] = c;
+            // Flush if chunk is getting full (leave room for \n\n)
+            if (chunkPos >= sizeof(chunk) - 3) {
+                chunk[chunkPos++] = '\n';
+                chunk[chunkPos++] = '\n';
+                if (g_sseClient.connected()) {
+                    g_sseClient.write((const uint8_t*)chunk, chunkPos);
+                } else {
+                    g_sseActive = false;
+                    break;
+                }
+                memcpy(chunk, "data: ", 6);
+                chunkPos = 6;
+            }
+        }
+    }
+
+    // Flush any remaining partial data
+    if (g_sseActive && chunkPos > 6) {
+        chunk[chunkPos++] = '\n';
+        chunk[chunkPos++] = '\n';
+        if (g_sseClient.connected()) {
+            g_sseClient.write((const uint8_t*)chunk, chunkPos);
+        }
+    }
+
+    g_sseLastPushedIndex += newBytes;
 }

@@ -19,7 +19,7 @@ class SDCardManager;
 
 // Compile-time configuration for circular buffer size
 #ifndef LOG_BUFFER_SIZE
-#define LOG_BUFFER_SIZE 2048  // Default: 2KB
+#define LOG_BUFFER_SIZE 8192  // Default: 8KB
 #endif
 
 // Validate buffer size at compile time
@@ -39,7 +39,7 @@ static_assert(LOG_BUFFER_SIZE > 0, "LOG_BUFFER_SIZE must be greater than zero");
  * - Configurable buffer size via LOG_BUFFER_SIZE preprocessor definition
  * 
  * Memory Impact:
- * - Buffer: LOG_BUFFER_SIZE bytes (default 2KB)
+ * - Buffer: LOG_BUFFER_SIZE bytes (default 8KB, static BSS — not heap)
  * - Overhead: ~32 bytes for state + mutex handle
  * 
  * Configuration:
@@ -119,52 +119,89 @@ public:
      */
     size_t printLogsTail(Print& output, size_t maxBytes);
 
+    // ── Persistent log rotation constants ──
+    static constexpr int    SYSLOG_MAX_FILES = 4;       // syslog.0.txt .. syslog.3.txt
+    static constexpr size_t SYSLOG_MAX_FILE_SIZE = 32768; // 32 KB per file
+    // Total NAND budget: 4 × 32 KB = 128 KB
+
     /**
-     * Enable or disable persistent log saving.
-     * 
-     * Logs are saved to the provided filesystem (LittleFS in production) and
-     * should only be enabled for troubleshooting.
-     * 
-     * When enabled, logs are flushed periodically (every 10 seconds)
-     * by calling dumpSavedLogsPeriodic() from the main loop.
-     * 
+     * Enable persistent log saving with multi-file rotation.
+     * Should be called early in setup() with &LittleFS.
+     * Writes a boot separator and migrates legacy log files on first call.
+     *
      * @param enable True to enable log saving, false to disable
      * @param logFS Pointer to filesystem used for persisted logs (required when enabling)
      */
     void enableLogSaving(bool enable, fs::FS* logFS = nullptr);
     
     /**
-     * Periodic persisted-log flush (call from main loop every 10 seconds).
-     * Only flushes if there are new logs since last dump.
-     * 
+     * Periodic persisted-log flush — call from main loop every ~10 seconds.
+     * Appends new circular-buffer content to syslog.0.txt.
+     * Rotates files when syslog.0.txt exceeds SYSLOG_MAX_FILE_SIZE.
+     *
      * @param sdManager Unused compatibility parameter
      * @return true if logs were flushed, false if skipped or failed
      */
     bool dumpSavedLogsPeriodic(class SDCardManager* sdManager);
 
     /**
-     * Save current logs to persistent storage for critical failures.
-     * 
-     * @param reason Description of why logs are being saved (e.g., "wifi_connection_failed")
-     * @return true if logs were successfully saved, false otherwise
+     * Stream all saved log files (oldest first) to a Print destination.
+     * Used by web endpoints to serve complete log history.
+     * Streams syslog.{N-1} → syslog.0 in chronological order.
+     *
+     * @param output The Print destination to write logs to
+     * @return Number of bytes written
+     */
+    size_t streamSavedLogs(Print& output);
+
+    /**
+     * Legacy compatibility — flushes to syslog rotation.
+     * @param reason Unused (kept for API compatibility)
      */
     bool dumpSavedLogs(const String& reason);
 
     /**
      * Dumps the current log buffer directly to a file on the provided filesystem.
-     * This is useful for emergency boot failures (e.g. bad config) where the SD card
-     * is the only way for the user to retrieve the failure reason.
+     * Used for emergency boot failures (e.g. bad config, WiFi failure) where the
+     * SD card is the only way for the user to retrieve the failure reason.
+     * Appends with a header (reason, uptime, firmware version) and uses chunk
+     * writes for SD card performance. Caps file at 64 KB.
      * @param fs The filesystem to write to (typically SD_MMC)
      * @param filename Absolute path to the file (e.g. "/uploader_error.txt")
+     * @param reason Human-readable reason for the dump (e.g. "Config load failure")
      * @return true if successful
      */
-    bool dumpToSD(fs::FS& fs, const char* filename);
+    bool dumpToSD(fs::FS& fs, const char* filename, const char* reason = "Unknown");
+
+    /**
+     * Flush all pending circular-buffer content to NAND before reboot.
+     * Simply calls dumpSavedLogsPeriodic() — no separate file.
+     * @return true if successful
+     */
+    bool flushBeforeReboot();
+
+    /**
+     * Check if /uploader_error.txt exists on the given filesystem.
+     * If found, logs a warning so the user knows a prior boot failed.
+     * @param fs The filesystem to check (typically SD_MMC)
+     * @param filename The file to check for
+     */
+    void checkPreviousBootError(fs::FS& fs, const char* filename = "/uploader_error.txt");
+
+    /**
+     * Get current head index (monotonic write counter).
+     * Used by SSE stream to track what has already been pushed.
+     */
+    uint32_t getHeadIndex() const { return headIndex; }
 
     /**
      * Check if logger is properly initialized
      * Returns false if memory allocation or mutex creation failed
      */
     bool isInitialized() const { return initialized; }
+
+    // Static circular buffer — public for zero-copy SSE push (pushSseLogs)
+    static char s_logBuffer[LOG_BUFFER_SIZE];
 
 protected:
     // Protected constructor for testing - allows inheritance in test code
@@ -209,8 +246,7 @@ protected:
      */
     virtual void trackLostBytes(uint32_t bytesLost);
 
-    // Circular buffer storage
-    char* buffer;
+    char* buffer;          // Points to s_logBuffer (kept for compatibility)
     size_t bufferSize;
 
     // Monotonic 32-bit indices for circular buffer management

@@ -64,12 +64,14 @@ private:
     void setupTLS();
     void resetTLS();
     void configureTLS();
+    void parseHostPort(char* host, size_t hostLen, int& port);
 
 public:
     SleepHQUploader(Config* cfg);
     ~SleepHQUploader();
     
     bool begin();
+    bool preWarmTLS();  // Pre-allocate TLS buffers early (before SD mount) to reduce fragmentation
     bool upload(const String& localPath, const String& remotePath, 
                 fs::FS &sd, unsigned long& bytesTransferred, String& fileChecksum);
     void end();

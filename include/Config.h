@@ -6,15 +6,16 @@
 
 // Power management enums
 enum class WifiTxPower {
-    POWER_HIGH,
-    POWER_MID,
-    POWER_LOW
+    POWER_LOW,     // 5.0 dBm — minimum practical, router must be very close
+    POWER_MID,     // 8.5 dBm — default, good for typical bedroom placement
+    POWER_HIGH,    // 11.0 dBm — router in adjacent room or through walls
+    POWER_MAX      // 19.5 dBm — maximum power, only if other settings fail
 };
 
 enum class WifiPowerSaving {
-    SAVE_NONE,
-    SAVE_MID,
-    SAVE_MAX
+    SAVE_NONE,     // No power saving — maximum responsiveness, highest power
+    SAVE_MID,      // WIFI_PS_MIN_MODEM — default, wakes every DTIM for broadcasts
+    SAVE_MAX       // WIFI_PS_MAX_MODEM — maximum WiFi savings, may miss mDNS queries
 };
 
 // Conditionally include Preferences for ESP32 or use mock for testing
@@ -61,6 +62,7 @@ private:
     int exclusiveAccessMinutes;    // X: max minutes of exclusive SD access
     int cooldownMinutes;           // Y: minutes to release SD between upload cycles
     bool enableSdCmd0Reset;        // Whether to force a CMD0 reset when releasing SD card
+    bool minimizeReboots;           // Skip elective reboots between upload sessions
     
     // Cached endpoint type flags (computed once during loadFromSD)
     bool _hasSmbEndpoint;
@@ -146,6 +148,7 @@ public:
     int getExclusiveAccessMinutes() const;
     int getCooldownMinutes() const;
     bool getEnableSdCmd0Reset() const;
+    bool getMinimizeReboots() const;
     bool isSmartMode() const;
     
     // Power management getters

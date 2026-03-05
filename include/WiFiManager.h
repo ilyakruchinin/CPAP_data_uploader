@@ -32,6 +32,7 @@ public:
     void setHighPerformanceMode();    // Disable power save for uploads
     void setPowerSaveMode();          // Enable power save for idle periods
     void setMaxPowerSave();          // Maximum power savings
+    void applyTxPowerEarly(WifiTxPower txPower);  // Set TX power before WiFi.begin()
     void applyPowerSettings(WifiTxPower txPower, WifiPowerSaving powerSaving);  // Apply config settings
 };
 

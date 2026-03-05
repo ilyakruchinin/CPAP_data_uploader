@@ -1,6 +1,11 @@
 #include <Arduino.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
+#include <esp_bt.h>
+#include <esp_pm.h>
+#include <esp_sleep.h>
+#include <driver/gpio.h>
+#include <esp_freertos_hooks.h>
 #include <Preferences.h>
 #include <LittleFS.h>
 
@@ -73,6 +78,28 @@ TaskHandle_t uploadTaskHandle = nullptr;
 volatile unsigned long g_uploadHeartbeat = 0;
 const unsigned long UPLOAD_WATCHDOG_TIMEOUT_MS = 120000;  // 2 minutes
 
+// Power management lock — held in active states to prevent auto light-sleep.
+// Released in IDLE and COOLDOWN so the CPU can enter light-sleep between DTIM intervals.
+esp_pm_lock_handle_t g_pmLock = nullptr;
+
+// ── CPU load measurement via FreeRTOS idle hooks ──
+// Idle hooks increment counters every time the idle task runs on each core.
+// The diagnostics endpoint samples these counters to compute load %.
+volatile uint32_t g_idleCount0 = 0, g_idleCount1 = 0;
+uint32_t g_cpuLoad0 = 0, g_cpuLoad1 = 0;  // 0-100 percent, updated every 2s
+static bool _idleHook0() { g_idleCount0++; return true; }
+static bool _idleHook1() { g_idleCount1++; return true; }
+
+// ── Reboot reason helper ──
+// Stores a human-readable reason in NVS before esp_restart() so the next
+// boot can log it clearly.  The reason is read and cleared early in setup().
+static void setRebootReason(const char* reason) {
+    Preferences p;
+    p.begin("cpap_flags", false);
+    p.putString("reboot_why", reason);
+    p.end();
+}
+
 struct UploadTaskParams {
     FileUploader* uploader;
     SDCardManager* sdManager;
@@ -91,7 +118,7 @@ unsigned long lastSdCardRetry = 0;
 
 // Persistent log flush timing
 unsigned long lastLogFlushTime = 0;
-const unsigned long LOG_FLUSH_INTERVAL_MS = 5 * 1000;   // 5 seconds
+const unsigned long LOG_FLUSH_INTERVAL_MS = 10 * 1000;  // 10 seconds
 
 // Runtime debug mode: set from config DEBUG=true after config load.
 // Gates [res fh= ma= fd=] heap suffix on all log lines and verbose pre-flight output.
@@ -113,6 +140,23 @@ extern volatile bool g_abortUploadFlag;
 // ============================================================================
 void transitionTo(UploadState newState) {
     LOGF("[FSM] %s -> %s", getStateName(currentState), getStateName(newState));
+    
+    // ── POWER: Manage PM lock for auto light-sleep ──
+    // Hold the lock in active states (CPU must stay awake for PCNT, SD I/O, network).
+    // Release in IDLE and COOLDOWN so auto light-sleep can engage between DTIM intervals.
+    if (g_pmLock) {
+        bool newStateIsLowPower = (newState == UploadState::IDLE || newState == UploadState::COOLDOWN);
+        bool oldStateIsLowPower = (currentState == UploadState::IDLE || currentState == UploadState::COOLDOWN);
+        
+        if (newStateIsLowPower && !oldStateIsLowPower) {
+            esp_pm_lock_release(g_pmLock);
+            LOG_DEBUG("[POWER] PM lock released — light-sleep enabled");
+        } else if (!newStateIsLowPower && oldStateIsLowPower) {
+            esp_pm_lock_acquire(g_pmLock);
+            LOG_DEBUG("[POWER] PM lock acquired — light-sleep inhibited");
+        }
+    }
+    
     currentState = newState;
     stateEnteredAt = millis();
 }
@@ -158,6 +202,23 @@ const char* getResetReasonString(esp_reset_reason_t reason) {
 // Setup Function
 // ============================================================================
 void setup() {
+    // ── POWER: Immediate CPU throttle ──
+    // Reduce from 240 MHz to 80 MHz before anything else runs.
+    // Saves ~30-40 mA during the entire 20+ second boot sequence.
+    // 80 MHz is the minimum for WiFi and sufficient for all boot I/O.
+    setCpuFrequencyMhz(80);
+    
+    // ── POWER: Release Bluetooth memory ──
+    // Firmware is WiFi-only. Release BT controller memory (~28 KB DRAM).
+    // Note: CONFIG_BT_ENABLED=n in sdkconfig does NOT strip BT from the Arduino
+    // framework's precompiled libraries. This runtime call is our only effective
+    // mechanism — it frees the BTDM controller's reserved DRAM regions.
+    uint32_t btHeapBefore = ESP.getFreeHeap();
+    uint32_t btMaxAllocBefore = ESP.getMaxAllocHeap();
+    esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+    uint32_t btHeapAfter = ESP.getFreeHeap();
+    uint32_t btMaxAllocAfter = ESP.getMaxAllocHeap();
+    
     // Initialize serial port
     Serial.begin(115200);
     
@@ -171,6 +232,9 @@ void setup() {
     delay(1000);
     LOG("\n\n=== CPAP Data Auto-Uploader ===");
     LOGF("Firmware Version: %s", FIRMWARE_VERSION);
+    LOGF("BT memory release: free %u->%u (+%u), max_alloc %u->%u",
+         btHeapBefore, btHeapAfter, btHeapAfter - btHeapBefore,
+         btMaxAllocBefore, btMaxAllocAfter);
     LOGF("Build Info: %s", BUILD_INFO);
     LOGF("Build Time: %s", FIRMWARE_BUILD_TIME);
     
@@ -178,6 +242,10 @@ void setup() {
     esp_reset_reason_t resetReason = esp_reset_reason();
     LOG_INFOF("Reset reason: %s", getResetReasonString(resetReason));
     
+    // Register CPU idle hooks for load measurement (before any blocking waits)
+    esp_register_freertos_idle_hook_for_cpu(_idleHook0, 0);
+    esp_register_freertos_idle_hook_for_cpu(_idleHook1, 1);
+
     // Check for power-related issues
     if (resetReason == ESP_RST_BROWNOUT) {
         LOG_ERROR("WARNING: System reset due to brown-out (insufficient power supply), this could be caused by:");
@@ -255,6 +323,13 @@ void setup() {
         Preferences resetPrefs;
         resetPrefs.begin("cpap_flags", false);
         
+        // Display and clear stored reboot reason (set by setRebootReason() before esp_restart)
+        String rebootWhy = resetPrefs.getString("reboot_why", "");
+        if (rebootWhy.length() > 0) {
+            LOGF("[BOOT] Reboot reason: %s", rebootWhy.c_str());
+            resetPrefs.remove("reboot_why");
+        }
+
         // Check if software watchdog killed the upload task last boot
         bool watchdogKill = resetPrefs.getBool("watchdog_kill", false);
         if (watchdogKill) {
@@ -306,7 +381,7 @@ void setup() {
         // Without config, we have no WiFi and no Web UI. We must dump the reason
         // directly to the SD card so the user can read it on their PC.
         LOG_ERROR("FATAL ERROR: System halted due to config failure. Please check config.txt.");
-        Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt");
+        Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt", "Config load failure");
         
         sdManager.releaseControl();
         
@@ -330,12 +405,15 @@ void setup() {
     LOG_DEBUGF("WiFi SSID: %s", config.getWifiSSID().c_str());
     LOG_DEBUGF("Endpoint: %s", config.getEndpoint().c_str());
 
-    // Configure internal logging if enabled (debugging only)
-    if (config.getSaveLogs()) {
-        LOG_WARN("Enabling persistent logging - DEBUGGING ONLY");
-        LOG_WARN("Logs will be dumped every 10 seconds to internal flash");
-        Logger::getInstance().enableLogSaving(true, &LittleFS);
-    }
+    // Check if a previous boot left an emergency error log on the SD card
+    Logger::getInstance().checkPreviousBootError(sdManager.getFS());
+
+    // Always enable persistent logging with multi-file rotation (syslog.0-3.txt)
+    // First call also migrates legacy log files (syslog.A/B, last_reboot_log, etc.)
+    Logger::getInstance().enableLogSaving(true, &LittleFS);
+    // Flush immediately so boot logs (reset reason, Smart Wait, config load)
+    // are captured to NAND before upload activity overwrites the 8KB buffer.
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
 
     // Release SD card back to CPAP machine
     sdManager.releaseControl();
@@ -343,13 +421,18 @@ void setup() {
     // Apply power management settings from config
     LOG("Applying power management settings...");
     
-    // Set CPU frequency
+    // Update CPU frequency from config (boot default is 80 MHz, set in early setup)
     int targetCpuMhz = config.getCpuSpeedMhz();
-    setCpuFrequencyMhz(targetCpuMhz);
-    LOGF("CPU frequency set to %dMHz", getCpuFrequencyMhz());
+    if (targetCpuMhz != getCpuFrequencyMhz()) {
+        setCpuFrequencyMhz(targetCpuMhz);
+    }
+    LOGF("CPU frequency: %dMHz", getCpuFrequencyMhz());
 
     // Setup WiFi event handlers for logging
     wifiManager.setupEventHandlers();
+
+    // Apply TX power BEFORE WiFi.begin() to prevent full-power spikes during association
+    wifiManager.applyTxPowerEarly(config.getWifiTxPower());
 
     // Initialize WiFi in station mode
     if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
@@ -361,7 +444,7 @@ void setup() {
         // We re-take the SD card just to dump the log buffer.
         if (sdManager.takeControl()) {
             LOG_ERROR("FATAL ERROR: System halted due to WiFi connection failure.");
-            Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt");
+            Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt", "WiFi connection failure");
             sdManager.releaseControl();
         }
         
@@ -374,25 +457,65 @@ void setup() {
     // Apply WiFi power settings after connection is established
     wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
     LOG("WiFi power management settings applied");
-
-    // Initialize uploader
-    uploader = new FileUploader(&config, &wifiManager);
     
-    // Take control of SD card to initialize uploader components
-    LOG("Initializing uploader...");
-    if (sdManager.takeControl()) {
-        if (!uploader->begin(sdManager.getFS())) {
-            LOG_ERROR("Failed to initialize uploader");
-            sdManager.releaseControl();
-            return;
+    // ── POWER: Configure Dynamic Frequency Scaling (DFS) + Auto Light-Sleep ──
+    // With CONFIG_PM_ENABLE=y in sdkconfig, the CPU can automatically scale
+    // between min and max frequency when tasks are idle. The WiFi driver holds
+    // a PM lock during active operations, ensuring full speed when needed.
+    //
+    // When CPU_SPEED_MHZ=80 (default), max==min==80 → DFS is effectively
+    // disabled, eliminating PLL relock transients that stress the power supply.
+    // Users on non-constrained hardware can set CPU_SPEED_MHZ=160 to re-enable DFS.
+    //
+    // Auto light-sleep allows the CPU to sleep between WiFi DTIM intervals,
+    // reducing idle current from ~20 mA to ~2-3 mA. A PM lock held in active
+    // FSM states prevents sleep during PCNT counting, SD I/O, and uploads.
+    esp_pm_config_esp32_t pm_config = {
+        .max_freq_mhz = targetCpuMhz,  // Respects CPU_SPEED_MHZ config (default 80)
+        .min_freq_mhz = 80,            // Floor at 80 MHz (WiFi PHY minimum)
+        .light_sleep_enable = true      // Auto light-sleep in IDLE/COOLDOWN states
+    };
+    esp_err_t pm_err = esp_pm_configure(&pm_config);
+    if (pm_err == ESP_OK) {
+        if (targetCpuMhz == 80) {
+            LOG("Power management: CPU locked at 80MHz (no DFS), auto light-sleep enabled");
+        } else {
+            LOGF("Power management: DFS enabled (80-%dMHz), auto light-sleep enabled", targetCpuMhz);
         }
-        sdManager.releaseControl();
-        g_heapRecoveryBoot = false;  // consumed — only skip delays on this one boot
-        LOG("Uploader initialized successfully");
     } else {
-        LOG_ERROR("Failed to take SD card control for uploader initialization");
+        LOGF("PM configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
+    }
+    
+    // ── POWER: Configure GPIO wakeup for auto light-sleep ──
+    // GPIO 33 (CS_SENSE) is an RTC GPIO that detects CPAP SD card bus activity.
+    // When the CPU is in light-sleep, a CS_SENSE edge wakes it immediately.
+    gpio_wakeup_enable((gpio_num_t)CS_SENSE, GPIO_INTR_LOW_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
+    LOG_DEBUG("GPIO wakeup configured on CS_SENSE (GPIO 33)");
+    
+    // ── POWER: Create PM lock for active FSM states ──
+    // Acquired in LISTENING/ACQUIRING/UPLOADING/RELEASING/MONITORING/COMPLETE
+    // to prevent light-sleep while PCNT counting, SD I/O, or network I/O is active.
+    // Released in IDLE and COOLDOWN to allow light-sleep.
+    if (esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "fsm_active", &g_pmLock) == ESP_OK) {
+        // Start with lock acquired — initial state (LISTENING or IDLE) will
+        // release it via transitionTo() if entering a low-power state.
+        esp_pm_lock_acquire(g_pmLock);
+        LOG_DEBUG("PM lock created and acquired for active states");
+    } else {
+        LOG_WARN("Failed to create PM lock — light-sleep management unavailable");
+        g_pmLock = nullptr;
+    }
+
+    // Initialize uploader (no SD card needed — state is on LittleFS)
+    uploader = new FileUploader(&config, &wifiManager);
+    LOG("Initializing uploader...");
+    if (!uploader->begin()) {
+        LOG_ERROR("Failed to initialize uploader");
         return;
     }
+    g_heapRecoveryBoot = false;  // consumed — only skip delays on this one boot
+    LOG("Uploader initialized successfully");
     
 #ifdef ENABLE_OTA_UPDATES
     // Initialize OTA manager
@@ -534,24 +657,47 @@ void handleListening() {
 }
 
 void handleAcquiring() {
-    if (sdManager.takeControl()) {
-        LOG("[FSM] SD card control acquired");
-        transitionTo(UploadState::UPLOADING);
-    } else {
-        LOG_WARN("[FSM] Failed to acquire SD card, releasing to cooldown");
-        transitionTo(UploadState::RELEASING);
-    }
+    // The upload task now owns the full lifecycle:
+    //   SD mount → pre-flight scan → phased upload → SD release
+    // Task stack is allocated at high max_alloc (~73KB).  TLS connects
+    // on-demand only when pre-flight confirms cloud work (asymmetric
+    // mbedTLS buffers fit at post-SD-mount heap levels).
+    transitionTo(UploadState::UPLOADING);
 }
 
 // FreeRTOS task function — runs on Core 0 so main loop (Core 1) stays responsive
+// Owns the full session lifecycle: SD mount → pre-flight → upload → SD release
 void uploadTaskFunction(void* pvParameters) {
     UploadTaskParams* params = (UploadTaskParams*)pvParameters;
     
     g_uploadHeartbeat = millis();
     
-    UploadResult result = params->uploader->uploadWithExclusiveAccess(
+    // NOTE: TLS pre-warm was removed here.  With custom asymmetric mbedTLS
+    // (16 KB IN / 4 KB OUT), the largest single TLS allocation is ~16.7 KB
+    // which fits comfortably at ma≈38900 after SD mount.  The cloud phase's
+    // begin() handles on-demand TLS connection, saving ~11 s and ~28 KB of
+    // heap when pre-flight finds no cloud work.
+
+    // Mount SD card
+    if (!params->sdManager->takeControl()) {
+        LOG_ERROR("[Upload] Failed to acquire SD card control");
+        uploadTaskResult = UploadResult::ERROR;
+        uploadTaskComplete = true;
+        delete params;
+        vTaskDelete(NULL);
+        return;
+    }
+    LOG("[FSM] SD card control acquired");
+
+    // Phase 1+2: Run phased upload (CLOUD first, then SMB)
+    UploadResult result = params->uploader->runFullSession(
         params->sdManager, params->maxMinutes, params->filter);
     
+    // Phase 3: Release SD card
+    if (params->sdManager->hasControl()) {
+        params->sdManager->releaseControl();
+    }
+
     uploadTaskResult = result;
     uploadTaskComplete = true;
     
@@ -607,11 +753,12 @@ void handleUploading() {
         esp_task_wdt_delete(xTaskGetIdleTaskHandleForCPU(0));
         
         // Pin to Core 0 (protocol core) — keeps Core 1 free for main loop + web server
-        // Stack: 16KB — TLS buffers are on heap, task only needs stack for locals
+        // Stack: 12KB — TLS buffers are on heap, task only needs stack for locals.
+        // Created BEFORE TLS pre-warm and SD mount so max_alloc is at its highest.
         BaseType_t rc = xTaskCreatePinnedToCore(
             uploadTaskFunction,  // Task function
             "upload",            // Name
-            16384,               // Stack size (16KB for task locals + SD I/O)
+            12288,               // Stack size (12KB — verified via HWM logging)
             params,              // Parameters
             1,                   // Priority (same as loop task)
             &uploadTaskHandle,   // Handle
@@ -696,12 +843,28 @@ void handleReleasing() {
         return;
     }
 
-    // Otherwise always soft-reboot after a real upload session.
+    // MINIMIZE_REBOOTS: skip elective reboot and reuse existing runtime.
+    // The device enters COOLDOWN → LISTENING and picks up work in the next cycle.
+    if (config.getMinimizeReboots()) {
+        unsigned fh = (unsigned)ESP.getFreeHeap();
+        unsigned ma = (unsigned)ESP.getMaxAllocHeap();
+        LOGF("[FSM] MINIMIZE_REBOOTS: skipping elective reboot after upload (fh=%u ma=%u)", fh, ma);
+        if (ma < 35000) {
+            LOG_WARN("[FSM] Heap fragmented — contiguous block below 35KB. Consider rebooting if uploads fail.");
+        }
+        uploadCycleHadTimeout = false;
+        cooldownStartedAt = millis();
+        transitionTo(UploadState::COOLDOWN);
+        return;
+    }
+
+    // Default: soft-reboot after a real upload session.
     // A clean reboot restores the full contiguous heap and keeps the FSM simple.
     // The fast-boot path (ESP_RST_SW) skips cold-boot delays.
     LOGF("[FSM] Upload session complete — soft-reboot to restore heap (fh=%u ma=%u)",
          (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+    setRebootReason("Heap recovery after upload session");
+    Logger::getInstance().flushBeforeReboot();
     delay(200);
     esp_restart();
 }
@@ -775,14 +938,12 @@ void handleMonitoring() {
 void loop() {
     // ── Always-on tasks ──
     
-    // Periodic persisted-log flush (every 5 seconds when enabled)
-    // Runs unconditionally — LittleFS is independent of SD_MMC / upload task
-    if (config.getSaveLogs()) {
+    // Periodic persisted-log flush (every 10 seconds, always-on)
+    // Uses multi-file rotation on LittleFS — independent of SD_MMC / upload task
+    {
         unsigned long currentTime = millis();
         if (currentTime - lastLogFlushTime >= LOG_FLUSH_INTERVAL_MS) {
-            if (Logger::getInstance().dumpSavedLogsPeriodic(&sdManager)) {
-                LOG_DEBUG("Periodic log flush completed");
-            }
+            Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
             lastLogFlushTime = currentTime;
         }
     }
@@ -798,6 +959,8 @@ void loop() {
     // Handle web server requests
     if (webServer) {
         webServer->handleClient();
+        // Push SSE log events to connected client (if any)
+        pushSseLogs();
         // Refresh status snapshot every 3 s — assembles JSON using snprintf into
         // g_webStatusBuf (stack only, zero heap allocation).
         static unsigned long lastStatusSnapMs = 0;
@@ -825,7 +988,8 @@ void loop() {
             vTaskDelete(uploadTaskHandle);
         }
         
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+        setRebootReason("Upload task hung (software watchdog, >2 min no heartbeat)");
+        Logger::getInstance().flushBeforeReboot();
         delay(300);
         esp_restart();
     }
@@ -857,7 +1021,8 @@ void loop() {
         
         // Immediate reboot — state files deleted on next clean boot
         LOG("Rebooting for clean state reset...");
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+        setRebootReason("State reset requested via Web UI");
+        Logger::getInstance().flushBeforeReboot();
         delay(300);  // Brief pause for web response to send
         esp_restart();
     }
@@ -866,7 +1031,8 @@ void loop() {
     if (g_softRebootFlag) {
         LOG("=== Soft Reboot Triggered via Web Interface ===");
         g_softRebootFlag = false;
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+        setRebootReason("Soft reboot requested via Web UI");
+        Logger::getInstance().flushBeforeReboot();
         delay(300);
         esp_restart();
     }
@@ -892,7 +1058,10 @@ void loop() {
 #endif
     
     // ── WiFi reconnection (non-blocking with 30 second retry interval) ──
-    if (!wifiManager.isConnected()) {
+    // GUARD: Do NOT attempt reconnection while upload task is running on Core 0.
+    // The upload task manages its own WiFi recovery via tryCoordinatedWifiCycle().
+    // Concurrent reconnection from both cores corrupts the lwIP state machine.
+    if (!wifiManager.isConnected() && !uploadTaskRunning) {
         unsigned long currentTime = millis();
         if (currentTime - lastWifiReconnectAttempt >= 30000) {
             LOG_WARN("WiFi disconnected, attempting to reconnect...");
@@ -953,5 +1122,26 @@ void loop() {
         case UploadState::COOLDOWN:   handleCooldown();   break;
         case UploadState::COMPLETE:   handleComplete();   break;
         case UploadState::MONITORING: handleMonitoring(); break;
+    }
+    
+    // ── POWER: Yield CPU so DFS can scale down ──
+    // Without explicit yields the loop task never blocks, keeping CPU at max
+    // frequency. State-appropriate delays allow the FreeRTOS IDLE task to run,
+    // triggering automatic frequency scaling (DFS) when no work is pending.
+    switch (currentState) {
+        case UploadState::IDLE:
+        case UploadState::COOLDOWN:
+            vTaskDelay(pdMS_TO_TICKS(100));  // Low-frequency states: 100ms yield
+            break;
+        case UploadState::LISTENING:
+            vTaskDelay(pdMS_TO_TICKS(50));   // TrafficMonitor samples; 50ms is sufficient
+            break;
+        case UploadState::MONITORING:
+        case UploadState::UPLOADING:
+            vTaskDelay(pdMS_TO_TICKS(10));   // Responsive states: 10ms yield
+            break;
+        default:
+            vTaskDelay(pdMS_TO_TICKS(10));   // Transient states: brief yield
+            break;
     }
 }

@@ -4,6 +4,7 @@
 #include "SDCardManager.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <esp_wifi.h>
 
 WiFiManager::WiFiManager() : connected(false), mdnsStarted(false) {}
 
@@ -175,6 +176,13 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
     LOGF("SSID length: %d characters", ssid.length());
 
     WiFi.mode(WIFI_STA);
+    
+    // ── Power optimization: disable 802.11b (DSSS) ──
+    // 802.11b uses up to 370 mA peak TX. Restricting to 802.11g/n (OFDM)
+    // caps peak TX current to ~205-250 mA. All modern routers support g/n.
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    LOG_DEBUG("WiFi protocol restricted to 802.11g/n (802.11b disabled)");
+    
     WiFi.begin(ssid.c_str(), password.c_str());
 
     int attempts = 0;
@@ -322,6 +330,24 @@ void WiFiManager::setMaxPowerSave() {
         LOG_DEBUG("WiFi set to maximum power save mode (WIFI_PS_MAX_MODEM)");
     }
 }
+void WiFiManager::applyTxPowerEarly(WifiTxPower txPower) {
+    // Pre-initialize WiFi STA mode and set TX power before connectStation()
+    // to prevent full-power spikes during the initial scan and association.
+    wifi_power_t espTxPower;
+    switch (txPower) {
+        case WifiTxPower::POWER_MAX:  espTxPower = WIFI_POWER_19_5dBm; break;
+        case WifiTxPower::POWER_HIGH: espTxPower = WIFI_POWER_11dBm;   break;
+        case WifiTxPower::POWER_MID:  espTxPower = WIFI_POWER_8_5dBm;  break;
+        case WifiTxPower::POWER_LOW:  espTxPower = WIFI_POWER_5dBm;    break;
+        default:                      espTxPower = WIFI_POWER_8_5dBm;  break;
+    }
+    // Pre-init WiFi so TX power can be set before begin()
+    WiFi.mode(WIFI_STA);
+    WiFi.setTxPower(espTxPower);
+    WiFi.disconnect(true);  // Disconnect but keep STA mode active
+    LOG_DEBUGF("WiFi TX power pre-set to %d (before association)", (int)espTxPower);
+}
+
 void WiFiManager::applyPowerSettings(WifiTxPower txPower, WifiPowerSaving powerSaving) {
     if (!connected || WiFi.status() != WL_CONNECTED) {
         LOG_WARN("Cannot apply power settings - WiFi not connected");
@@ -331,21 +357,25 @@ void WiFiManager::applyPowerSettings(WifiTxPower txPower, WifiPowerSaving powerS
     // Apply TX power setting
     wifi_power_t espTxPower;
     switch (txPower) {
+        case WifiTxPower::POWER_MAX:
+            espTxPower = WIFI_POWER_19_5dBm;  // 19.5dBm (maximum — may be capped by sdkconfig)
+            LOG_DEBUG("WiFi TX power set to MAX (19.5dBm)");
+            break;
         case WifiTxPower::POWER_HIGH:
-            espTxPower = WIFI_POWER_19_5dBm;  // ~20dBm (maximum)
-            LOG_DEBUG("WiFi TX power set to HIGH (19.5dBm)");
+            espTxPower = WIFI_POWER_11dBm;    // 11dBm
+            LOG_DEBUG("WiFi TX power set to HIGH (11dBm)");
             break;
         case WifiTxPower::POWER_MID:
-            espTxPower = WIFI_POWER_11dBm;    // 11dBm (medium)
-            LOG_DEBUG("WiFi TX power set to MID (11dBm)");
+            espTxPower = WIFI_POWER_8_5dBm;   // 8.5dBm (default)
+            LOG_DEBUG("WiFi TX power set to MID (8.5dBm)");
             break;
         case WifiTxPower::POWER_LOW:
-            espTxPower = WIFI_POWER_5dBm;     // 5dBm (low)
+            espTxPower = WIFI_POWER_5dBm;     // 5dBm
             LOG_DEBUG("WiFi TX power set to LOW (5dBm)");
             break;
         default:
-            espTxPower = WIFI_POWER_19_5dBm;
-            LOG_WARN("Unknown TX power setting, using HIGH");
+            espTxPower = WIFI_POWER_8_5dBm;
+            LOG_WARN("Unknown TX power setting, using MID (8.5dBm)");
             break;
     }
     WiFi.setTxPower(espTxPower);

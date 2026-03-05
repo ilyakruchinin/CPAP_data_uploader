@@ -290,6 +290,15 @@ bool SMBUploader::allocateBuffer(size_t size) {
     return true;
 }
 
+void SMBUploader::freeBuffer() {
+    if (uploadBuffer) {
+        free(uploadBuffer);
+        uploadBuffer = nullptr;
+        uploadBufferSize = 0;
+        LOG("[SMB] Upload buffer freed");
+    }
+}
+
 bool SMBUploader::createDirectory(const String& path) {
     if (!connected) {
         LOG("[SMB] ERROR: Not connected - cannot create directory");
@@ -314,10 +323,10 @@ bool SMBUploader::createDirectory(const String& path) {
     // IMPORTANT: Do not skip create/check in low-memory mode, otherwise we can
     // incorrectly report success and then fail smb2_open with PATH_NOT_FOUND.
     uint32_t maxAlloc = ESP.getMaxAllocHeap();
-    if (maxAlloc < 50000) {
-        LOG_WARNF("[SMB] Low memory (%u bytes), still validating/creating directory: %s",
-                  maxAlloc,
-                  cleanPath.c_str());
+    if (g_debugMode && maxAlloc < 50000) {
+        LOGF("[SMB] Low memory (%u bytes), validating/creating directory: %s",
+             maxAlloc,
+             cleanPath.c_str());
     }
     
     // Check if directory already exists
@@ -704,7 +713,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         if (success) {
             bytesTransferred = attemptBytesTransferred;
             float transferRate = uploadTime > 0 ? (attemptBytesTransferred / 1024.0f) / (uploadTime / 1000.0f) : 0.0f;
-            LOGF("[SMB] Upload complete: %lu bytes in %lu ms (%.2f KB/s)",
+            LOG_DEBUGF("[SMB] Upload complete: %lu bytes in %lu ms (%.2f KB/s)",
                  attemptBytesTransferred, uploadTime, transferRate);
             LOG_DEBUGF("[SMB] File size verification: SD=%u bytes, Transferred=%lu bytes, Match=%s",
                        (unsigned int)fileSize,
