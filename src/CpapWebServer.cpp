@@ -26,6 +26,10 @@ extern unsigned long stateEnteredAt;
 extern unsigned long cooldownStartedAt;
 extern volatile bool uploadTaskRunning;
 
+// CPU load globals (defined in main.cpp, updated by idle hooks)
+extern volatile uint32_t g_idleCount0, g_idleCount1;
+extern uint32_t g_cpuLoad0, g_cpuLoad1;
+
 namespace {
 static constexpr unsigned long kUploadLogsMinRefreshMs = 3000;
 static constexpr size_t kUploadLogsTailBytes = 2048;
@@ -164,10 +168,7 @@ bool CpapWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleSdActivity();
     });
-    server->on("/api/diagnostics", [this]() {
-        if (this->redirectToIpIfMdnsRequest()) return;
-        this->handleApiDiagnostics();
-    });
+    // /api/diagnostics removed — cpu0/cpu1 merged into /api/status
     server->on("/reset-state", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleResetState();
@@ -233,7 +234,6 @@ bool CpapWebServer::begin() {
     LOG("[WebServer]   GET  /api/logs/full      - NAND + circular buffer backfill");
     LOG("[WebServer]   GET  /api/logs/stream    - SSE live log stream");
     LOG("[WebServer]   GET  /api/sd-activity    - SD bus activity samples JSON");
-    LOG("[WebServer]   GET  /api/diagnostics    - Heap/system diagnostics JSON");
     LOG("[WebServer]   GET  /api/config-raw     - Raw config.txt contents");
     LOG("[WebServer]   POST /api/config-raw     - Save raw config.txt");
     LOG("[WebServer]   GET  /api/monitor-start  - Start SD activity monitoring");
@@ -672,6 +672,23 @@ void CpapWebServer::updateStatusSnapshot() {
         timeSynced = scheduleManager->isTimeSynced();
         inWindow = scheduleManager->isInUploadWindow();
     }
+    // CPU load computation (moved from handleApiDiagnostics — merged into status)
+    static uint32_t prevIdle0 = 0, prevIdle1 = 0;
+    static unsigned long prevCpuMs = 0;
+    unsigned long nowMs = millis();
+    if (prevCpuMs > 0 && (nowMs - prevCpuMs) >= 500) {
+        uint32_t d0 = g_idleCount0 - prevIdle0;
+        uint32_t d1 = g_idleCount1 - prevIdle1;
+        uint32_t maxD = (d0 > d1) ? d0 : d1;
+        if (maxD > 0) {
+            g_cpuLoad0 = 100 - (uint32_t)((uint64_t)d0 * 100 / maxD);
+            g_cpuLoad1 = 100 - (uint32_t)((uint64_t)d1 * 100 / maxD);
+        }
+    }
+    prevIdle0 = g_idleCount0;
+    prevIdle1 = g_idleCount1;
+    prevCpuMs = nowMs;
+
     // Live per-file progress from the upload task — check both session statuses
     // since the phased orchestrator runs CLOUD then SMB within one session.
     char liveFolder[33] = "";
@@ -697,6 +714,7 @@ void CpapWebServer::updateStatusSnapshot() {
         ",\"next_upload\":%ld"
         ",\"in_window\":%s"
         ",\"live_active\":%s,\"live_folder\":\"%s\",\"live_up\":%d,\"live_total\":%d"
+        ",\"cpu0\":%u,\"cpu1\":%u"
         ",\"firmware\":\"%s\"}",
         st, inStateSec, upSec,
         timeBuf, timeSynced ? "true" : "false",
@@ -709,6 +727,7 @@ void CpapWebServer::updateStatusSnapshot() {
         nextUp,
         inWindow ? "true" : "false",
         liveActive ? "true" : "false", liveFolder, liveUp, liveTotal,
+        (unsigned)g_cpuLoad0, (unsigned)g_cpuLoad1,
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webStatusBuf, buf, n + 1);
@@ -1388,43 +1407,7 @@ void CpapWebServer::handleSdActivity() {
     server->send(200, "application/json", json);
 }
 
-// CPU load globals (defined in main.cpp, updated by idle hooks)
-extern volatile uint32_t g_idleCount0, g_idleCount1;
-extern uint32_t g_cpuLoad0, g_cpuLoad1;
-
-void CpapWebServer::handleApiDiagnostics() {
-    addCorsHeaders(server);
-    server->sendHeader("Cache-Control", "no-store");
-
-    // Sample CPU idle counters and compute load % (called every ~2s by client)
-    static uint32_t prevIdle0 = 0, prevIdle1 = 0;
-    static unsigned long prevMs = 0;
-    unsigned long now = millis();
-    if (prevMs > 0 && (now - prevMs) >= 500) {
-        uint32_t d0 = g_idleCount0 - prevIdle0;
-        uint32_t d1 = g_idleCount1 - prevIdle1;
-        // Calibrate: at 240MHz, idle hook fires ~2.4M times/sec; at 80MHz ~800K/sec.
-        // Use the larger of the two deltas as the "100% idle" reference.
-        uint32_t maxD = (d0 > d1) ? d0 : d1;
-        if (maxD > 0) {
-            g_cpuLoad0 = 100 - (uint32_t)((uint64_t)d0 * 100 / maxD);
-            g_cpuLoad1 = 100 - (uint32_t)((uint64_t)d1 * 100 / maxD);
-        }
-    }
-    prevIdle0 = g_idleCount0;
-    prevIdle1 = g_idleCount1;
-    prevMs = now;
-
-    char json[160];
-    snprintf(json, sizeof(json), 
-             "{\"free_heap\":%u,\"max_alloc\":%u,\"cpu0\":%u,\"cpu1\":%u}", 
-             (unsigned)ESP.getFreeHeap(), 
-             (unsigned)ESP.getMaxAllocHeap(),
-             (unsigned)g_cpuLoad0,
-             (unsigned)g_cpuLoad1);
-             
-    server->send(200, "application/json", json);
-}
+// handleApiDiagnostics() removed — cpu0/cpu1 merged into /api/status
 
 void CpapWebServer::handleMonitorPage() {
     server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
