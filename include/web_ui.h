@@ -153,12 +153,12 @@ nav button:hover:not(.act){background:#3a5a7e}
 <h2 style="font-size:.8em;text-transform:uppercase;letter-spacing:1px;color:#e04030;margin-bottom:10px;border-bottom:1px solid #8b2020;padding-bottom:6px">Danger Zone</h2>
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
 <div style="flex:1;min-width:200px">
-<button id=btn-up class="btn bo" onclick=triggerUpload()>&#9650; Force Upload</button>
+<button id=btn-up class="btn bo" onclick=triggerUpload() style="min-height:38px;line-height:1.2">&#9650; Force Upload</button>
 <div style="border-top:2px solid #aa6622;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45" id=d-danger-upload>The firmware automatically detects when your CPAP finishes therapy and uploads new data. Forcing an upload bypasses this detection and immediately takes control of the SD card, which <strong style="color:#ffaa44">increases the risk of an SD card error</strong> if the CPAP is actively writing <strong style="color:#ffaa44">or attempts to write at any point</strong> during the upload (which may take several minutes). Only use this if automatic uploads have not run for an unusual amount of time and you are confident the CPAP will remain idle.</p>
 </div>
 <div style="flex:1;min-width:200px;text-align:right">
-<button id=btn-rst class="btn bd" onclick=resetState()>&#9762; Reset State</button>
+<button id=btn-rst class="btn bd" onclick=resetState() style="min-height:38px;line-height:1.2">&#9762; Reset State</button>
 <div style="border-top:2px solid #c0392b;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45;text-align:left" id=d-danger-reset>Erases all upload tracking state and reboots the device. Every data folder will be re-scanned and re-uploaded from scratch on the next cycle. Under normal use (CPAP used daily with regular uploads), this is <strong style="color:#ffaa44">never needed</strong>. Only use this if uploads are stuck in a persistent de-sync state &mdash; for example, files appear as uploaded in the dashboard but are missing on your server, or the progress counter is clearly wrong after multiple upload cycles.</p>
 </div>

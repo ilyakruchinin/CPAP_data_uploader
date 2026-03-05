@@ -323,10 +323,10 @@ bool SMBUploader::createDirectory(const String& path) {
     // IMPORTANT: Do not skip create/check in low-memory mode, otherwise we can
     // incorrectly report success and then fail smb2_open with PATH_NOT_FOUND.
     uint32_t maxAlloc = ESP.getMaxAllocHeap();
-    if (maxAlloc < 50000) {
-        LOG_WARNF("[SMB] Low memory (%u bytes), still validating/creating directory: %s",
-                  maxAlloc,
-                  cleanPath.c_str());
+    if (g_debugMode && maxAlloc < 50000) {
+        LOGF("[SMB] Low memory (%u bytes), validating/creating directory: %s",
+             maxAlloc,
+             cleanPath.c_str());
     }
     
     // Check if directory already exists

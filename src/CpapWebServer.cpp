@@ -341,7 +341,7 @@ void CpapWebServer::handleTriggerUpload() {
 
     addCorsHeaders(server);
     server->send(200, "application/json",
-        "{\"status\":\"success\",\"message\":\"Upload triggered. Check serial output for progress.\"}");
+        "{\"status\":\"success\",\"message\":\"Upload triggered. Check the Logs tab for progress.\"}");
 }
 
 // GET /status - JSON status information (Legacy - Removed, use handleApiStatus)
@@ -366,7 +366,7 @@ void CpapWebServer::handleResetState() {
     // Add CORS headers
     addCorsHeaders(server);
     
-    String response = "{\"status\":\"success\",\"message\":\"Upload state will be reset. Check serial output for confirmation.\"}";
+    String response = "{\"status\":\"success\",\"message\":\"Upload state will be reset. Check the Logs tab for confirmation.\"}";
     server->send(200, "application/json", response);
 }
 
