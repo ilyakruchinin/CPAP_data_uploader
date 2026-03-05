@@ -476,12 +476,14 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
     
     // Prefer one persistent TLS session across the entire import.
     // Reconnecting per large file increases TLS handshake churn and heap fragmentation risk.
-    bool lowMemory = (maxAlloc < 50000); // 50KB threshold (SSL reconnect often needs ~40KB contiguous)
-    if (!lowMemory) {
-        lowMemoryKeepAliveWarned = false;
-    } else if (!lowMemoryKeepAliveWarned) {
-        LOG_WARNF("[SleepHQ] Low memory (%u bytes contiguous) - preserving TLS keep-alive to avoid reconnect churn", maxAlloc);
-        lowMemoryKeepAliveWarned = true;
+    if (g_debugMode) {
+        bool lowMemory = (maxAlloc < 50000);
+        if (!lowMemory) {
+            lowMemoryKeepAliveWarned = false;
+        } else if (!lowMemoryKeepAliveWarned) {
+            LOGF("[SleepHQ] Low memory (%u bytes contiguous) — TLS keep-alive active", maxAlloc);
+            lowMemoryKeepAliveWarned = true;
+        }
     }
 
     const bool useKeepAlive = true;
