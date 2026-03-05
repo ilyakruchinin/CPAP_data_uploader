@@ -62,7 +62,7 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 | `INACTIVITY_SECONDS` | `62` | 10–3600 | Seconds of SD bus silence required before the device attempts to take SD card control. Increase if your CPAP accesses the card frequently during warm-up. |
 | `EXCLUSIVE_ACCESS_MINUTES` | `5` | 1–30 | Maximum minutes the device holds exclusive SD card control per upload session. The session ends early if all work is done. |
 | `COOLDOWN_MINUTES` | `10` | 1–60 | Minutes to wait (SD card released) between upload cycles before starting the next inactivity check. |
-| `MINIMIZE_REBOOTS` | `false` | `true`/`false` | When `true`, the device skips elective soft-reboots after upload sessions and reuses the existing runtime (COOLDOWN → LISTENING loop). Mandatory reboots (watchdog, user-triggered state reset / soft reboot, OTA) still occur. When `false` (default), the device reboots after every real upload session to restore a clean heap. The legacy key name `SKIP_REBOOT_BETWEEN_BACKENDS` is accepted as a backward-compatible alias. |
+| `MINIMIZE_REBOOTS` | `true` | `true`/`false` | When `true` (default), the device skips elective soft-reboots after upload sessions and reuses the existing runtime (COOLDOWN → LISTENING loop). Mandatory reboots (watchdog, user-triggered state reset / soft reboot, OTA) still occur. When `false`, the device reboots after every real upload session to restore a clean heap. The legacy key name `SKIP_REBOOT_BETWEEN_BACKENDS` is accepted as a backward-compatible alias. |
 
 ---
 

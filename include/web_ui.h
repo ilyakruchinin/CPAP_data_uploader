@@ -10,8 +10,8 @@ static const char WEB_UI_HTML[] PROGMEM = R"HTMLEOF(<!DOCTYPE html><html><head>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f1923;color:#c7d5e0;min-height:100vh;padding:16px}
-.wrap{max-width:900px;margin:0 auto}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f1923;color:#c7d5e0;min-height:100vh;padding:16px;overflow-x:hidden}
+.wrap{max-width:900px;margin:0 auto;overflow-x:hidden}
 h1{font-size:1.5em;color:#fff;margin-bottom:2px}
 .sub{color:#66c0f4;font-size:0.85em;margin-bottom:14px}
 nav{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
@@ -25,10 +25,14 @@ nav button:hover:not(.act){background:#3a5a7e}
 .row{display:flex;justify-content:space-between;padding:3px 0;font-size:.85em}
 .k{color:#8f98a0}.v{color:#c7d5e0;font-weight:500;text-align:right;max-width:55%}
 .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-weight:700;font-size:.76em}
-.bi{background:#2a475e;color:#8f98a0}.bl{background:#1a3a1a;color:#44ff44;animation:pu 2s infinite}
-.ba,.bu{background:#1a2a4a;color:#66c0f4}.bc,.br{background:#3a2a1a;color:#ffaa44}
-.bco{background:#1a3a1a;color:#44ff44}
-@keyframes pu{0%,100%{opacity:1}50%{opacity:.6}}
+.bi{background:#2a475e;color:#8f98a0}.bl{background:#1a3a1a;color:#44ff44;animation:puG 2.5s ease-in-out infinite}
+.ba,.bu{background:#1a2a4a;color:#66c0f4;animation:puB 2.5s ease-in-out infinite}
+.bc,.br{background:#3a2a1a;color:#ffaa44;animation:puA 2.5s ease-in-out infinite}
+.bco{background:#1a3a1a;color:#44ff44;animation:puG 2.5s ease-in-out infinite}
+@keyframes puG{0%,100%{box-shadow:0 0 3px rgba(68,255,68,.3)}50%{box-shadow:0 0 10px rgba(68,255,68,.6)}}
+@keyframes puB{0%,100%{box-shadow:0 0 3px rgba(102,192,244,.3)}50%{box-shadow:0 0 10px rgba(102,192,244,.6)}}
+@keyframes puA{0%,100%{box-shadow:0 0 3px rgba(255,170,68,.3)}50%{box-shadow:0 0 10px rgba(255,170,68,.6)}}
+.mode-badge{display:inline-block;background:#1a3a4a;border:1px solid #2a6a8a;border-radius:4px;padding:1px 8px;color:#66c0f4;font-weight:700;font-size:.95em;animation:puB 2.5s ease-in-out infinite}
 .prog{background:#2a475e;border-radius:5px;height:8px;margin-top:5px;overflow:hidden}
 .pf{background:linear-gradient(90deg,#66c0f4,#44aaff);height:100%;border-radius:5px;transition:width .5s}
 .actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:7px}
@@ -81,14 +85,14 @@ nav button:hover:not(.act){background:#3a5a7e}
 #mon-active-banner h3{color:#bb88ff;font-size:1em;margin-bottom:6px}
 #mon-active-banner p{color:#b0a0c0;font-size:.84em;line-height:1.5}
 @keyframes monPulse{0%,100%{border-color:#8b4dbb}50%{border-color:#bb88ff}}
-@media(max-width:600px){.hdr svg{height:52px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
+@media(max-width:600px){.hdr svg{height:72px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
 </style></head><body>
 <div class=wrap>
 <div class=hdr>
 <svg viewBox="0 0 420 50" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',system-ui,-apple-system,sans-serif"><defs><linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1a6b8a"/><stop offset="100%" stop-color="#0d4a6b"/></linearGradient><linearGradient id="wg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2dd4bf"/><stop offset="50%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#818cf8"/></linearGradient><linearGradient id="ag" x1="0%" y1="100%" x2="0%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2dd4bf"/></linearGradient></defs><circle class="hdr-spin" cx="25" cy="25" r="23.5" fill="none" stroke="url(#wg)" stroke-width="1.2" stroke-dasharray="7 5 12 5 19 5 31 5 50 5" stroke-linecap="round" opacity=".85"/><circle cx="25" cy="25" r="22" fill="url(#cg)"/><circle cx="25" cy="25" r="22" fill="none" stroke="url(#wg)" stroke-width=".7" opacity=".6"/><g transform="translate(15,15)"><path d="M2.5,0 L10,0 L13,3 L13,12.5 Q13,13 12,13 L1,13 Q0,13 0,12 L0,1 Q0,0 1,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width=".8" opacity=".9"/><rect x="2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="4.2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="6.4" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="8.6" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/></g><g transform="translate(33.5,21.5)"><g class="hdr-arrow"><line x1="0" y1="8" x2="0" y2="2" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round"/><polyline points="-2.5,4 0,.5 2.5,4" fill="none" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></g><line x1="-3" y1="9.5" x2="3" y2="9.5" stroke="#38bdf8" stroke-width="1.2" stroke-linecap="round" opacity=".7"/></g><g transform="translate(25,37)"><path class="hdr-wave" d="M-10,0 C-8.5,-.8 -8,-.8 -6.5,0 C-5,.8 -4.5,.8 -3,0 C-1.5,-3.5 -.8,-3.5 .7,-1.5 C1.5,-.3 1.8,3 3,3 C4,3 4.3,.3 5.5,-1.5 C6.5,-3.5 7.2,-3.5 8.5,-1.5 C9.5,0 10,0 10,0" fill="none" stroke="url(#wg)" stroke-width="1" stroke-linecap="round"/></g><g transform="translate(25,11)"><path class="hw1" d="M-3.5,3.5 Q0,-.8 3.5,3.5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><path class="hw2" d="M-2,5 Q0,2.8 2,5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><circle class="hw3" cx="0" cy="6" r=".8" fill="#38bdf8"/></g><text x="56" y="22" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">CPAP<tspan fill="url(#wg)"> Data</tspan></text><text x="56" y="40" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">Uploader</text><rect x="56" y="44" width="140" height="1.5" rx=".75" fill="url(#wg)" opacity=".5"/></svg>
 </div>
 <p class=sub id=sub>Connecting...</p>
-<div id=reboot-overlay><h3>&#8635; Device is rebooting&hellip;</h3><p>This is normal and expected. The system reboots periodically to maintain stability.<br>It will be back online in a few seconds. Please wait.</p></div>
+<div id=reboot-overlay><h3>&#8635; Device is unreachable or rebooting&hellip;</h3><p>If the device is rebooting, this is normal &mdash; it may reboot periodically by design to maintain stability and will be back online in a few seconds.<br>If it has been powered off or moved out of WiFi range, this page will reconnect automatically once the device is reachable again.</p></div>
 <div id=mon-active-banner><h3>&#128270; SD Access Monitoring is active</h3><p>All automatic uploads are <strong>paused</strong> while monitoring is running.<br>Go to the <strong>SD Access</strong> tab and click <strong>Stop</strong> to resume normal operation.</p></div>
 <nav>
 <button id=t-dash onclick="tab('dash')" class=act>Dashboard</button>
@@ -144,12 +148,12 @@ nav button:hover:not(.act){background:#3a5a7e}
 <h2 style="font-size:.8em;text-transform:uppercase;letter-spacing:1px;color:#e04030;margin-bottom:10px;border-bottom:1px solid #8b2020;padding-bottom:6px">Danger Zone</h2>
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
 <div style="flex:1;min-width:200px">
-<button id=btn-up class="btn bd" onclick=triggerUpload() style="background:#aa6622;margin-bottom:0">&#9650; Force Upload</button>
+<button id=btn-up class="btn bd" onclick=triggerUpload() style="background:#aa6622;width:100%;justify-content:center">&#9650; Force Upload</button>
 <div style="border-top:2px solid #aa6622;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45" id=d-danger-upload>The firmware automatically detects when your CPAP finishes therapy and uploads new data. Forcing an upload bypasses this detection and immediately takes control of the SD card, which <strong style="color:#ffaa44">increases the risk of an SD card error</strong> if the CPAP is actively writing <strong style="color:#ffaa44">or attempts to write at any point</strong> during the upload (which may take several minutes). Only use this if automatic uploads have not run for an unusual amount of time and you are confident the CPAP will remain idle.</p>
 </div>
 <div style="flex:1;min-width:200px;text-align:right">
-<button id=btn-rst class="btn bd" onclick=resetState()>&#9762; Reset State</button>
+<button id=btn-rst class="btn bd" onclick=resetState() style="width:100%;justify-content:center">&#9762; Reset State</button>
 <div style="border-top:2px solid #c0392b;margin:8px 0;width:100%"></div>
 <p style="font-size:.78em;color:#8f98a0;line-height:1.45;text-align:left" id=d-danger-reset>Erases all upload tracking state and reboots the device. Every data folder will be re-scanned and re-uploaded from scratch on the next cycle. Under normal use (CPAP used daily with regular uploads), this is <strong style="color:#ffaa44">never needed</strong>. Only use this if uploads are stuck in a persistent de-sync state &mdash; for example, files appear as uploaded in the dashboard but are missing on your server, or the progress counter is clearly wrong after multiple upload cycles.</p>
 </div>
@@ -163,7 +167,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
 <h2 style=margin:0>System Logs <span id=log-st style="font-size:.9em;color:#8f98a0;font-weight:400"></span></h2>
 <div class=log-btns style="display:flex;gap:6px">
-<button class="btn bs" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em" title="Download all logs (saved + current) for troubleshooting">&#11015; Download All Logs</button>
+<button class="btn" onclick=downloadSavedLogs() style="padding:4px 10px;font-size:.8em;background:#2f8f57;color:#fff" title="Download all logs (saved + current) for troubleshooting">&#11015; Download All Logs</button>
 <button class="btn bs" onclick=copyLogBuf() style="padding:4px 10px;font-size:.8em" title="Copy all buffered log lines to clipboard">&#128203; Copy to clipboard</button>
 <button class="btn bs" onclick=clearLogBuf() style="padding:4px 10px;font-size:.8em">&#128465; Clear buffer</button>
 </div>
@@ -173,8 +177,8 @@ nav button:hover:not(.act){background:#3a5a7e}
 </div>
 
 <!-- CONFIG SD-ACCESS WARNING MODAL -->
-<div id="cfg-warn-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;align-items:center;justify-content:center">
-<div style="background:#1b2838;border:1px solid #aa9900;border-radius:12px;padding:25px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(170,153,0,0.2)">
+<div id="cfg-warn-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;align-items:center;justify-content:center;overflow:auto;padding:16px">
+<div style="background:#1b2838;border:1px solid #aa9900;border-radius:12px;padding:20px;max-width:480px;width:100%;box-sizing:border-box;box-shadow:0 10px 40px rgba(170,153,0,0.2);margin:auto">
 <h2 style="color:#ffcc44;margin-bottom:10px;font-size:1.2em">&#9888; SD Card Access Warning</h2>
 <p style="font-size:.88em;color:#c7d5e0;line-height:1.6;margin-bottom:16px">
 Editing and saving config requires <strong>reading from and writing to the CPAP&rsquo;s SD card</strong>. This carries a small risk of an SD card error if the CPAP machine is actively writing at the same time.
@@ -220,8 +224,8 @@ Editing and saving config requires <strong>reading from and writing to the CPAP&
 
 <!-- MONITOR -->
 <div id=mon class=page>
-<div class=card style="margin-bottom:10px"><h2>SD Activity Monitor <span id=mon-dot class="dot idle"></span></h2>
-<p style="font-size:.85em;color:#c7d5e0;line-height:1.5;margin-bottom:10px">Monitors SD card bus activity. Use when CPAP machine is on. Red = CPAP writing, Green = safe to upload.</p>
+<div class=card style="margin-bottom:10px"><h2>SD Activity Monitor</h2>
+<p style="font-size:.85em;color:#c7d5e0;line-height:1.5;margin-bottom:10px">Monitors SD card bus activity in real time. Start monitoring when your CPAP machine is on to observe write patterns.</p>
 <div id=mon-upwarn style="display:none;background:#2a2a1a;border:1px solid #665522;border-radius:6px;padding:9px 13px;margin-bottom:10px;font-size:.84em;color:#ddcc88">&#9889; Upload in progress &mdash; monitoring cannot start until the upload finishes.</div>
 <div class=actions>
 <button id=btn-mst class="btn bp" onclick=startMon()>Start Monitoring</button>
@@ -255,8 +259,8 @@ Editing and saving config requires <strong>reading from and writing to the CPAP&
 
 
 <!-- PROFILER WIZARD MODAL -->
-<div id="prof-wiz" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;display:none;align-items:center;justify-content:center">
-<div style="background:#1b2838;border:1px solid #66c0f4;border-radius:12px;padding:25px;max-width:550px;width:90%;box-shadow:0 10px 40px rgba(102,192,244,0.2)">
+<div id="prof-wiz" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;align-items:center;justify-content:center;overflow:auto;padding:16px">
+<div style="background:#1b2838;border:1px solid #66c0f4;border-radius:12px;padding:20px;max-width:550px;width:100%;box-sizing:border-box;box-shadow:0 10px 40px rgba(102,192,244,0.2);margin:auto">
 <h2 style="color:#fff;margin-bottom:10px;font-size:1.4em">&#9881; CPAP Profiler Wizard</h2>
 <p style="font-size:0.9em;color:#c7d5e0;line-height:1.5;margin-bottom:20px">
 This tool will measure your CPAP machine's specific SD card writing behavior to help you tune <strong style="color:#66c0f4">INACTIVITY_SECONDS</strong> (SMART_WAIT).
@@ -383,8 +387,8 @@ function renderStatus(d){
   statusFailCount=0;
   document.getElementById('reboot-overlay').style.display='none';
   rebootExpected=false;
-  currentFsmState=d.state||'';
-  seti('d-st',badgeHtml(currentFsmState||'?'));
+  var _newSt=d.state||'';
+  if(_newSt!==currentFsmState){currentFsmState=_newSt;seti('d-st',badgeHtml(currentFsmState||'?'));}
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
   var mode=(cfg.upload_mode||'—').toUpperCase();
   set('d-mode',mode);
@@ -402,7 +406,7 @@ function renderStatus(d){
   var rd=cfg.recent_folder_days||2;
   var cool=cfg.cooldown_minutes||10;
   var maxd=cfg.max_days||365;
-  var mBadge='<span style="display:inline-block;background:#1a3a4a;border:1px solid #2a6a8a;border-radius:4px;padding:1px 8px;color:#66c0f4;font-weight:700;font-size:.95em">';
+  var mBadge='<span class="mode-badge">';
   var mEnd='</span>';
   var fBtn='<span style="color:#ffaa44">Force Upload</span> <span style="color:#aa7733;font-size:.9em">(not recommended)</span>';
   if(mode==='SMART'){
@@ -901,7 +905,7 @@ function fetchMon(){
     set('m-l',(d.longest_idle_ms/1000).toFixed(1)+'s');
     set('m-r',d.total_active_samples+'/'+d.total_idle_samples);
     var dot=document.getElementById('mon-dot');
-    dot.className='dot '+(d.is_busy?'busy':'idle');
+    if(dot)dot.className='dot '+(d.is_busy?'busy':'idle');
     if(d.samples&&d.samples.length){
       monHistory=[];
       d.samples.forEach(function(s){
