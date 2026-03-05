@@ -116,19 +116,18 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=row><span class=k>State</span><span id=d-st class=v></span></div>
 <div class=row><span class=k>In state</span><span id=d-ins class=v></span></div>
 <div class=row><span class=k>Upload mode</span><span id=d-mode class=v></span></div>
-<div class=row><span class=k>Time synced</span><span id=d-tsync class=v></span></div>
 <div class=row><span class=k>Upload window</span><span id=d-win class=v></span></div>
 <div class=row><span class=k>Inactivity threshold</span><span id=d-inact class=v></span></div>
 <div class=row><span class=k>Exclusive access</span><span id=d-excl class=v></span></div>
 <div class=row><span class=k>Cooldown</span><span id=d-cool class=v></span></div>
-<div class=row><span class=k>Next upload</span><span id=d-next class=v></span></div>
+<div class=row><span class=k>Next full upload</span><span id=d-next class=v></span></div>
 </div>
 <div class=card><h2>System</h2>
 <div class=row><span class=k>Time</span><span id=d-time class=v></span></div>
+<div class=row><span class=k>Time synced</span><span id=d-tsync class=v></span></div>
 <div class=row><span class=k>Free heap</span><span id=d-fh class=v></span></div>
 <div class=row><span class=k>Max alloc</span><span id=d-ma class=v></span></div>
 <div class=row><span class=k>WiFi</span><span id=d-wifi class=v></span></div>
-<div class=row><span class=k>IP</span><span id=d-ip class=v></span></div>
 <div class=row><span class=k>Endpoint</span><span id=d-ep class=v></span></div>
 <div class=row><span class=k>GMT offset</span><span id=d-gmt class=v></span></div>
 <div class=row><span class=k>Uptime</span><span id=d-up class=v></span></div>
@@ -335,13 +334,13 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 <div class=card><h2>Method 1: File Upload</h2>
 <form id=f-up><div class=fg><label>Firmware file (.bin)</label>
 <input type=file id=f-bin name=firmware accept=.bin required></div>
-<button type=submit class="btn bp" style=width:100%>Upload &amp; Install</button>
+<button type=submit class="btn bp">Upload &amp; Install</button>
 <div id=s-up class=sm></div></form>
 </div>
 <div class=card><h2>Method 2: URL Download</h2>
 <form id=f-url><div class=fg><label>Firmware URL</label>
 <input type=url id=f-u name=url placeholder="https://github.com/.../firmware.bin" required></div>
-<button type=submit class="btn bp" style=width:100%>Download &amp; Install</button>
+<button type=submit class="btn bp">Download &amp; Install</button>
 <div id=s-url class=sm></div></form>
 </div>
 <div class=card><h2>System Actions</h2>
@@ -461,7 +460,6 @@ function renderStatus(d){
     var rc=sigClass(d.rssi),rl=sigLabel(d.rssi);
     document.getElementById('d-wifi').innerHTML='<span class='+rc+'>'+rl+' ('+d.rssi+' dBm)</span>';
   }else{set('d-wifi','Disconnected');}
-  set('d-ip',d.wifi_ip||'—');
   set('d-ep',cfg.endpoint_type||d.endpoint_type||'—');
   set('d-up',fmtUp(d.uptime||0));
   var ab=d.active_backend||'NONE';

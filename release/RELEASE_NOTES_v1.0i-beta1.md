@@ -22,6 +22,9 @@ This is a major milestone release building on v0.11.1-i. It introduces dual-back
 - **Config editor**: SD Card Access Warning modal shown before editing. Config and Profiler modals now properly constrained on mobile (no horizontal overflow).
 - **Logs tab**: "Download All Logs" button highlighted in green as the primary action.
 - **System tab**: CPU load graphs (Core 0/Core 1) with 2-minute history. Heap history chart with min/max tracking.
+- **Dashboard layout**: "Time synced" moved from Upload Engine to System card. IP field removed (redundant). "Next upload" renamed to "Next full upload".
+- **Merged `/api/diagnostics` into `/api/status`**: heap and CPU data now included in the single status poll — eliminates a separate 2-second polling request, reducing HTTP overhead by ~60%.
+- **Button consistency**: all buttons (nav tabs, log controls, config editor, Danger Zone, OTA, Profiler) now use identical padding, font-size, and border-radius via a unified `.btn` class. OTA buttons no longer stretch full-width. Force Upload (▲) and Reset State (☢) icons wrapped in normalized spans to fix cross-browser height mismatch.
 - **Reboot overlay**: now says "Device is unreachable or rebooting" with context-appropriate calming text.
 - **Mobile**: logo now renders at full 72px on all screen sizes. Horizontal scrolling eliminated.
 
@@ -31,7 +34,8 @@ This is a major milestone release building on v0.11.1-i. It introduces dual-back
 - **Streaming backfill**: `/api/logs/full` shows progressive download with KB counter and spinner.
 - **SSE live streaming**: real-time log updates via Server-Sent Events with automatic reconnect.
 - **Reboot detection**: client-side log viewer detects reboots (boot banner or buffer wrap) and auto-refetches full NAND history for pre-reboot context.
-- **Quieter upload logs**: per-file "Uploaded:" confirmation lines are now suppressed unless `DEBUG=true` in config. "Uploading file:" lines remain visible for progress tracking.
+- **Quieter upload logs**: per-file "Uploaded:" / "Upload complete:" confirmation lines are now suppressed for both Cloud and SMB unless `DEBUG=true` in config. "Uploading file:" lines remain visible for progress tracking.
+- **Suppressed non-actionable warnings**: "Low memory" warnings for both SleepHQ TLS keep-alive and SMB directory creation are now DEBUG-only (informational, no behavioral change).
 - **Download All Logs**: streams saved + current logs as a single file for troubleshooting.
 
 ### 🔧 Stability & Bug Fixes
