@@ -2,6 +2,7 @@
 #include "Logger.h"
 #include "pins_config.h"
 #include <SD_MMC.h>
+#include <driver/gpio.h>
 
 // Global config reference to check enableSdCmd0Reset
 #include "Config.h"
@@ -51,12 +52,20 @@ bool SDCardManager::takeControl() {
     // SD cards need time to stabilize voltage and complete internal initialization
     delay(500);
 
-    // Initialize SD_MMC (mode1bit=false for 4-bit mode, format_if_mount_failed=false, 
-    // maxOpenFiles=5). Note: SD_MMC in Arduino core currently doesn't expose a dedicated
-    // read-only mount parameter in begin(). We rely on not writing to the FS.
-    // If the core supports it in v3.x, we'd pass it here, but for now we enforce
-    // logic read-only by moving all state/log files to LittleFS.
-    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {
+    // ── POWER: Reduce GPIO drive strength on SD pins before mount ──
+    // At 5 MHz 1-bit mode, signal integrity margin is very large.
+    // Reducing drive from default ~20mA (CAP_2) to ~5mA (CAP_0) slows
+    // edge rates, reducing di/dt current spikes on the 3.3V rail.
+    gpio_set_drive_capability((gpio_num_t)SD_CMD_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_CLK_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_D0_PIN, GPIO_DRIVE_CAP_0);
+
+    // ── POWER: Mount SD in 1-bit mode at 5 MHz ──
+    // 1-bit mode uses only D0 (no D1-D3), halving bus toggle current.
+    // 5 MHz clock (vs default 20 MHz) further reduces peak draw.
+    // Upload throughput is network-bound, not SD-bound, so this has
+    // negligible impact on actual transfer speeds.
+    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_SLOW, false, 5000)) {
         LOG("SD card mount failed");
         releaseControl();
         return false;

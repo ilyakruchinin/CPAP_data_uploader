@@ -392,7 +392,20 @@ void WiFiManager::applyPowerSettings(WifiTxPower txPower, WifiPowerSaving powerS
             break;
         case WifiPowerSaving::SAVE_MAX:
             WiFi.setSleep(WIFI_PS_MAX_MODEM);
-            LOG_DEBUG("WiFi power saving set to MAX (WIFI_PS_MAX_MODEM)");
+            // Set listen_interval so the radio sleeps for multiple DTIM intervals.
+            // Without this, MAX_MODEM wakes on every DTIM (~100-300ms), providing
+            // minimal benefit over MIN_MODEM. A value of 10 means wake every 10th
+            // DTIM beacon, significantly reducing idle radio-on time.
+            {
+                wifi_config_t wifi_cfg;
+                if (esp_wifi_get_config(WIFI_IF_STA, &wifi_cfg) == ESP_OK) {
+                    wifi_cfg.sta.listen_interval = 10;
+                    esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+                    LOG_DEBUG("WiFi power saving set to MAX (WIFI_PS_MAX_MODEM, listen_interval=10)");
+                } else {
+                    LOG_DEBUG("WiFi power saving set to MAX (WIFI_PS_MAX_MODEM, listen_interval unchanged)");
+                }
+            }
             break;
         default:
             WiFi.setSleep(false);

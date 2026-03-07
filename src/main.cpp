@@ -18,13 +18,28 @@
 #include "version.h"
 
 #include "TrafficMonitor.h"
+#include "UlpMonitor.h"
 #include "UploadFSM.h"
+#include <ESPmDNS.h>
 
 // True when esp_restart() was the reset cause (ESP_RST_SW).
 // Any programmatic restart means the CPAP machine was already idle and
 // voltages are stable, so cold-boot delays (stabilization, Smart Wait,
 // NTP settle) can be skipped.  Set once in setup() from esp_reset_reason().
 bool g_heapRecoveryBoot = false;
+
+// ── POWER: Brownout-recovery degraded boot ──
+// When the previous reset was ESP_RST_BROWNOUT, boot in a reduced-but-reachable
+// mode: no mDNS, no SSE, lowest TX power, MAX power save. Automatically clears
+// after one successful upload cycle or on next clean boot.
+bool g_brownoutRecoveryBoot = false;
+
+// ── POWER: Timed mDNS ──
+// mDNS runs for 60 seconds after boot/reconnect then stops to eliminate
+// continuous multicast group membership and associated radio wakes.
+unsigned long g_mdnsStartTime = 0;
+const unsigned long MDNS_ACTIVE_DURATION_MS = 60000;  // 60 seconds
+bool g_mdnsTimedOut = false;
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -42,6 +57,7 @@ SDCardManager sdManager;
 WiFiManager wifiManager;
 FileUploader* uploader = nullptr;
 TrafficMonitor trafficMonitor;
+UlpMonitor ulpMonitor;
 
 #ifdef ENABLE_OTA_UPDATES
 OTAManager otaManager;
@@ -252,6 +268,12 @@ void setup() {
         LOG_ERROR(" - the CPAP was disconnected from the power supply");
         LOG_ERROR(" - the card was removed");
         LOG_ERROR(" - the CPAP machine cannot provide enough power");
+        // ── POWER: Activate brownout-recovery degraded mode ──
+        // Boot in reduced-but-reachable mode: no mDNS, no SSE, lowest TX power,
+        // MAX power save. This reduces current draw on hardware that just proved
+        // it cannot sustain normal operation.
+        g_brownoutRecoveryBoot = true;
+        LOG_WARN("[POWER] Brownout-recovery mode ACTIVE — degraded boot to reduce power draw");
     } else if (resetReason == ESP_RST_PANIC) {
         LOG_WARN("System reset due to software panic - check for stability issues");
     } else if (resetReason == ESP_RST_WDT || resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT) {
@@ -273,6 +295,15 @@ void setup() {
     
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
+    
+    // Initialize ULP coprocessor monitor for ultra-low-power CS_SENSE detection.
+    // ULP runs at 10 Hz sampling GPIO 33 via RTC_GPIO8 while main CPU can sleep.
+    // Activity is checked in the main loop; ULP is stopped before SD card operations.
+    if (ulpMonitor.begin()) {
+        LOG_DEBUG("ULP coprocessor CS_SENSE monitor initialized");
+    } else {
+        LOG_WARN("ULP monitor initialization failed — using PCNT only");
+    }
 
     // Determine boot type: software reset (ESP_RST_SW) = soft-reboot / FastBoot.
     // Cold boots (power-on, brownout, watchdog) use distinct reason codes.
@@ -305,8 +336,9 @@ void setup() {
     } else {
         // Cold boot: wait for power-rail stabilization and CPAP boot sequence to settle,
         // then wait for SD bus silence before attempting to take SD card control.
-        LOG("Waiting 15s for electrical stabilization...");
-        delay(15000);
+        // 8 seconds is sufficient for voltage rails and CPAP initialization.
+        LOG("Waiting 8s for electrical stabilization...");
+        delay(8000);
         runSmartWait();
     }
     
@@ -451,11 +483,18 @@ void setup() {
         return;
     }
     
-    // Start mDNS responder (allows access via http://cpap.local or configured hostname)
-    wifiManager.startMDNS(config.getHostname());
-    
-    // Apply WiFi power settings after connection is established
-    wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
+    // ── POWER: mDNS and WiFi power settings (brownout-aware) ──
+    if (g_brownoutRecoveryBoot) {
+        // Brownout-recovery: skip mDNS entirely, force lowest TX power + MAX power save
+        LOG_WARN("[POWER] Brownout-recovery: skipping mDNS, forcing lowest TX power + MAX power save");
+        wifiManager.applyPowerSettings(WifiTxPower::POWER_LOW, WifiPowerSaving::SAVE_MAX);
+    } else {
+        // Normal boot: start timed mDNS (60s then stop) and apply configured power settings
+        wifiManager.startMDNS(config.getHostname());
+        g_mdnsStartTime = millis();
+        g_mdnsTimedOut = false;
+        wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
+    }
     LOG("WiFi power management settings applied");
     
     // ── POWER: Configure Dynamic Frequency Scaling (DFS) + Auto Light-Sleep ──
@@ -678,6 +717,12 @@ void uploadTaskFunction(void* pvParameters) {
     // begin() handles on-demand TLS connection, saving ~11 s and ~28 KB of
     // heap when pre-flight finds no cloud work.
 
+    // Stop ULP monitor before SD card operations — ULP and SDMMC share RTC GPIO
+    extern UlpMonitor ulpMonitor;
+    if (ulpMonitor.isRunning()) {
+        ulpMonitor.stop();
+    }
+
     // Mount SD card
     if (!params->sdManager->takeControl()) {
         LOG_ERROR("[Upload] Failed to acquire SD card control");
@@ -823,9 +868,15 @@ void handleReleasing() {
         sdManager.releaseControl();
     }
     
+    // Restart ULP monitor for low-power CS_SENSE detection during idle states
+    if (!ulpMonitor.isRunning()) {
+        ulpMonitor.begin();
+    }
+    
     // If monitoring was requested during upload, go to MONITORING instead of COOLDOWN
     if (monitoringRequested) {
         monitoringRequested = false;
+        trafficMonitor.enableSampleBuffer();  // Allocate buffer for web UI
         trafficMonitor.resetStatistics();
         LOG("[FSM] Monitoring requested during upload — entering MONITORING after release");
         transitionTo(UploadState::MONITORING);
@@ -899,6 +950,13 @@ void handleCooldown() {
 }
 
 void handleComplete() {
+    // Clear brownout-recovery mode after a successful upload — the device
+    // has proven it can sustain a full upload cycle at current power levels.
+    if (g_brownoutRecoveryBoot) {
+        g_brownoutRecoveryBoot = false;
+        LOG_INFO("[POWER] Brownout-recovery mode cleared — successful upload cycle");
+    }
+    
     ScheduleManager* sm = uploader->getScheduleManager();
     
     if (sm->isSmartMode()) {
@@ -922,6 +980,7 @@ void handleMonitoring() {
     if (stopMonitoringRequested) {
         stopMonitoringRequested = false;
         LOG("[FSM] Monitoring stopped by user");
+        trafficMonitor.disableSampleBuffer();  // Free ~2.4KB buffer
         ScheduleManager* sm = uploader ? uploader->getScheduleManager() : nullptr;
         if (sm && sm->isSmartMode()) {
             trafficMonitor.resetIdleTracking();
@@ -938,9 +997,12 @@ void handleMonitoring() {
 void loop() {
     // ── Always-on tasks ──
     
-    // Periodic persisted-log flush (every 10 seconds, always-on)
-    // Uses multi-file rotation on LittleFS — independent of SD_MMC / upload task
-    {
+    // Periodic persisted-log flush (every 10 seconds)
+    // Uses multi-file rotation on LittleFS — independent of SD_MMC / upload task.
+    // ── POWER: Skip during active uploads to avoid internal SPI flash writes
+    // overlapping with SD reads, TLS encryption, and WiFi TX bursts.
+    // flushBeforeReboot() ensures no logs are lost on post-upload reboot.
+    if (!uploadTaskRunning) {
         unsigned long currentTime = millis();
         if (currentTime - lastLogFlushTime >= LOG_FLUSH_INTERVAL_MS) {
             Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
@@ -959,15 +1021,26 @@ void loop() {
     // Handle web server requests
     if (webServer) {
         webServer->handleClient();
-        // Push SSE log events to connected client (if any)
-        pushSseLogs();
-        // Refresh status snapshot every 3 s — assembles JSON using snprintf into
-        // g_webStatusBuf (stack only, zero heap allocation).
-        static unsigned long lastStatusSnapMs = 0;
-        if (millis() - lastStatusSnapMs >= 3000) {
-            webServer->updateStatusSnapshot();
-            lastStatusSnapMs = millis();
+        // Push SSE log events to connected client (if any).
+        // ── POWER: Suppress SSE during uploads to eliminate continuous WiFi TX
+        // churn from log streaming while SD + TLS + WiFi are all active.
+        if (!uploadTaskRunning && !g_brownoutRecoveryBoot) {
+            pushSseLogs();
         }
+        // Status snapshot is rebuilt on-demand in handleApiStatus() — no periodic
+        // rebuild needed. The API handler calls updateStatusSnapshot() before
+        // serving, so the data is always fresh when a client requests it.
+    }
+    
+    // ── POWER: Timed mDNS — stop responder after 60 seconds ──
+    // mDNS is only needed for initial .local discovery. After the browser
+    // resolves the hostname and gets redirected to the IP, mDNS can stop
+    // to eliminate multicast group membership and associated radio wakes.
+    if (!g_mdnsTimedOut && g_mdnsStartTime > 0 &&
+        (millis() - g_mdnsStartTime >= MDNS_ACTIVE_DURATION_MS)) {
+        g_mdnsTimedOut = true;
+        MDNS.end();
+        LOG_DEBUG("[POWER] Timed mDNS stopped after 60 seconds");
     }
     
     // ── Software watchdog for upload task ──
@@ -1079,8 +1152,12 @@ void loop() {
             }
             LOG_DEBUG("WiFi reconnected successfully");
             
-            // Restart mDNS responder after reconnection
-            wifiManager.startMDNS(config.getHostname());
+            // Restart timed mDNS after reconnection (unless brownout-recovery mode)
+            if (!g_brownoutRecoveryBoot) {
+                wifiManager.startMDNS(config.getHostname());
+                g_mdnsStartTime = millis();
+                g_mdnsTimedOut = false;
+            }
             
             lastNtpSyncAttempt = 0;
             lastWifiReconnectAttempt = 0;
@@ -1105,6 +1182,7 @@ void loop() {
             if (currentState == UploadState::ACQUIRING && sdManager.hasControl()) {
                 sdManager.releaseControl();
             }
+            trafficMonitor.enableSampleBuffer();  // Allocate buffer for web UI
             trafficMonitor.resetStatistics();
             transitionTo(UploadState::MONITORING);
         }

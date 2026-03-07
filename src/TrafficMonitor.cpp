@@ -15,13 +15,14 @@ TrafficMonitor::TrafficMonitor()
     , _consecutiveIdleMs(0)
     , _lastSecondTime(0)
     , _secondPulseAccumulator(0)
+    , _sampleBuffer(nullptr)
     , _sampleHead(0)
     , _sampleCount(0)
+    , _bufferEnabled(false)
     , _longestIdleMs(0)
     , _totalActiveSamples(0)
     , _totalIdleSamples(0)
 {
-    memset(_sampleBuffer, 0, sizeof(_sampleBuffer));
 }
 
 void TrafficMonitor::begin(int pin) {
@@ -169,6 +170,36 @@ uint32_t TrafficMonitor::getLastPulseCount() const {
     return (uint32_t)_lastPulseCount;
 }
 
+void TrafficMonitor::enableSampleBuffer() {
+    if (_bufferEnabled && _sampleBuffer) return;
+    _sampleBuffer = new (std::nothrow) ActivitySample[MAX_SAMPLES];
+    if (_sampleBuffer) {
+        memset(_sampleBuffer, 0, sizeof(ActivitySample) * MAX_SAMPLES);
+        _bufferEnabled = true;
+        _sampleHead = 0;
+        _sampleCount = 0;
+        LOG_DEBUG("TrafficMonitor sample buffer allocated (~2.4KB)");
+    } else {
+        LOG_WARN("TrafficMonitor sample buffer allocation failed");
+        _bufferEnabled = false;
+    }
+}
+
+void TrafficMonitor::disableSampleBuffer() {
+    if (_sampleBuffer) {
+        delete[] _sampleBuffer;
+        _sampleBuffer = nullptr;
+    }
+    _bufferEnabled = false;
+    _sampleHead = 0;
+    _sampleCount = 0;
+    LOG_DEBUG("TrafficMonitor sample buffer freed");
+}
+
+bool TrafficMonitor::isSampleBufferEnabled() const {
+    return _bufferEnabled && _sampleBuffer != nullptr;
+}
+
 void TrafficMonitor::resetStatistics() {
     _longestIdleMs = 0;
     _totalActiveSamples = 0;
@@ -177,11 +208,15 @@ void TrafficMonitor::resetStatistics() {
     _sampleCount = 0;
     _secondPulseAccumulator = 0;
     _lastSecondTime = millis();
-    memset(_sampleBuffer, 0, sizeof(_sampleBuffer));
+    if (_sampleBuffer) {
+        memset(_sampleBuffer, 0, sizeof(ActivitySample) * MAX_SAMPLES);
+    }
     LOG("TrafficMonitor statistics reset");
 }
 
 void TrafficMonitor::pushSample(uint32_t timestamp, uint16_t pulseCount) {
+    if (!_sampleBuffer) return;  // Buffer not allocated (not in MONITORING mode)
+    
     _sampleBuffer[_sampleHead].timestamp = timestamp;
     _sampleBuffer[_sampleHead].pulseCount = pulseCount;
     _sampleBuffer[_sampleHead].active = (pulseCount > 0);

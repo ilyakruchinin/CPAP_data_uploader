@@ -48,6 +48,13 @@ CONFIG_FREERTOS_HZ=100
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
 CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
 
+# ── Brownout detector threshold ─────────────────────────────────────────────
+# Raise the hardware brownout detector threshold to level 7 (~2.74V).
+# Default level 0 (~2.43V) allows the 3.3V rail to sag deep enough to corrupt
+# the SD card's FTL before the chip resets. Level 7 triggers a clean reset
+# ~600mV below the operating rail, protecting flash translation layer integrity.
+CONFIG_ESP32_BROWNOUT_DET_LVL_SEL_7=y
+
 # ── TLS cipher optimization ──────────────────────────────────────────────────
 # Disable ChaCha20-Poly1305 — no hardware acceleration on ESP32.
 # ChaCha20 is 3-5x slower than HW AES on ESP32, generating unnecessary CPU load
