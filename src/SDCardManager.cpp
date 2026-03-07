@@ -53,19 +53,20 @@ bool SDCardManager::takeControl() {
     delay(500);
 
     // ── POWER: Reduce GPIO drive strength on SD pins before mount ──
-    // At 5 MHz 1-bit mode, signal integrity margin is very large.
+    // At 1-bit 20 MHz, signal integrity margin is large.
     // Reducing drive from default ~20mA (CAP_2) to ~5mA (CAP_0) slows
     // edge rates, reducing di/dt current spikes on the 3.3V rail.
     gpio_set_drive_capability((gpio_num_t)SD_CMD_PIN, GPIO_DRIVE_CAP_0);
     gpio_set_drive_capability((gpio_num_t)SD_CLK_PIN, GPIO_DRIVE_CAP_0);
     gpio_set_drive_capability((gpio_num_t)SD_D0_PIN, GPIO_DRIVE_CAP_0);
 
-    // ── POWER: Mount SD in 1-bit mode at 5 MHz ──
+    // ── POWER: Mount SD in 1-bit mode ──
     // 1-bit mode uses only D0 (no D1-D3), halving bus toggle current.
-    // 5 MHz clock (vs default 20 MHz) further reduces peak draw.
-    // Upload throughput is network-bound, not SD-bound, so this has
-    // negligible impact on actual transfer speeds.
-    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_SLOW, false, 5000)) {
+    // 1-bit mode at default 20 MHz: the main power win comes from 3 fewer
+    // active data lines (less simultaneous switching current).  Reducing
+    // the clock further (e.g. 5 MHz) adds marginal electrical benefit but
+    // makes pre-flight directory scans 4-6× slower since those are SD-bound.
+    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_SLOW, false, SDMMC_FREQ_DEFAULT)) {
         LOG("SD card mount failed");
         releaseControl();
         return false;
