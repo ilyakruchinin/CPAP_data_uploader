@@ -16,26 +16,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHIP="esp32"
 BAUD_RATE="460800"
 FIRMWARE_OTA="$SCRIPT_DIR/firmware-ota.bin"
-FIRMWARE_STANDARD="$SCRIPT_DIR/firmware-standard.bin"
 VENV_DIR="$SCRIPT_DIR/.venv"
 
 # Check if port is provided
 if [ -z "$1" ]; then
     echo -e "${RED}Error: Serial port not specified${NC}"
-    echo "Usage: $0 <serial_port> [firmware_type]"
+    echo "Usage: $0 <serial_port>"
     echo ""
     echo "Examples:"
     echo "  macOS:  $0 /dev/cu.usbserial-0001"
     echo "  Linux:  $0 /dev/ttyUSB0"
-    echo ""
-    echo "Firmware options:"
-    echo "  (default)  - OTA firmware with web update capability"
-    echo "  ota        - OTA firmware with web update capability"
-    echo "  standard   - Standard firmware (3MB app space, no OTA)"
-    echo ""
-    echo "Examples with firmware type:"
-    echo "  $0 /dev/ttyUSB0 ota"
-    echo "  $0 /dev/ttyUSB0 standard"
     echo ""
     echo "Available ports:"
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -47,38 +37,13 @@ if [ -z "$1" ]; then
 fi
 
 PORT="$1"
-FIRMWARE_TYPE="${2:-ota}"  # Default to OTA firmware
-
-# Select firmware file based on type
-case "$FIRMWARE_TYPE" in
-    "ota")
-        if [ -f "$FIRMWARE_OTA" ]; then
-            FIRMWARE_FILE="$FIRMWARE_OTA"
-        else
-            echo -e "${RED}Error: OTA firmware file '$FIRMWARE_OTA' not found${NC}"
-            exit 1
-        fi
-        FIRMWARE_DESC="OTA-enabled (web updates supported)"
-        ;;
-    "standard")
-        if [ -f "$FIRMWARE_STANDARD" ]; then
-            FIRMWARE_FILE="$FIRMWARE_STANDARD"
-        else
-            echo -e "${RED}Error: Standard firmware file '$FIRMWARE_STANDARD' not found${NC}"
-            exit 1
-        fi
-        FIRMWARE_DESC="Standard (3MB app space, no OTA)"
-        ;;
-    *)
-        echo -e "${RED}Error: Invalid firmware type '$FIRMWARE_TYPE'${NC}"
-        echo "Valid options: ota, standard"
-        exit 1
-        ;;
-esac
+FIRMWARE_FILE="$FIRMWARE_OTA"
+FIRMWARE_DESC="OTA-enabled (web updates supported)"
 
 # Check if firmware file exists
 if [ ! -f "$FIRMWARE_FILE" ]; then
     echo -e "${RED}Error: Firmware file '$FIRMWARE_FILE' not found${NC}"
+    echo "Make sure you are running this script from the release package directory."
     exit 1
 fi
 
