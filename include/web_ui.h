@@ -100,6 +100,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <p class=sub id=sub>Connecting...</p>
 <div id=reboot-overlay><h3>&#8635; Device is unreachable or rebooting&hellip;</h3><p>If the device is rebooting, this is normal &mdash; it may reboot periodically by design to maintain stability and will be back online in a few seconds.<br>If it has been powered off or moved out of WiFi range, this page will reconnect automatically once the device is reachable again.</p></div>
 <div id=mon-active-banner><h3>&#128270; SD Access Monitoring is active</h3><p>All automatic uploads are <strong>paused</strong> while monitoring is running.<br>Go to the <strong>SD Access</strong> tab and click <strong>Stop</strong> to resume normal operation.</p></div>
+<div id=brownout-banner style="display:none;background:#3a2a0a;border:1px solid #cc8800;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center"><h3 style="color:#ffaa00;font-size:1em;margin-bottom:6px">&#9888; Brownout Detection Disabled</h3><p style="color:#c0b090;font-size:.84em;line-height:1.5">BROWNOUT_DETECT=OFF is set in config.txt. The device will <strong>not</strong> reset on power drops &mdash; this may cause data corruption.</p></div>
 <nav>
 <button id=t-dash onclick="tab('dash')" class=act>Dashboard</button>
 <button id=t-logs onclick="tab('logs')">Logs</button>
@@ -363,7 +364,7 @@ function tab(t){
     document.getElementById('t-'+x).classList.toggle('act',x===t);
   });
   curTab=t;
-  if(t==='logs'){if(!backfillDone){fetchBackfill();}else if(!sseConnected){startLogPoll();}}else{stopLogPoll();stopSse();}
+  if(t==='logs'){if(!backfillDone){fetchBackfill();}else if(!sseConnected){startSse();}}else{stopLogPoll();}
   if(t==='cfg'){loadCfg();}
   if(t==='mon'){checkMonUploadState();syncMonBtn();}
   if(t==='mem'){updateHeapChart();updateCpuChart();}
@@ -394,7 +395,8 @@ function renderStatus(d){
   document.getElementById('reboot-overlay').style.display='none';
   rebootExpected=false;
   var _newSt=d.state||'';
-  if(_newSt!==currentFsmState){currentFsmState=_newSt;seti('d-st',badgeHtml(currentFsmState||'?'));}
+  currentFsmState=_newSt;
+  seti('d-st',badgeHtml(currentFsmState||'?'));
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
   var mode=(cfg.upload_mode||'—').toUpperCase();
   set('d-mode',mode);
@@ -499,6 +501,8 @@ function renderStatus(d){
   set('hd-c0',c0+'%');set('hd-c1',c1+'%');
   cpuHistory.push({c0:c0,c1:c1});if(cpuHistory.length>MAX_HEAP_SAMPLES)cpuHistory.shift();
   if(curTab==='mem'){updateHeapChart();updateCpuChart();}
+  var bb=document.getElementById('brownout-banner');
+  if(bb)bb.style.display=cfg.brownout_detect_off?'block':'none';
 }
 
 var statusTimer=null;
@@ -507,15 +511,16 @@ function pollStatus(){
     renderStatus(d);
   }).catch(function(){
     statusFailCount++;
-    if(statusFailCount>=2||rebootExpected){
+    if(statusFailCount>=5||rebootExpected){
       document.getElementById('reboot-overlay').style.display='block';
       seti('d-st','<span class="badge bc">REBOOTING</span>');
     } else {
-      set('d-st','Offline');
+      seti('d-st','<span class="badge bc">Offline \u2014 reconnecting\u2026</span>');
     }
   });
 }
 function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
+document.addEventListener('visibilitychange',function(){if(!document.hidden){statusFailCount=0;}});
 
 var cpuHistory=[];
 function updateHeapChart(){
@@ -762,7 +767,7 @@ function _renderLogBuf(){
   b.textContent=clientLogBuf.join('\n');
   if(logAtBottom)b.scrollTop=b.scrollHeight;
 }
-var sseSource=null,sseConnected=false,backfillDone=false,backfillRetries=0;
+var sseSource=null,sseConnected=false,backfillDone=false,backfillRetries=0,sseReconnAttempts=0;
 function fetchLogs(){
   if(curTab!=='logs')return;
   fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
@@ -828,6 +833,7 @@ function startSse(){
   sseSource=new EventSource('/api/logs/stream');
   sseSource.onopen=function(){
     sseConnected=true;
+    sseReconnAttempts=0;
     stopLogPoll();
     set('log-st','SSE Live \u2022 '+clientLogBuf.length+' lines');
   };
@@ -840,9 +846,16 @@ function startSse(){
   sseSource.onerror=function(){
     sseConnected=false;
     if(sseSource){sseSource.close();sseSource=null;}
-    backfillDone=false;
-    set('log-st','SSE lost \u2014 reconnecting\u2026');
-    setTimeout(function(){if(curTab==='logs'){fetchBackfill();}else{startLogPoll();}},3000);
+    sseReconnAttempts++;
+    if(sseReconnAttempts<=3){
+      var delay=Math.min(2000*sseReconnAttempts,6000);
+      set('log-st','SSE lost \u2014 retry '+sseReconnAttempts+'/3 in '+(delay/1000)+'s\u2026');
+      setTimeout(function(){if(curTab==='logs'){startSse();}},delay);
+    } else {
+      sseReconnAttempts=0;
+      set('log-st','SSE unavailable \u2014 falling back to polling');
+      startLogPoll();
+    }
   };
 }
 function stopSse(){

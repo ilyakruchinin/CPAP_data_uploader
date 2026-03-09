@@ -5,6 +5,7 @@
 #include <esp_pm.h>
 #include <esp_sleep.h>
 #include <driver/gpio.h>
+#include <soc/rtc_cntl_reg.h>
 #include <esp_freertos_hooks.h>
 #include <Preferences.h>
 #include <LittleFS.h>
@@ -18,7 +19,6 @@
 #include "version.h"
 
 #include "TrafficMonitor.h"
-#include "UlpMonitor.h"
 #include "UploadFSM.h"
 #include <ESPmDNS.h>
 
@@ -30,8 +30,9 @@ bool g_heapRecoveryBoot = false;
 
 // ── POWER: Brownout-recovery degraded boot ──
 // When the previous reset was ESP_RST_BROWNOUT, boot in a reduced-but-reachable
-// mode: no mDNS, no SSE, lowest TX power, MAX power save. Automatically clears
-// after one successful upload cycle or on next clean boot.
+// mode: no mDNS, lowest TX power, MAX power save. SSE remains active (lightest
+// transport). Automatically clears after one successful upload cycle or on next
+// clean boot.
 bool g_brownoutRecoveryBoot = false;
 
 // ── POWER: Timed mDNS ──
@@ -57,7 +58,6 @@ SDCardManager sdManager;
 WiFiManager wifiManager;
 FileUploader* uploader = nullptr;
 TrafficMonitor trafficMonitor;
-UlpMonitor ulpMonitor;
 
 #ifdef ENABLE_OTA_UPDATES
 OTAManager otaManager;
@@ -143,6 +143,7 @@ bool g_debugMode = false;
 #ifdef ENABLE_WEBSERVER
 // External trigger flags (defined in WebServer.cpp)
 extern volatile bool g_triggerUploadFlag;
+extern volatile bool g_forceRecentOnlyFlag;
 extern volatile bool g_resetStateFlag;
 
 // Monitoring trigger flags (defined in WebServer.cpp)
@@ -296,14 +297,6 @@ void setup() {
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
     
-    // Initialize ULP coprocessor monitor for ultra-low-power CS_SENSE detection.
-    // ULP runs at 10 Hz sampling GPIO 33 via RTC_GPIO8 while main CPU can sleep.
-    // Activity is checked in the main loop; ULP is stopped before SD card operations.
-    if (ulpMonitor.begin()) {
-        LOG_DEBUG("ULP coprocessor CS_SENSE monitor initialized");
-    } else {
-        LOG_WARN("ULP monitor initialization failed — using PCNT only");
-    }
 
     // Determine boot type: software reset (ESP_RST_SW) = soft-reboot / FastBoot.
     // Cold boots (power-on, brownout, watchdog) use distinct reason codes.
@@ -453,12 +446,18 @@ void setup() {
     // Apply power management settings from config
     LOG("Applying power management settings...");
     
-    // Update CPU frequency from config (boot default is 80 MHz, set in early setup)
+    // Read target CPU frequency but do NOT apply yet — defer until after WiFi
+    // has stabilised to avoid compounding a PLL relock spike with the RF
+    // calibration spike during WiFi.mode(WIFI_STA).
     int targetCpuMhz = config.getCpuSpeedMhz();
-    if (targetCpuMhz != getCpuFrequencyMhz()) {
-        setCpuFrequencyMhz(targetCpuMhz);
+
+    // ── POWER: Optionally disable brownout detector ──
+    // Must happen BEFORE WiFi init (the highest-current boot phase).
+    if (config.isBrownoutDetectOff()) {
+        LOG_WARN("[POWER] BROWNOUT_DETECT=OFF — disabling brownout detection per config");
+        LOG_WARN("[POWER] WARNING: Device will NOT reset on power drops. Risk of data corruption.");
+        CLEAR_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
     }
-    LOGF("CPU frequency: %dMHz", getCpuFrequencyMhz());
 
     // Setup WiFi event handlers for logging
     wifiManager.setupEventHandlers();
@@ -487,9 +486,11 @@ void setup() {
     if (g_brownoutRecoveryBoot) {
         // Brownout-recovery: skip mDNS entirely, force lowest TX power + MAX power save
         LOG_WARN("[POWER] Brownout-recovery: skipping mDNS, forcing lowest TX power + MAX power save");
-        wifiManager.applyPowerSettings(WifiTxPower::POWER_LOW, WifiPowerSaving::SAVE_MAX);
+        wifiManager.applyPowerSettings(WifiTxPower::POWER_LOWEST, WifiPowerSaving::SAVE_MAX);
     } else {
-        // Normal boot: start timed mDNS (60s then stop) and apply configured power settings
+        // Normal boot: small delay lets the 3.3V rail recover from the WiFi
+        // association + DHCP burst before mDNS fires its multicast announcement.
+        delay(200);
         wifiManager.startMDNS(config.getHostname());
         g_mdnsStartTime = millis();
         g_mdnsTimedOut = false;
@@ -524,6 +525,14 @@ void setup() {
     } else {
         LOGF("PM configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
     }
+    
+    // ── POWER: Apply CPU frequency AFTER WiFi has stabilised ──
+    // During boot, the CPU stays at 80 MHz through WiFi init to avoid
+    // compounding a PLL relock spike with the RF calibration spike.
+    if (targetCpuMhz != getCpuFrequencyMhz()) {
+        setCpuFrequencyMhz(targetCpuMhz);
+    }
+    LOGF("CPU frequency: %dMHz", getCpuFrequencyMhz());
     
     // ── POWER: Configure GPIO wakeup for auto light-sleep ──
     // GPIO 33 (CS_SENSE) is an RTC GPIO that detects CPAP SD card bus activity.
@@ -717,12 +726,6 @@ void uploadTaskFunction(void* pvParameters) {
     // begin() handles on-demand TLS connection, saving ~11 s and ~28 KB of
     // heap when pre-flight finds no cloud work.
 
-    // Stop ULP monitor before SD card operations — ULP and SDMMC share RTC GPIO
-    extern UlpMonitor ulpMonitor;
-    if (ulpMonitor.isRunning()) {
-        ulpMonitor.stop();
-    }
-
     // Mount SD card
     if (!params->sdManager->takeControl()) {
         LOG_ERROR("[Upload] Failed to acquire SD card control");
@@ -760,19 +763,33 @@ void handleUploading() {
         // ── First call: determine filter and spawn upload task ──
         ScheduleManager* sm = uploader->getScheduleManager();
         DataFilter filter;
-        bool canFresh = sm->canUploadFreshData();
-        bool canOld = sm->canUploadOldData();
-        
-        if (canFresh && canOld) {
-            filter = DataFilter::ALL_DATA;
-        } else if (canFresh) {
+
+#ifdef ENABLE_WEBSERVER
+        // Force Upload outside scheduled window → recent data only
+        bool forceRecent = g_forceRecentOnlyFlag;
+        g_forceRecentOnlyFlag = false;
+#else
+        bool forceRecent = false;
+#endif
+
+        if (forceRecent) {
             filter = DataFilter::FRESH_ONLY;
-        } else if (canOld) {
-            filter = DataFilter::OLD_ONLY;
+            LOG("[FSM] Force upload (recent only) — outside scheduled window");
         } else {
-            LOG_WARN("[FSM] No data category eligible, releasing");
-            transitionTo(UploadState::RELEASING);
-            return;
+            bool canFresh = sm->canUploadFreshData();
+            bool canOld = sm->canUploadOldData();
+            
+            if (canFresh && canOld) {
+                filter = DataFilter::ALL_DATA;
+            } else if (canFresh) {
+                filter = DataFilter::FRESH_ONLY;
+            } else if (canOld) {
+                filter = DataFilter::OLD_ONLY;
+            } else {
+                LOG_WARN("[FSM] No data category eligible, releasing");
+                transitionTo(UploadState::RELEASING);
+                return;
+            }
         }
 
         LOGF("[FSM] Heap before upload task: fh=%u ma=%u",
@@ -866,11 +883,6 @@ void handleUploading() {
 void handleReleasing() {
     if (sdManager.hasControl()) {
         sdManager.releaseControl();
-    }
-    
-    // Restart ULP monitor for low-power CS_SENSE detection during idle states
-    if (!ulpMonitor.isRunning()) {
-        ulpMonitor.begin();
     }
     
     // If monitoring was requested during upload, go to MONITORING instead of COOLDOWN
@@ -1024,7 +1036,7 @@ void loop() {
         // Push SSE log events to connected client (if any).
         // ── POWER: Suppress SSE during uploads to eliminate continuous WiFi TX
         // churn from log streaming while SD + TLS + WiFi are all active.
-        if (!uploadTaskRunning && !g_brownoutRecoveryBoot) {
+        if (!uploadTaskRunning) {
             pushSseLogs();
         }
         // Status snapshot is rebuilt on-demand in handleApiStatus() — no periodic

@@ -28,10 +28,11 @@ CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=6
 # Saves ~30 KB DRAM and eliminates BT-related leakage current.
 CONFIG_BT_ENABLED=n
 
-# Cap the PHY-level maximum WiFi TX power at 11 dBm.
+# Cap the PHY-level maximum WiFi TX power at 10 dBm (Kconfig minimum).
 # Prevents peak current spikes during RF calibration and association even
 # before runtime code has a chance to call esp_wifi_set_max_tx_power().
-CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=11
+# The Kconfig range is 10-20; 10 is the absolute floor.
+CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10
 
 # Enable ESP-IDF power management framework (required for DFS).
 # Allows automatic CPU frequency scaling when tasks are idle.
@@ -49,11 +50,12 @@ CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
 CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
 
 # ── Brownout detector threshold ─────────────────────────────────────────────
-# Raise the hardware brownout detector threshold to level 7 (~2.74V).
-# Default level 0 (~2.43V) allows the 3.3V rail to sag deep enough to corrupt
-# the SD card's FTL before the chip resets. Level 7 triggers a clean reset
-# ~600mV below the operating rail, protecting flash translation layer integrity.
-CONFIG_ESP32_BROWNOUT_DET_LVL_SEL_7=y
+# Use the default brownout level 0 (~2.43V). Level 7 (~2.74V) was tested but
+# triggered too many resets on power-constrained CPAP hardware. Level 0 gives
+# the widest voltage headroom while still protecting against deep rail collapse.
+# Users with severe brownout issues can set BROWNOUT_DETECT=OFF in config.txt
+# to disable the detector entirely (at their own risk).
+CONFIG_ESP32_BROWNOUT_DET_LVL_SEL_0=y
 
 # ── TLS cipher optimization ──────────────────────────────────────────────────
 # Disable ChaCha20-Poly1305 — no hardware acceleration on ESP32.

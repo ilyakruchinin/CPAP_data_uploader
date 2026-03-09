@@ -6,10 +6,11 @@
 
 // Power management enums
 enum class WifiTxPower {
-    POWER_LOW,     // 5.0 dBm — minimum practical, router must be very close
-    POWER_MID,     // 8.5 dBm — default, good for typical bedroom placement
-    POWER_HIGH,    // 11.0 dBm — router in adjacent room or through walls
-    POWER_MAX      // 19.5 dBm — maximum power, only if other settings fail
+    POWER_LOWEST,  // -1 dBm — router on same nightstand
+    POWER_LOW,     //  2 dBm — router within 1-2 metres
+    POWER_MID,     //  5 dBm — default, typical bedroom (3-5m)
+    POWER_HIGH,    //  8.5 dBm — router in adjacent room
+    POWER_MAX      // 10 dBm — through walls, last resort (PHY-capped)
 };
 
 enum class WifiPowerSaving {
@@ -73,6 +74,7 @@ private:
     int cpuSpeedMhz;
     WifiTxPower wifiTxPower;
     WifiPowerSaving wifiPowerSaving;
+    bool brownoutDetectOff;
     
     // Credential storage mode flags
     bool storePlainText;
@@ -155,6 +157,7 @@ public:
     int getCpuSpeedMhz() const;
     WifiTxPower getWifiTxPower() const;
     WifiPowerSaving getWifiPowerSaving() const;
+    bool isBrownoutDetectOff() const;
     
     // Credential storage mode getters
     bool isStoringPlainText() const;

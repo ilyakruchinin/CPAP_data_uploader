@@ -181,7 +181,7 @@ The system supports configurable power management through `config.txt`:
 
 ```ini
 CPU_SPEED_MHZ = 80         # CPU frequency: 80-240MHz (default: 80, locks CPU — no DFS)
-WIFI_TX_PWR = low          # WiFi TX power: "low"/"mid"/"high"/"max" (default: "low")  
+WIFI_TX_PWR = mid          # WiFi TX power: "lowest"/"low"/"mid"/"high"/"max" (default: "mid" = 5 dBm)
 WIFI_PWR_SAVING = mid      # WiFi power save: "none"/"mid"/"max" (default: "mid")
 ```
 
