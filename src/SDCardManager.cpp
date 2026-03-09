@@ -2,6 +2,7 @@
 #include "Logger.h"
 #include "pins_config.h"
 #include <SD_MMC.h>
+#include <driver/gpio.h>
 
 // Global config reference to check enableSdCmd0Reset
 #include "Config.h"
@@ -51,7 +52,19 @@ bool SDCardManager::takeControl() {
     // SD cards need time to stabilize voltage and complete internal initialization
     delay(500);
 
-    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {
+    // ── POWER: Reduce GPIO drive strength on SD pins before mount ──
+    // At 1-bit 20 MHz, signal integrity margin is large.
+    // Reducing drive from default ~20mA (CAP_2) to ~5mA (CAP_0) slows
+    // edge rates, reducing di/dt current spikes on the 3.3V rail.
+    gpio_set_drive_capability((gpio_num_t)SD_CMD_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_CLK_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_D0_PIN, GPIO_DRIVE_CAP_0);
+
+    // ── POWER: Mount SD in 1-bit mode ──
+    // 1-bit mode uses only D0 (no D1-D3), halving bus toggle current.
+    // The card's bus-width negotiation is reset via CMD0 in releaseControl()
+    // so the CPAP can re-enumerate cleanly in its native 4-bit mode.
+    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_SLOW, false, SDMMC_FREQ_DEFAULT)) {
         LOG("SD card mount failed");
         releaseControl();
         return false;
@@ -78,10 +91,14 @@ void SDCardManager::releaseControl() {
     unsigned long holdDurationMs = millis() - controlAcquiredAt;
     LOGF("Releasing SD card. Total mount duration: %lu ms", holdDurationMs);
 
-    // Perform software reset of SD card state machine before handing back to CPAP
-    // if configured to do so. This crashes the card's Transfer state back to Idle,
-    // forcing the CPAP to cleanly remount it instead of failing on RCA mismatch.
-    if (config.getEnableSdCmd0Reset()) {
+    // ── Always reset card state before handing back to CPAP ──
+    // SD_MMC.end() deinitialises the SDMMC peripheral but does NOT send
+    // CMD0, so the card remains in whatever bus-width the ESP negotiated
+    // (1-bit when mounted with SDIO_BIT_MODE_SLOW).  Without a reset the
+    // CPAP's 4-bit re-init fails → no bus activity → PCNT reads 0 → SD error.
+    // CMD0 (GO_IDLE_STATE) forces the card back to idle, letting the CPAP
+    // perform a full re-enumeration in its native mode.
+    {
         LOG_DEBUG("Bit-banging CMD0 (GO_IDLE_STATE) to force SD card protocol reset...");
         
         // Reconfigure CMD pin as standard GPIO output
