@@ -88,6 +88,16 @@ void TrafficMonitor::update() {
     _lastPulseCount = (count > 0) ? (uint16_t)count : 0;
     _lastSampleActive = (_lastPulseCount > 0);
     
+    // DEBUG: Log every 5 seconds to verify PCNT is actually counting
+    static unsigned long lastDiagMs = 0;
+    if (now - lastDiagMs >= 5000) {
+        lastDiagMs = now;
+        LOG_DEBUGF("[PCNT] count=%d active=%d idle=%lums buf=%s",
+                   count, _lastSampleActive ? 1 : 0,
+                   (unsigned long)_consecutiveIdleMs,
+                   _sampleBuffer ? "alloc" : "null");
+    }
+    
     // Update idle tracking
     if (_lastSampleActive) {
         _consecutiveIdleMs = 0;

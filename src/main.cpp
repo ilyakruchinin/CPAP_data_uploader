@@ -5,6 +5,7 @@
 #include <esp_pm.h>
 #include <esp_sleep.h>
 #include <driver/gpio.h>
+#include <driver/rtc_io.h>
 #include <soc/rtc_cntl_reg.h>
 #include <esp_freertos_hooks.h>
 #include <Preferences.h>
@@ -242,6 +243,16 @@ void setup() {
     // CRITICAL: Immediately release SD card control to CPAP machine
     // This must happen before any delays to prevent CPAP machine errors
     // Initialize control pins
+    // ── Fix for ULP firmware residue: release RTC GPIO hold on CS_SENSE ──
+    // A previous firmware version configured GPIO 33 as an RTC GPIO with
+    // rtc_gpio_hold_en().  RTC hold survives software resets (OTA updates),
+    // locking the pin in RTC mode and disconnecting it from the digital GPIO
+    // matrix — which makes PCNT invisible to the signal.  Explicitly release
+    // the hold and switch back to normal GPIO before anything else touches
+    // the pin.  Safe to call even if the hold was never set (no-op).
+    rtc_gpio_hold_dis((gpio_num_t)CS_SENSE);
+    rtc_gpio_deinit((gpio_num_t)CS_SENSE);
+
     pinMode(CS_SENSE, INPUT);
     pinMode(SD_SWITCH_PIN, OUTPUT);
     digitalWrite(SD_SWITCH_PIN, SD_SWITCH_CPAP_VALUE);
