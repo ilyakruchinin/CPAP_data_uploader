@@ -10,6 +10,7 @@
 
 // Global trigger flags
 volatile bool g_triggerUploadFlag = false;
+volatile bool g_forceRecentOnlyFlag = false;
 volatile bool g_resetStateFlag = false;
 volatile bool g_softRebootFlag = false;
 
@@ -317,22 +318,12 @@ void CpapWebServer::handleRoot() {
 void CpapWebServer::handleTriggerUpload() {
     LOG("[WebServer] Upload trigger requested via web interface");
 
-    // Scheduled mode: reject trigger outside the upload window.
-    // Triggering outside the window would acquire the SD card (CPAP may be writing),
-    // do nothing (canUploadFreshData/canUploadOldData both false), then reboot — harmful.
+    // Scheduled mode outside window: allow but restrict to recent data only.
+    // Old data is skipped to avoid lengthy SD access during therapy hours.
     if (scheduleManager && !scheduleManager->isSmartMode()) {
         if (!scheduleManager->isInUploadWindow()) {
-            addCorsHeaders(server);
-            int startHour = scheduleManager->getUploadStartHour();
-            int endHour   = scheduleManager->getUploadEndHour();
-            char json[256];
-            snprintf(json, sizeof(json),
-                "{\"status\":\"scheduled\",\"message\":"
-                "\"Scheduled mode: uploads only between %02d:00 and %02d:00. "
-                "Switch to Smart mode for anytime uploads.\"}",
-                startHour, endHour);
-            server->send(200, "application/json", json);
-            return;
+            LOG("[WebServer] Scheduled mode outside window — force upload limited to recent data");
+            g_forceRecentOnlyFlag = true;
         }
     }
 
@@ -750,6 +741,7 @@ void CpapWebServer::initConfigSnapshot() {
         ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
         ",\"gmt_offset_hours\":%d,\"max_days\":%d,\"recent_folder_days\":%d"
         ",\"cloud_configured\":%s"
+        ",\"brownout_detect_off\":%s"
         ",\"firmware\":\"%s\"}",
         config->getWifiSSID().c_str(),
         config->getHostname().c_str(),
@@ -761,6 +753,7 @@ void CpapWebServer::initConfigSnapshot() {
         config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),
         config->getGmtOffsetHours(), config->getMaxDays(), config->getRecentFolderDays(),
         hasCloud ? "true" : "false",
+        config->isBrownoutDetectOff() ? "true" : "false",
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webConfigBuf, buf, n + 1);
@@ -1429,7 +1422,20 @@ void pushSseLogs() {
     Logger& logger = Logger::getInstance();
     uint32_t currentHead = logger.getHeadIndex();
 
-    if (currentHead == g_sseLastPushedIndex) return;  // nothing new
+    if (currentHead == g_sseLastPushedIndex) {
+        // No new log data — send periodic keepalive to prevent idle timeout
+        static unsigned long lastKeepalive = 0;
+        unsigned long now = millis();
+        if (now - lastKeepalive >= 15000) {
+            lastKeepalive = now;
+            if (g_sseClient.connected()) {
+                g_sseClient.print(": keepalive\n\n");
+            } else {
+                g_sseActive = false;
+            }
+        }
+        return;
+    }
 
     // Read new bytes from circular buffer and push as SSE data events.
     // We read under the logger's mutex via printLogsTail-style approach,

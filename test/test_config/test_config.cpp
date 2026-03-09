@@ -885,9 +885,9 @@ void test_config_power_management_defaults() {
     TEST_ASSERT_TRUE(config.valid());
     
     // Test default power management values
-    TEST_ASSERT_EQUAL(240, config.getCpuSpeedMhz());
-    TEST_ASSERT_EQUAL(WifiTxPower::POWER_HIGH, config.getWifiTxPower());
-    TEST_ASSERT_EQUAL(WifiPowerSaving::SAVE_NONE, config.getWifiPowerSaving());
+    TEST_ASSERT_EQUAL(80, config.getCpuSpeedMhz());
+    TEST_ASSERT_EQUAL(WifiTxPower::POWER_MID, config.getWifiTxPower());
+    TEST_ASSERT_EQUAL(WifiPowerSaving::SAVE_MID, config.getWifiPowerSaving());
 }
 
 // Test power management configuration with custom values

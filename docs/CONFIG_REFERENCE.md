@@ -49,7 +49,7 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 | `UPLOAD_MODE` | `smart` | Upload strategy. `smart` = continuous monitoring, upload whenever CPAP is idle. `scheduled` = only upload within the configured time window. |
 | `UPLOAD_START_HOUR` | `9` | Start of upload window (0–23, local time). Ignored in smart mode for fresh data. |
 | `UPLOAD_END_HOUR` | `21` | End of upload window (0–23, local time). Set equal to `UPLOAD_START_HOUR` for a 24/7 always-open window. |
-| `GMT_OFFSET_HOURS` | `0` | Timezone offset from UTC in whole hours (e.g. `11` for AEDT, `-5` for EST). Used for NTP time and upload window calculation. `GMT_OFFSET` is accepted as a backward-compatible alias. |
+| `GMT_OFFSET_HOURS` | `0` | Timezone offset from UTC in whole hours (e.g. `11` for AEDT, `-5` for EST). Used for NTP time and upload window calculation. |
 
 > **Tip**: In `scheduled` mode the device holds the SD card only during the upload window, giving the CPAP machine uncontested access at all other times — the safest configuration for avoiding SD card errors.
 
@@ -62,7 +62,7 @@ Only required when `ENDPOINT_TYPE` includes `CLOUD`.
 | `INACTIVITY_SECONDS` | `62` | 10–3600 | Seconds of SD bus silence required before the device attempts to take SD card control. Increase if your CPAP accesses the card frequently during warm-up. |
 | `EXCLUSIVE_ACCESS_MINUTES` | `5` | 1–30 | Maximum minutes the device holds exclusive SD card control per upload session. The session ends early if all work is done. |
 | `COOLDOWN_MINUTES` | `10` | 1–60 | Minutes to wait (SD card released) between upload cycles before starting the next inactivity check. |
-| `MINIMIZE_REBOOTS` | `true` | `true`/`false` | When `true` (default), the device skips elective soft-reboots after upload sessions and reuses the existing runtime (COOLDOWN → LISTENING loop). Mandatory reboots (watchdog, user-triggered state reset / soft reboot, OTA) still occur. When `false`, the device reboots after every real upload session to restore a clean heap. The legacy key name `SKIP_REBOOT_BETWEEN_BACKENDS` is accepted as a backward-compatible alias. |
+| `MINIMIZE_REBOOTS` | `true` | `true`/`false` | When `true` (default), the device skips elective soft-reboots after upload sessions and reuses the existing runtime (COOLDOWN → LISTENING loop). Mandatory reboots (watchdog, user-triggered state reset / soft reboot, OTA) still occur. When `false`, the device reboots after every real upload session to restore a clean heap. |
 
 ---
 
@@ -73,8 +73,9 @@ Power defaults are optimised for AirSense 11 compatibility (low peak current). M
 | Key | Default | Options | Description |
 |---|---|---|---|
 | `CPU_SPEED_MHZ` | `80` | `80`, `160`, `240` | ESP32 CPU clock speed. At the default 80 MHz, DFS is disabled (CPU locked) — no frequency transitions, lowest power. Set to `160` to re-enable DFS (80–160 MHz) for faster TLS handshakes on non-constrained hardware. |
-| `WIFI_TX_PWR` | `LOW` | `LOW` (5 dBm), `MID` (8.5 dBm), `HIGH` (11 dBm), `MAX` (19.5 dBm) | WiFi transmit power. `LOW` minimises peak current (~100–120 mA) and is sufficient for typical bedroom placement (~5 m). Increase to `MID` or `HIGH` if your router is further away. |
-| `WIFI_PWR_SAVING` | `MID` | `NONE`, `MID`/`MODEM`, `MAX` | WiFi power-saving mode. `MID` (MIN_MODEM) wakes every DTIM for broadcasts — preserves mDNS while saving ~90 mA idle. `MAX` saves slightly more but may miss mDNS queries. |
+| `WIFI_TX_PWR` | `MID` | `LOWEST` (-1 dBm), `LOW` (2 dBm), `MID` (5 dBm), `HIGH` (8.5 dBm), `MAX` (10 dBm) | WiFi transmit power. `MID` (5 dBm) is the default — sufficient for typical bedroom placement (~3–5 m). Use `LOWEST` or `LOW` only if your router is very close. Increase to `HIGH` or `MAX` if your router is further away or through walls. |
+| `WIFI_PWR_SAVING` | `MID` | `NONE`, `MID`, `MAX` | WiFi power-saving mode. `MID` (MIN_MODEM) wakes every DTIM for broadcasts — preserves mDNS while saving ~90 mA idle. `MAX` saves slightly more but may miss mDNS queries. |
+| `BROWNOUT_DETECT` | *(enabled)* | `OFF` | Set to `OFF` to disable the hardware brownout detector at runtime. **Use only as a last resort** for devices that reset frequently due to power drops. When disabled, the device will not reset on voltage sags, risking data corruption. A persistent warning banner is shown on the web dashboard. |
 
 > **Note:** 802.11b is disabled at the firmware level (OFDM only). This is not configurable and eliminates the 370 mA peak TX scenario. Bluetooth is also fully disabled at compile time. Auto light-sleep is enabled — the CPU sleeps between WiFi DTIM intervals in IDLE and COOLDOWN states, reducing idle current to ~2–3 mA. TLS uses hardware-accelerated AES-128-GCM only (ChaCha20 and AES-256 are disabled at compile time for lower CPU load).
 
@@ -100,7 +101,7 @@ Power defaults are optimised for AirSense 11 compatibility (low peak current). M
 
 | Key | Default | Description |
 |---|---|---|
-| `PERSISTENT_LOGS` | `false` | Set to `true` to periodically flush the in-memory log buffer to the ESP32's internal `LittleFS` partition (4-file rotation: `syslog.0..3.txt`, 32 KB each, 128 KB total). Logs are flushed every **30 seconds**, continuously — including during active uploads. Use the **⬇ Download All Logs** button on the Logs tab to download persisted + current log files to your browser. Logs are written to internal flash only, never to the SD card. The legacy key names `SAVE_LOGS` and `LOG_TO_SD_CARD` are accepted as backward-compatible aliases. **Note:** Regardless of this setting, the log buffer is always flushed to LittleFS before any reboot, and to `/uploader_error.txt` on the SD card if a boot-time failure prevents WiFi connectivity. |
+| `PERSISTENT_LOGS` | `false` | Set to `true` to periodically flush the in-memory log buffer to the ESP32's internal `LittleFS` partition (4-file rotation: `syslog.0..3.txt`, 32 KB each, 128 KB total). Logs are flushed every **30 seconds**, continuously — including during active uploads. Use the **⬇ Download All Logs** button on the Logs tab to download persisted + current log files to your browser. Logs are written to internal flash only, never to the SD card. **Note:** Regardless of this setting, the log buffer is always flushed to LittleFS before any reboot, and to `/uploader_error.txt` on the SD card if a boot-time failure prevents WiFi connectivity. |
 | `DEBUG` | `false` | Set to `true` to enable verbose diagnostics: (1) per-folder `Pre-flight scan` lines in the upload log, and (2) `[res fh= ma= fd=]` heap/file-descriptor stats appended to every log line. Leave `false` in normal operation to keep logs concise. |
 
 ---
@@ -113,6 +114,10 @@ The following keys are **no longer used** by the firmware. They will generate a 
 |---|---|
 | `BOOT_DELAY_SECONDS` | **Removed in v0.9.2.** Cold-boot electrical stabilization is now hardcoded to 15 seconds (a chicken-and-egg problem: the delay happens before the SD card is read, so this value could never actually be applied). |
 | `SCHEDULE` | **Legacy.** Parsed and stored but not used by any firmware logic. Superseded by `UPLOAD_MODE`, `UPLOAD_START_HOUR`, and `UPLOAD_END_HOUR`. |
+| `GMT_OFFSET` | **Removed.** Use `GMT_OFFSET_HOURS`. |
+| `SAVE_LOGS` | **Removed.** Use `PERSISTENT_LOGS`. |
+| `LOG_TO_SD_CARD` | **Removed.** Use `PERSISTENT_LOGS`. |
+| `SKIP_REBOOT_BETWEEN_BACKENDS` | **Removed.** Use `MINIMIZE_REBOOTS`. |
 
 ---
 

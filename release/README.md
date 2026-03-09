@@ -350,19 +350,25 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - At the default 80 MHz, DFS is disabled (CPU locked) — no frequency transitions, lowest power
 - Set to 160 to re-enable DFS (80–160 MHz) for faster TLS handshakes on non-constrained hardware
 
-**WIFI_TX_PWR** (optional, default: "LOW")
+**WIFI_TX_PWR** (optional, default: "MID")
 - WiFi transmit power level:
-  - `LOW` — 5 dBm (default, sufficient for typical bedroom placement ~5 m)
-  - `MID` — 8.5 dBm (good for adjacent rooms)
-  - `HIGH` — 11 dBm (router through walls)
-  - `MAX` — 19.5 dBm (maximum power, only if other settings fail)
+  - `LOWEST` — -1 dBm (router on same nightstand)
+  - `LOW` — 2 dBm (router within 1–2 metres)
+  - `MID` — 5 dBm (default, typical bedroom placement ~3–5 m)
+  - `HIGH` — 8.5 dBm (router in adjacent room)
+  - `MAX` — 10 dBm (through walls, last resort)
 - Increase if you experience WiFi connection issues
 
-**WIFI_PWR_SAVING** (optional, default: "mid")
+**WIFI_PWR_SAVING** (optional, default: "MID")
 - WiFi power saving mode:
   - `NONE` — No power saving (maximum responsiveness)
-  - `MID` / `MODEM` — MIN_MODEM (default, wakes every DTIM — preserves mDNS)
+  - `MID` — MIN_MODEM (default, wakes every DTIM — preserves mDNS)
   - `MAX` — MAX_MODEM (lowest power but may miss mDNS queries)
+
+**BROWNOUT_DETECT** (optional, default: enabled)
+- Set to `OFF` to disable the hardware brownout detector at runtime
+- **Use only as a last resort** for devices that reset frequently due to power drops
+- When disabled, a persistent warning banner is shown on the web dashboard
 
 > **Note:** 802.11b is disabled at the firmware level to reduce peak power draw. Bluetooth is also fully disabled. These are not configurable.
 
@@ -376,13 +382,13 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - Useful for diagnosing upload scheduling issues; disable when not needed
 - Example: `DEBUG = true`
 
-**SAVE_LOGS** (optional, default: false)
+**PERSISTENT_LOGS** (optional, default: false)
 - Persist logs to internal flash (4-file rotation: `syslog.0..3.txt`, 32 KB each, 128 KB total on LittleFS) for retrieval across reboots
 - Logs flush every **30 seconds**, continuously — including during active uploads — and immediately before every reboot
 - Use the **⬇ Download All Logs** button on the Logs tab to download persisted + current log files directly to your browser
 - Useful for diagnosing issues that only appear after a reboot or crash
 - Automatically disabled if flash write operations fail
-- Example: `SAVE_LOGS = true`
+- Example: `PERSISTENT_LOGS = true`
 
 ### Credential Security
 

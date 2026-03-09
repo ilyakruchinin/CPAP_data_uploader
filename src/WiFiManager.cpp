@@ -335,11 +335,12 @@ void WiFiManager::applyTxPowerEarly(WifiTxPower txPower) {
     // to prevent full-power spikes during the initial scan and association.
     wifi_power_t espTxPower;
     switch (txPower) {
-        case WifiTxPower::POWER_MAX:  espTxPower = WIFI_POWER_19_5dBm; break;
-        case WifiTxPower::POWER_HIGH: espTxPower = WIFI_POWER_11dBm;   break;
-        case WifiTxPower::POWER_MID:  espTxPower = WIFI_POWER_8_5dBm;  break;
-        case WifiTxPower::POWER_LOW:  espTxPower = WIFI_POWER_5dBm;    break;
-        default:                      espTxPower = WIFI_POWER_8_5dBm;  break;
+        case WifiTxPower::POWER_MAX:    espTxPower = WIFI_POWER_11dBm;       break; // PHY caps at 10 dBm
+        case WifiTxPower::POWER_HIGH:   espTxPower = WIFI_POWER_8_5dBm;      break;
+        case WifiTxPower::POWER_MID:    espTxPower = WIFI_POWER_5dBm;        break;
+        case WifiTxPower::POWER_LOW:    espTxPower = WIFI_POWER_2dBm;        break;
+        case WifiTxPower::POWER_LOWEST: espTxPower = WIFI_POWER_MINUS_1dBm;  break;
+        default:                        espTxPower = WIFI_POWER_5dBm;        break;
     }
     // Pre-init WiFi so TX power can be set before begin()
     WiFi.mode(WIFI_STA);
@@ -358,24 +359,28 @@ void WiFiManager::applyPowerSettings(WifiTxPower txPower, WifiPowerSaving powerS
     wifi_power_t espTxPower;
     switch (txPower) {
         case WifiTxPower::POWER_MAX:
-            espTxPower = WIFI_POWER_19_5dBm;  // 19.5dBm (maximum — may be capped by sdkconfig)
-            LOG_DEBUG("WiFi TX power set to MAX (19.5dBm)");
+            espTxPower = WIFI_POWER_11dBm;       // PHY caps at 10 dBm
+            LOG_DEBUG("WiFi TX power set to MAX (10dBm, PHY-capped)");
             break;
         case WifiTxPower::POWER_HIGH:
-            espTxPower = WIFI_POWER_11dBm;    // 11dBm
-            LOG_DEBUG("WiFi TX power set to HIGH (11dBm)");
+            espTxPower = WIFI_POWER_8_5dBm;      // 8.5dBm
+            LOG_DEBUG("WiFi TX power set to HIGH (8.5dBm)");
             break;
         case WifiTxPower::POWER_MID:
-            espTxPower = WIFI_POWER_8_5dBm;   // 8.5dBm (default)
-            LOG_DEBUG("WiFi TX power set to MID (8.5dBm)");
+            espTxPower = WIFI_POWER_5dBm;        // 5dBm (default)
+            LOG_DEBUG("WiFi TX power set to MID (5dBm)");
             break;
         case WifiTxPower::POWER_LOW:
-            espTxPower = WIFI_POWER_5dBm;     // 5dBm
-            LOG_DEBUG("WiFi TX power set to LOW (5dBm)");
+            espTxPower = WIFI_POWER_2dBm;        // 2dBm
+            LOG_DEBUG("WiFi TX power set to LOW (2dBm)");
+            break;
+        case WifiTxPower::POWER_LOWEST:
+            espTxPower = WIFI_POWER_MINUS_1dBm;  // -1dBm
+            LOG_DEBUG("WiFi TX power set to LOWEST (-1dBm)");
             break;
         default:
-            espTxPower = WIFI_POWER_8_5dBm;
-            LOG_WARN("Unknown TX power setting, using MID (8.5dBm)");
+            espTxPower = WIFI_POWER_5dBm;
+            LOG_WARN("Unknown TX power setting, using MID (5dBm)");
             break;
     }
     WiFi.setTxPower(espTxPower);

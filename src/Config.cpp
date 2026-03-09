@@ -40,8 +40,9 @@ Config::Config() :
     
     // Power management defaults (optimized for AirSense 11 compatibility)
     cpuSpeedMhz(80),  // Default: 80MHz (minimum for WiFi, saves ~30-40mA)
-    wifiTxPower(WifiTxPower::POWER_LOW),  // Default: 5.0dBm (minimum practical, reduces peak current ~20-30mA)
-    wifiPowerSaving(WifiPowerSaving::SAVE_MID)  // Default: MIN_MODEM (preserves mDNS)
+    wifiTxPower(WifiTxPower::POWER_MID),  // Default: 5.0dBm (typical bedroom placement, reduces peak current)
+    wifiPowerSaving(WifiPowerSaving::SAVE_MID),  // Default: MIN_MODEM (preserves mDNS)
+    brownoutDetectOff(false)  // Default: brownout detection enabled
 {}
 
 Config::~Config() {
@@ -189,10 +190,9 @@ void Config::setConfigValue(String key, String value) {
         endpointUser = value;
     } else if (key == "ENDPOINT_PASSWORD") {
         endpointPassword = value;
-    } else if (key == "GMT_OFFSET_HOURS" || key == "GMT_OFFSET") {
+    } else if (key == "GMT_OFFSET_HOURS") {
         gmtOffsetHours = value.toInt();
-    // PERSISTENT_LOGS is the primary key; SAVE_LOGS and LOG_TO_SD_CARD are backward-compatible aliases.
-    } else if (key == "PERSISTENT_LOGS" || key == "SAVE_LOGS" || key == "LOG_TO_SD_CARD") {
+    } else if (key == "PERSISTENT_LOGS") {
         saveLogs = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "DEBUG") {
         debugMode = (value.equalsIgnoreCase("true") || value.toInt() == 1);
@@ -234,8 +234,10 @@ void Config::setConfigValue(String key, String value) {
         wifiPowerSaving = parseWifiPowerSaving(value);
     } else if (key == "STORE_CREDENTIALS_PLAIN_TEXT") {
         storePlainText = (value.equalsIgnoreCase("true") || value.toInt() == 1);
-    } else if (key == "MINIMIZE_REBOOTS" || key == "SKIP_REBOOT_BETWEEN_BACKENDS") {
+    } else if (key == "MINIMIZE_REBOOTS") {
         minimizeReboots = (value.equalsIgnoreCase("true") || value.toInt() == 1);
+    } else if (key == "BROWNOUT_DETECT") {
+        brownoutDetectOff = value.equalsIgnoreCase("off");
     } else {
         LOGF("WARN: Unknown config key '%s'. Skipping.", key.c_str());
     }
@@ -599,6 +601,7 @@ bool Config::hasWebdavEndpoint() const { return _hasWebdavEndpoint; }
 int Config::getCpuSpeedMhz() const { return cpuSpeedMhz; }
 WifiTxPower Config::getWifiTxPower() const { return wifiTxPower; }
 WifiPowerSaving Config::getWifiPowerSaving() const { return wifiPowerSaving; }
+bool Config::isBrownoutDetectOff() const { return brownoutDetectOff; }
 
 // Upload FSM getters
 const String& Config::getUploadMode() const { return uploadMode; }
@@ -615,19 +618,20 @@ bool Config::isSmartMode() const { return uploadMode == "smart"; }
 WifiTxPower Config::parseWifiTxPower(const String& str) {
     String s = str;
     s.toUpperCase();
-    if (s == "MAX" || s == "MAXIMUM") return WifiTxPower::POWER_MAX;
+    if (s == "MAX") return WifiTxPower::POWER_MAX;
     if (s == "HIGH") return WifiTxPower::POWER_HIGH;
-    if (s == "MID" || s == "MEDIUM") return WifiTxPower::POWER_MID;
+    if (s == "MID") return WifiTxPower::POWER_MID;
     if (s == "LOW") return WifiTxPower::POWER_LOW;
-    return WifiTxPower::POWER_MID; // Default: 8.5dBm
+    if (s == "LOWEST") return WifiTxPower::POWER_LOWEST;
+    return WifiTxPower::POWER_MID; // Default: 5 dBm
 }
 
 WifiPowerSaving Config::parseWifiPowerSaving(const String& str) {
     String s = str;
     s.toUpperCase();
-    if (s == "NONE" || s == "OFF") return WifiPowerSaving::SAVE_NONE;
-    if (s == "MID" || s == "MEDIUM" || s == "MODEM") return WifiPowerSaving::SAVE_MID;
-    if (s == "MAX" || s == "HIGH") return WifiPowerSaving::SAVE_MAX;
+    if (s == "NONE") return WifiPowerSaving::SAVE_NONE;
+    if (s == "MID") return WifiPowerSaving::SAVE_MID;
+    if (s == "MAX") return WifiPowerSaving::SAVE_MAX;
     return WifiPowerSaving::SAVE_MID; // Default: MIN_MODEM
 }
 
@@ -637,6 +641,7 @@ String Config::wifiTxPowerToString(WifiTxPower power) {
         case WifiTxPower::POWER_HIGH: return "HIGH";
         case WifiTxPower::POWER_MID: return "MID";
         case WifiTxPower::POWER_LOW: return "LOW";
+        case WifiTxPower::POWER_LOWEST: return "LOWEST";
         default: return "UNKNOWN";
     }
 }
