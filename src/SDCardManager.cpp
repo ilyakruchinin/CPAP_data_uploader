@@ -2,7 +2,6 @@
 #include "Logger.h"
 #include "pins_config.h"
 #include <SD_MMC.h>
-#include <driver/gpio.h>
 
 // Global config reference to check enableSdCmd0Reset
 #include "Config.h"
@@ -52,21 +51,7 @@ bool SDCardManager::takeControl() {
     // SD cards need time to stabilize voltage and complete internal initialization
     delay(500);
 
-    // ── POWER: Reduce GPIO drive strength on SD pins before mount ──
-    // At 1-bit 20 MHz, signal integrity margin is large.
-    // Reducing drive from default ~20mA (CAP_2) to ~5mA (CAP_0) slows
-    // edge rates, reducing di/dt current spikes on the 3.3V rail.
-    gpio_set_drive_capability((gpio_num_t)SD_CMD_PIN, GPIO_DRIVE_CAP_0);
-    gpio_set_drive_capability((gpio_num_t)SD_CLK_PIN, GPIO_DRIVE_CAP_0);
-    gpio_set_drive_capability((gpio_num_t)SD_D0_PIN, GPIO_DRIVE_CAP_0);
-
-    // ── POWER: Mount SD in 1-bit mode ──
-    // 1-bit mode uses only D0 (no D1-D3), halving bus toggle current.
-    // 1-bit mode at default 20 MHz: the main power win comes from 3 fewer
-    // active data lines (less simultaneous switching current).  Reducing
-    // the clock further (e.g. 5 MHz) adds marginal electrical benefit but
-    // makes pre-flight directory scans 4-6× slower since those are SD-bound.
-    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_SLOW, false, SDMMC_FREQ_DEFAULT)) {
+    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {
         LOG("SD card mount failed");
         releaseControl();
         return false;
