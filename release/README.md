@@ -123,26 +123,16 @@ Want more control? See [Configuration Reference](#configuration-reference) for a
 
 ---
 
-## Firmware Options
+## Firmware
 
-This package includes two firmware versions:
+This package includes OTA-enabled firmware with web-based update capability:
 
-### **OTA Firmware** (Recommended)
-- **File:** `firmware-ota.bin` (complete firmware with bootloader)
-- **Upgrade file:** `firmware-ota-upgrade.bin` (for web OTA updates)
-- **Features:** Web-based firmware updates via `/ota` interface
-- **Partition:** 1.5MB app space (dual OTA partitions)
-- **Best for:** Production use, remote deployments
-- **Update method:** 
-  - Initial flash: Use `firmware-ota.bin` with upload scripts
-  - Upgrades: Upload `firmware-ota-upgrade.bin` via web browser
+- **`firmware-ota.bin`** — Complete firmware (bootloader + partitions + app) for initial USB/Serial flashing
+- **`firmware-ota-upgrade.bin`** — App-only binary for subsequent updates via the web interface
 
-### **Standard Firmware**
-- **File:** `firmware-standard.bin` (complete firmware with bootloader)
-- **Features:** Maximum app space, no OTA capability
-- **Partition:** 3MB app space
-- **Best for:** Development, maximum feature space, users who prefer manual updates
-- **Update method:** USB/Serial upload using `firmware-standard.bin` (can be re-flashed anytime)
+**Update methods:**
+- **Initial flash:** Use `firmware-ota.bin` with the included upload scripts (USB/Serial)
+- **Upgrades:** Upload `firmware-ota-upgrade.bin` via the web interface at `http://cpap.local/ota`
 
 ---
 
@@ -162,13 +152,9 @@ Insert the SD card in your CPAP machine and allow for the CPAP machine to format
 **Windows:**
 1. Ensure Python 3.7+ is installed (download from https://python.org)
 2. Find your COM port (see "Finding Your Serial Port" below)
-3. Run the appropriate upload script:
+3. Run the upload script:
 ```cmd
-REM For OTA firmware (recommended)
 upload-ota.bat COM3
-
-REM For standard firmware
-upload-standard.bat COM3
 ```
 
 The script will automatically:
@@ -178,11 +164,7 @@ The script will automatically:
 
 **macOS/Linux:**
 ```bash
-# For OTA firmware (default)
 ./upload.sh /dev/ttyUSB0
-
-# For standard firmware
-./upload.sh /dev/ttyUSB0 standard
 ```
 
 Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
@@ -193,8 +175,6 @@ Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
 2. Use **Method 1** to upload `firmware-ota-upgrade.bin` from your computer
 3. Or use **Method 2** to download firmware directly from GitHub
 4. Device will restart automatically after update
-
-**Note:** For standard firmware, you must re-flash via USB/Serial using the upload scripts.
 
 ### 2. Create Configuration File
 
@@ -867,12 +847,10 @@ python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0
 
 ## Package Contents
 
-- `firmware-ota.bin` - Complete OTA firmware for initial flashing (1.3MB)
+- `firmware-ota.bin` - Complete firmware for initial flashing (1.3MB)
 - `firmware-ota-upgrade.bin` - App-only binary for web OTA updates (1.2MB)
-- `firmware-standard.bin` - Complete standard firmware, can be re-flashed (1.2MB)
-- `upload-ota.bat` - Windows OTA firmware upload script
-- `upload-standard.bat` - Windows standard firmware upload script
-- `upload.sh` - macOS/Linux upload script (supports both firmware types)
+- `upload-ota.bat` - Windows upload script
+- `upload.sh` - macOS/Linux upload script
 - `requirements.txt` - Python dependencies (esptool)
 - `config.txt.example.simple` - Minimal configuration (bare essentials)
 - `config.txt.example.smb` - SMB/network share configuration
