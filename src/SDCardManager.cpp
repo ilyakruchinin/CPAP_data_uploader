@@ -53,18 +53,20 @@ bool SDCardManager::takeControl() {
     delay(500);
 
     // ── POWER: Reduce GPIO drive strength on SD pins before mount ──
-    // At 1-bit 20 MHz, signal integrity margin is large.
     // Reducing drive from default ~20mA (CAP_2) to ~5mA (CAP_0) slows
     // edge rates, reducing di/dt current spikes on the 3.3V rail.
     gpio_set_drive_capability((gpio_num_t)SD_CMD_PIN, GPIO_DRIVE_CAP_0);
     gpio_set_drive_capability((gpio_num_t)SD_CLK_PIN, GPIO_DRIVE_CAP_0);
     gpio_set_drive_capability((gpio_num_t)SD_D0_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_D1_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_D2_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_D3_PIN, GPIO_DRIVE_CAP_0);
 
-    // ── POWER: Mount SD in 1-bit mode ──
-    // 1-bit mode uses only D0 (no D1-D3), halving bus toggle current.
-    // The card's bus-width negotiation is reset via CMD0 in releaseControl()
-    // so the CPAP can re-enumerate cleanly in its native 4-bit mode.
-    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_SLOW, false, SDMMC_FREQ_DEFAULT)) {
+    // Mount SD in 1-bit or 4-bit mode based on config.
+    // 4-bit is default and safer for CPAP handoff.
+    // 1-bit uses less ESP-side bus current but requires a compatibility remount on release.
+    bool use1Bit = config.getEnable1BitSdMode();
+    if (!SD_MMC.begin("/sdcard", use1Bit ? SDIO_BIT_MODE_SLOW : SDIO_BIT_MODE_FAST, false, SDMMC_FREQ_DEFAULT)) {
         LOG("SD card mount failed");
         releaseControl();
         return false;
@@ -101,10 +103,14 @@ void SDCardManager::releaseControl() {
     gpio_set_drive_capability((gpio_num_t)SD_D2_PIN, GPIO_DRIVE_CAP_2);
     gpio_set_drive_capability((gpio_num_t)SD_D3_PIN, GPIO_DRIVE_CAP_2);
 
-    if (SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {
-        SD_MMC.end();
-    } else {
-        LOG_WARN("SD handoff compatibility remount failed");
+    // If we mounted in 1-bit mode, do a brief 4-bit compatibility remount
+    // so the card's negotiated bus width is restored to 4-bit before the CPAP takes over.
+    if (config.getEnable1BitSdMode()) {
+        if (SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {
+            SD_MMC.end();
+        } else {
+            LOG_WARN("SD handoff compatibility remount failed");
+        }
     }
 
     setControlPin(false);

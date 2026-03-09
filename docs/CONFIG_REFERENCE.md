@@ -93,7 +93,7 @@ Power defaults are optimised for AirSense 11 compatibility (low peak current). M
 
 | Key | Default | Description |
 |---|---|---|
-| `ENABLE_SD_CMD0_RESET` | `false` | If `true`, bit-bangs a `CMD0` (GO_IDLE_STATE) frame on the SD bus immediately before returning control to the CPAP machine. This forces the CPAP to cleanly remount the SD card instead of throwing a timeout or RCA-mismatch error after the ESP32 releases control. Enable ONLY if your CPAP model throws errors upon the ESP releasing control. AirSense 11 users have reported issues (SD Card Error) with this setting enabled. |
+| `ENABLE_1BIT_SD_MODE` | `false` | If `true`, the ESP32 will mount the SD card in 1-bit mode instead of 4-bit mode. This reduces bus toggling current during ESP-side uploads, but forces a brief 4-bit compatibility remount before handing the card back to the CPAP machine (which expects a 4-bit negotiated state). Leave `false` (default) for the most reliable, lowest-spike CPAP handoff. Enable only if you want to experiment with ESP-side power reduction and your CPAP does not throw SD errors during handoff. |
 
 ---
 
@@ -117,7 +117,7 @@ The following keys are **no longer used** by the firmware. They will generate a 
 | `GMT_OFFSET` | **Removed.** Use `GMT_OFFSET_HOURS`. |
 | `SAVE_LOGS` | **Removed.** Use `PERSISTENT_LOGS`. |
 | `LOG_TO_SD_CARD` | **Removed.** Use `PERSISTENT_LOGS`. |
-| `SKIP_REBOOT_BETWEEN_BACKENDS` | **Removed.** Use `MINIMIZE_REBOOTS`. |
+| `ENABLE_SD_CMD0_RESET` | **Removed.** Use `ENABLE_1BIT_SD_MODE` for experimental low-power mode instead. |
 
 ---
 

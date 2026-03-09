@@ -28,7 +28,7 @@ Config::Config() :
     inactivitySeconds(62),
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
-    enableSdCmd0Reset(false),
+    enable1BitSdMode(false),  // Default to safer 4-bit mode
     minimizeReboots(true),
     
     _hasSmbEndpoint(false),
@@ -224,8 +224,8 @@ void Config::setConfigValue(String key, String value) {
         exclusiveAccessMinutes = value.toInt();
     } else if (key == "COOLDOWN_MINUTES") {
         cooldownMinutes = value.toInt();
-    } else if (key == "ENABLE_SD_CMD0_RESET") {
-        enableSdCmd0Reset = (value.equalsIgnoreCase("true") || value == "1");
+    } else if (key == "ENABLE_1BIT_SD_MODE") {
+        enable1BitSdMode = (value.equalsIgnoreCase("true") || value == "1");
     } else if (key == "CPU_SPEED_MHZ") {
         cpuSpeedMhz = value.toInt();
     } else if (key == "WIFI_TX_PWR") {
@@ -610,7 +610,7 @@ int Config::getUploadEndHour() const { return uploadEndHour; }
 int Config::getInactivitySeconds() const { return inactivitySeconds; }
 int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
 int Config::getCooldownMinutes() const { return cooldownMinutes; }
-bool Config::getEnableSdCmd0Reset() const { return enableSdCmd0Reset; }
+bool Config::getEnable1BitSdMode() const { return enable1BitSdMode; }
 bool Config::getMinimizeReboots() const { return minimizeReboots; }
 bool Config::isSmartMode() const { return uploadMode == "smart"; }
 
