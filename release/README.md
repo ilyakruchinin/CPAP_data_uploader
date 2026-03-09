@@ -635,6 +635,28 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 - Verify router allows device to access internet
 - Check firewall settings
 
+### ⚠️ ESP32 Brownouts & Power Issues
+
+If your device randomly reboots (shows "REBOOTING" constantly) or drops WiFi, it is likely experiencing a power dip (brownout). The CPAP machine's SD card slot provides limited power, and the ESP32's WiFi can draw too much current.
+
+**Recommended Settings to Fix Power Issues:**
+
+1. **Reduce WiFi Transmit Power (Most Effective)**
+   Move your router closer (or use a WiFi extender/mesh node) and set:
+   `WIFI_TX_PWR = LOW` or `WIFI_TX_PWR = LOWEST`
+   *(Default is MID. Lowering TX power drastically reduces current spikes).*
+2. **Keep CPU at Base Speed**
+   `CPU_SPEED_MHZ = 80`
+   *(This is the default, but ensure you haven't increased it. 80 MHz disables dynamic frequency scaling).*
+3. **Try Experimental 1-Bit SD Mode**
+   `ENABLE_1BIT_SD_MODE = true`
+   *(Reduces the number of active SD data lines, halving bus toggle current during uploads. Note: only use if your CPAP does not throw "SD Card Error" when using this mode).*
+4. **Disable Brownout Detection (Last Resort)**
+   `BROWNOUT_DETECT = OFF`
+   *(Prevents the ESP32 from intentionally restarting when voltage drops. Device may still crash if voltage drops too low).*
+
+---
+
 ### ⚠️ SD Card Errors — Use Scheduled Mode
 
 > **If your CPAP machine is showing "SD Card Error" or "SD Card Removed" messages, switch to `UPLOAD_MODE = scheduled` immediately.**

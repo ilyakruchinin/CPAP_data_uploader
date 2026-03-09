@@ -27,8 +27,16 @@ bool takeControl() {
         return false;
     }
     
-    // Set card to 1-bit mode for compatibility
-    SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0);
+    // Set card to 4-bit mode by default for compatibility
+    SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0, SD_D1, SD_D2, SD_D3);
+    
+    // Reduce drive strength on all SD pins to GPIO_DRIVE_CAP_0 (~5mA)
+    gpio_set_drive_capability(SD_CLK, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(SD_CMD, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(SD_D0, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(SD_D1, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(SD_D2, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(SD_D3, GPIO_DRIVE_CAP_0);
     
     _hasControl = true;
     return true;
@@ -38,7 +46,8 @@ bool takeControl() {
 ## Key Features
 
 ### Safe Mounting
-- **1-bit mode**: Ensures compatibility with CPAP hardware
+- **4-bit mode by default**: Ensures complete compatibility with the CPAP hardware when handing the card back
+- **1-bit mode experimental**: Available via configuration (`ENABLE_1BIT_SD_MODE=true`), which requires a brief 4-bit compatibility remount before handoff
 - **Exclusive access**: Prevents concurrent access conflicts
 - **Error recovery**: Retry mechanisms for mount failures
 - **Status tracking**: Monitor mount state and health
