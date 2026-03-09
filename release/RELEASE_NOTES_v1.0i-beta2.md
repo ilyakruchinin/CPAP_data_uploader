@@ -17,15 +17,28 @@ This release focuses on reducing power consumption, improving WiFi reliability o
   - `MAX` (10 dBm) — through walls, last resort
 - **Hardware TX power cap lowered to 10 dBm** — the ESP32's RF calibration spike at boot is now capped at the absolute minimum the hardware allows. Previously it was 11 dBm. This reduces the brief power surge that occurs before your configured TX power takes effect.
 
+### SD Card Compatibility & Power Fixes
+
+- **Reduced SD card bus spikes** — Reduced GPIO drive strength on all SD pins to ~5mA to soften switching edges, which significantly reduces the `di/dt` current spikes that cause ESP32 brownouts.
+- **Improved CPAP handoff (AirSense 11 fix)** — Replaced the disruptive `CMD0` bit-bang reset with a safe 4-bit compatibility remount. This ensures the CPAP receives the card in its expected native 4-bit state, fixing the "SD Card Error" issue seen on AirSense 11 machines.
+- **New experimental config: `ENABLE_1BIT_SD_MODE=true`** — Allows the ESP32 to mount the SD card in 1-bit mode, halving the number of active data lines to reduce ESP-side switching current. (Defaults to `false` for the safest, most reliable CPAP handoff).
+
+### Activity Monitor Fixes
+
+- **Fixed "0 pulses" after OTA updates** — A previous firmware version left the activity monitor pin in a locked RTC state that survived software reboots. The firmware now explicitly clears this hold on boot, ensuring the PCNT (pulse counter) correctly detects CPAP SD activity after an OTA update.
+
 ### Boot Sequence Power Improvements
 
+- **Brownout-recovery degraded boot** — If the device detects that its previous restart was caused by a hardware brownout (`ESP_RST_BROWNOUT`), it intentionally boots into a degraded "recovery" profile: mDNS is disabled, TX power is locked to `LOWEST`, and WiFi power saving is locked to `MAX`. This maximizes the chance of successfully connecting to WiFi and uploading data on a severely constrained power supply. The profile automatically clears after one successful upload cycle.
 - **CPU frequency boost deferred** — the CPU now stays at 80 MHz throughout WiFi initialisation, then boosts to your configured speed afterward. Previously the CPU and WiFi powered up simultaneously, compounding current spikes.
-- **mDNS delayed by 200ms after WiFi connects** — gives the 3.3V power rail a moment to recover from the WiFi association burst before mDNS fires its multicast announcement.
+- **Timed mDNS (60s limit)** — The local network discovery broadcast (`cpap.local`) now stops after 60 seconds of uptime. This gives you time to load the web interface after boot, but eliminates periodic multicast wake-ups during the long idle/cooldown phases, saving power.
+- **mDNS delayed by 200ms after WiFi connects** — gives the 3.3V power rail a moment to recover from the WiFi association burst before mDNS fires its first multicast announcement.
 
-### Brownout Detection Control
+### Brownout Detection & WiFi Sleep Control
 
 - **Default brownout level restored to Level 0 (~2.43V)** — beta1 used Level 7 (~2.74V), which triggered too many unnecessary resets on CPAP-powered hardware.
 - **New config option: `BROWNOUT_DETECT=OFF`** — if your device still resets frequently due to power dips, you can now disable the brownout detector entirely via config.txt. When disabled, a **persistent orange warning banner** appears on the web dashboard reminding you of the risk.
+- **Deep sleep tuning (`listen_interval`)** — When `WIFI_PWR_SAVING` is set to `MAX`, the WiFi radio is now explicitly configured to sleep for multiple DTIM intervals (`listen_interval = 10`), significantly reducing average current draw during idle phases at the cost of ping latency.
 
 ### Improved Log Streaming (SSE)
 
@@ -42,9 +55,11 @@ This release focuses on reducing power consumption, improving WiFi reliability o
   - The badge always updates on the next successful poll (previously it could get stuck showing stale text)
 - **Mobile tab resume fixed** — switching to another app and back no longer triggers a false "REBOOTING" state
 
-### Force Upload in Scheduled Mode
+### Uploads & Stability
 
+- **Dynamic CPU downclocking during uploads** — The SleepHQ and SMB upload loops now inject FreeRTOS `taskYIELD()` calls. This allows the idle task to run during network waits, which in turn permits the ESP32's Dynamic Frequency Scaling (DFS) governor to drop the CPU frequency temporarily, reducing thermal load and power draw.
 - **Force Upload now works outside the upload window** — previously, tapping Force Upload in scheduled mode outside your configured hours did nothing. Now it uploads your **most recent data** (today + yesterday) immediately. Older backlog data still waits for the regular window.
+- **Adaptive cloud upload buffers** — The firmware now dynamically sizes its SleepHQ upload buffer based on available free RAM, preventing out-of-memory crashes on memory-constrained devices.
 
 ### Removed Legacy Config Aliases
 
