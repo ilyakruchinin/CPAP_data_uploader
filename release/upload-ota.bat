@@ -113,7 +113,7 @@ echo Uploading firmware...
 echo.
 
 python -m esptool --chip !CHIP! --port !PORT! --baud !BAUD_RATE! ^
-    --before default_reset --after hard_reset write_flash -z ^
+    --before default-reset --after hard-reset write-flash -z ^
     0x0 !FIRMWARE_FILE!
 
 if errorlevel 1 (
