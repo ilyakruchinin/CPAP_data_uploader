@@ -245,7 +245,7 @@ void Config::setConfigValue(String key, String value) {
             brownoutDetectMode = BrownoutDetectMode::ENABLED;
         }
     } else {
-        LOG_WARN(String("Unknown config key: ") + key);
+        LOG_WARNF("Unknown config key: %s", key.c_str());
     }
 }
 

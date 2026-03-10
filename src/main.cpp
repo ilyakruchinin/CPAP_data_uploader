@@ -466,9 +466,8 @@ void setup() {
     // Must happen BEFORE WiFi init (the highest-current boot phase).
     if (config.getBrownoutDetectMode() == BrownoutDetectMode::OFF || 
         config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
-        LOG_WARN(String("[POWER] BROWNOUT_DETECT=") + 
-                (config.getBrownoutDetectMode() == BrownoutDetectMode::OFF ? "OFF" : "RELAXED") + 
-                " — disabling brownout detection per config");
+        LOG_WARNF("BROWNOUT_DETECT=%s — disabling brownout detection per config",
+                config.getBrownoutDetectMode() == BrownoutDetectMode::OFF ? "OFF" : "RELAXED");
         if (config.getBrownoutDetectMode() == BrownoutDetectMode::OFF) {
             LOG_WARN("[POWER] WARNING: Device will NOT reset on power drops. Risk of data corruption.");
         }
@@ -1202,21 +1201,12 @@ void loop() {
                 return;
             }
             LOG_DEBUG("WiFi reconnected successfully");
-          } else {
-            // Unrecoverable WiFi failure
-            LOG_ERROR("WiFi failed to connect after maximum attempts.");
-            if (fastBoot && g_heapRecoveryBoot) {
-                // If this was a fast boot to recover heap and WiFi failed, it might be due to 
-                // deeper state issues. Do a hard reboot.
-                LOG_ERROR("WiFi failed after heap recovery boot. Forcing hard reboot.");
-                ESP.restart();
+            
+            // Re-enable brownout detection after a successful reconnect attempt.
+            if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+                LOG_INFO("[POWER] WiFi reconnect complete — re-enabling brownout detection");
+                SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
             }
-        }
-        
-        // Re-enable brownout detection if it was only relaxed for boot
-        if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
-            LOG_INFO("[POWER] WiFi connection phase complete — re-enabling brownout detection");
-            SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
         }
 
         // Initialize web server regardless of connection success
