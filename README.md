@@ -1,4 +1,4 @@
-# ESP32 CPAP Data Uploader
+# ESP32 CPAP AutoSync
 
 Automatically upload CPAP therapy data from your SD card to a network share or SleepHQ — **within minutes of taking your mask off.**
 
@@ -25,7 +25,7 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 
 ---
 
-![CPAP Data Uploader Web Interface](docs/screenshots/web-interface.png)
+![CPAP AutoSync Web Interface](docs/screenshots/web-interface.png)
 
 ---
 
@@ -154,6 +154,12 @@ This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**
 This project uses libsmb2 (LGPL-2.1), which is compatible with GPL-3.0.
 
 See [LICENSE](LICENSE) file for full terms.
+
+## Acknowledgements
+
+This project was originally inspired by and started as a fork of the excellent [CPAP Data Uploader](https://github.com/amanuense/CPAP_data_uploader) project by Oscar Arias (amanuense). The initial goal of the fork was simply to add SleepHQ support, but it quickly grew into a fully distinct project with its own architecture, web dashboard, smart power management, and upload engine. We are deeply grateful to Oscar for proving the viability of the FYSETC SD WIFI PRO hardware and for creating the foundation that made this project possible.
+
+---
 
 ## Legal & Trademarks
 

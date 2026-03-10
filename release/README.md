@@ -1,4 +1,4 @@
-# ESP32 CPAP Data Uploader - User Guide
+# ESP32 CPAP AutoSync - User Guide
 
 This package contains precompiled firmware for automatically uploading CPAP data from your SD card to a network share or the Cloud (**SleepHQ**).
 
@@ -114,7 +114,7 @@ Want more control? See [Configuration Reference](#configuration-reference) for a
 - Automatically uploads CPAP data files from SD card to your network storage or the Cloud (SleepHQ)
 - Uploads automatically when therapy ends (Smart Mode) or at a scheduled time
 - Respects CPAP machine access to the SD card (short upload sessions)
-- **Local Network Discovery (mDNS):** Access the device via `http://cpap.local` instead of IP address
+- **Local Network Discovery (mDNS):** Access the device via `http://cpap.local` instead of its IP address *(Note: To save power, `cpap.local` only resolves during the first 60 seconds after the device boots. Accessing it within this window automatically redirects your browser to the device's actual IP address, so your session won't drop when the 60 seconds are up).*
 - Tracks which files have been uploaded (no duplicates)
 - Automatically creates directories on remote shares as needed
 - **Supported CPAP Machines:** ResMed Series 9, 10, and 11 (other brands not supported)
@@ -123,26 +123,16 @@ Want more control? See [Configuration Reference](#configuration-reference) for a
 
 ---
 
-## Firmware Options
+## Firmware
 
-This package includes two firmware versions:
+This package includes OTA-enabled firmware with web-based update capability:
 
-### **OTA Firmware** (Recommended)
-- **File:** `firmware-ota.bin` (complete firmware with bootloader)
-- **Upgrade file:** `firmware-ota-upgrade.bin` (for web OTA updates)
-- **Features:** Web-based firmware updates via `/ota` interface
-- **Partition:** 1.5MB app space (dual OTA partitions)
-- **Best for:** Production use, remote deployments
-- **Update method:** 
-  - Initial flash: Use `firmware-ota.bin` with upload scripts
-  - Upgrades: Upload `firmware-ota-upgrade.bin` via web browser
+- **`firmware-ota.bin`** — Complete firmware (bootloader + partitions + app) for initial USB/Serial flashing
+- **`firmware-ota-upgrade.bin`** — App-only binary for subsequent updates via the web interface
 
-### **Standard Firmware**
-- **File:** `firmware-standard.bin` (complete firmware with bootloader)
-- **Features:** Maximum app space, no OTA capability
-- **Partition:** 3MB app space
-- **Best for:** Development, maximum feature space, users who prefer manual updates
-- **Update method:** USB/Serial upload using `firmware-standard.bin` (can be re-flashed anytime)
+**Update methods:**
+- **Initial flash:** Use `firmware-ota.bin` with the included upload scripts (USB/Serial)
+- **Upgrades:** Upload `firmware-ota-upgrade.bin` via the web interface at `http://cpap.local/ota`
 
 ---
 
@@ -162,13 +152,9 @@ Insert the SD card in your CPAP machine and allow for the CPAP machine to format
 **Windows:**
 1. Ensure Python 3.7+ is installed (download from https://python.org)
 2. Find your COM port (see "Finding Your Serial Port" below)
-3. Run the appropriate upload script:
+3. Run the upload script:
 ```cmd
-REM For OTA firmware (recommended)
 upload-ota.bat COM3
-
-REM For standard firmware
-upload-standard.bat COM3
 ```
 
 The script will automatically:
@@ -178,23 +164,17 @@ The script will automatically:
 
 **macOS/Linux:**
 ```bash
-# For OTA firmware (default)
 ./upload.sh /dev/ttyUSB0
-
-# For standard firmware
-./upload.sh /dev/ttyUSB0 standard
 ```
 
 Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
 
 #### When upgrading OTA firmware via web interface
 
-1. Go to the CPAP Data uploader web interface: `http://<device-ip>/ota`
+1. Go to the CPAP AutoSync web interface: `http://<device-ip>/ota`
 2. Use **Method 1** to upload `firmware-ota-upgrade.bin` from your computer
 3. Or use **Method 2** to download firmware directly from GitHub
 4. Device will restart automatically after update
-
-**Note:** For standard firmware, you must re-flash via USB/Serial using the upload scripts.
 
 ### 2. Create Configuration File
 
@@ -350,19 +330,25 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - At the default 80 MHz, DFS is disabled (CPU locked) — no frequency transitions, lowest power
 - Set to 160 to re-enable DFS (80–160 MHz) for faster TLS handshakes on non-constrained hardware
 
-**WIFI_TX_PWR** (optional, default: "LOW")
+**WIFI_TX_PWR** (optional, default: "MID")
 - WiFi transmit power level:
-  - `LOW` — 5 dBm (default, sufficient for typical bedroom placement ~5 m)
-  - `MID` — 8.5 dBm (good for adjacent rooms)
-  - `HIGH` — 11 dBm (router through walls)
-  - `MAX` — 19.5 dBm (maximum power, only if other settings fail)
+  - `LOWEST` — -1 dBm (router on same nightstand)
+  - `LOW` — 2 dBm (router within 1–2 metres)
+  - `MID` — 5 dBm (default, typical bedroom placement ~3–5 m)
+  - `HIGH` — 8.5 dBm (router in adjacent room)
+  - `MAX` — 10 dBm (through walls, last resort)
 - Increase if you experience WiFi connection issues
 
-**WIFI_PWR_SAVING** (optional, default: "mid")
+**WIFI_PWR_SAVING** (optional, default: "MID")
 - WiFi power saving mode:
   - `NONE` — No power saving (maximum responsiveness)
-  - `MID` / `MODEM` — MIN_MODEM (default, wakes every DTIM — preserves mDNS)
+  - `MID` — MIN_MODEM (default, wakes every DTIM — preserves mDNS)
   - `MAX` — MAX_MODEM (lowest power but may miss mDNS queries)
+
+**BROWNOUT_DETECT** (optional, default: enabled)
+- Set to `RELAXED` to temporarily disable the hardware brownout detector during WiFi connection, re-enabling it afterwards.
+- Set to `OFF` to disable it permanently (use only as a last resort).
+- When disabled (set to `OFF`), a warning banner is shown on the web dashboard.
 
 > **Note:** 802.11b is disabled at the firmware level to reduce peak power draw. Bluetooth is also fully disabled. These are not configurable.
 
@@ -376,13 +362,13 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 - Useful for diagnosing upload scheduling issues; disable when not needed
 - Example: `DEBUG = true`
 
-**SAVE_LOGS** (optional, default: false)
+**PERSISTENT_LOGS** (optional, default: false)
 - Persist logs to internal flash (4-file rotation: `syslog.0..3.txt`, 32 KB each, 128 KB total on LittleFS) for retrieval across reboots
 - Logs flush every **30 seconds**, continuously — including during active uploads — and immediately before every reboot
 - Use the **⬇ Download All Logs** button on the Logs tab to download persisted + current log files directly to your browser
 - Useful for diagnosing issues that only appear after a reboot or crash
 - Automatically disabled if flash write operations fail
-- Example: `SAVE_LOGS = true`
+- Example: `PERSISTENT_LOGS = true`
 
 ### Credential Security
 
@@ -573,6 +559,8 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 
 ### Logs Tab
 - **Live streaming** log feed via Server-Sent Events (SSE) with automatic reconnect and fallback polling
+- Leaving the Logs tab closes the live stream; returning performs an immediate RAM-buffer catch-up and then resumes SSE live streaming
+- Live logs remain near-real-time even during active uploads; SSE is throttled during uploads rather than fully paused
 - On first visit, backfills full log history from internal flash (streaming progress indicator with KB counter)
 - Automatic reboot detection: re-fetches NAND history when a new boot is detected
 - **⬇ Download All Logs** — flushes current logs to flash and downloads all saved + current logs as a single `cpap_logs.txt` file (requires `SAVE_LOGS=true`)
@@ -648,6 +636,32 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 - Check router internet connection
 - Verify router allows device to access internet
 - Check firewall settings
+
+### ⚠️ ESP32 Brownouts & Power Issues
+
+If your device randomly reboots (shows "REBOOTING" constantly) or drops WiFi, it is likely experiencing a power dip (brownout). The CPAP machine's SD card slot provides limited power, and the ESP32's WiFi can draw too much current.
+
+**Recommended Settings to Fix Power Issues:**
+
+1. **Reduce WiFi Transmit Power (Most Effective)**
+   Move your router closer (or use a WiFi extender/mesh node) and set:
+   `WIFI_TX_PWR = LOW` or `WIFI_TX_PWR = LOWEST`
+   *(Default is MID. Lowering TX power drastically reduces current spikes).*
+2. **Keep CPU at Base Speed**
+   `CPU_SPEED_MHZ = 80`
+   *(This is the default, but ensure you haven't increased it. 80 MHz disables dynamic frequency scaling).*
+3. **Try Experimental 1-Bit SD Mode**
+   `ENABLE_1BIT_SD_MODE = true`
+   *(Reduces the number of active SD data lines, halving bus toggle current during uploads. Note: only use if your CPAP does not throw "SD Card Error" when using this mode).*
+4. **Relax or Disable Brownout Detection (Last Resort)**
+   `BROWNOUT_DETECT = RELAXED` (first choice)
+   *(Temporarily bypasses strict voltage checks only during the initial WiFi power spike, and re-enables it for safer general running. Try this if your device repeatedly fails to connect or logs show a brown-out reset).*
+   
+   If `RELAXED` still doesn't work, try:
+   `BROWNOUT_DETECT = OFF` (absolute last resort)
+   *(Prevents the ESP32 from intentionally restarting when voltage drops. Device may still crash if voltage drops too low and risks data corruption).*
+
+---
 
 ### ⚠️ SD Card Errors — Use Scheduled Mode
 
@@ -729,8 +743,17 @@ In scheduled mode the uploader **only runs during the configured window** (e.g. 
 **Upload incomplete**
 - Increase `EXCLUSIVE_ACCESS_MINUTES` if files are large
 - Check available space on network share
-- Verify network stability
-- Check logs for specific errors
+- Verify `MAX_DAYS` is set correctly
+
+### WiFi / Power Connectivity Issues
+
+- If you still experience issues, check the `WIFI_PWR_SAVING` and `WIFI_TX_PWR` options in `config.txt`
+- If your device repeatedly fails to connect or logs show `[ERROR] WARNING: System reset due to brown-out (insufficient power supply)`:
+  1. Remove the SD card, put it in a card reader connected to your computer.
+  2. Open `config.txt` and add `BROWNOUT_DETECT=RELAXED`.
+  3. Put the card back in the CPAP. This allows the ESP to bypass the strict voltage checks during the initial WiFi power spike.
+  4. If it still fails, try `BROWNOUT_DETECT=OFF`. 
+  *Note: Some rare AirSense 11 machines (particularly those made in Singapore) have power supply tolerances that lead to brief voltage sags when the ESP32 turns on its WiFi radio. The RELAXED mode is specifically designed for these machines.*
 
 **Same files uploading repeatedly**
 - Check LittleFS is mounted (look for `LittleFS mounted successfully` in logs)
@@ -861,12 +884,10 @@ python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0
 
 ## Package Contents
 
-- `firmware-ota.bin` - Complete OTA firmware for initial flashing (1.3MB)
+- `firmware-ota.bin` - Complete firmware for initial flashing (1.3MB)
 - `firmware-ota-upgrade.bin` - App-only binary for web OTA updates (1.2MB)
-- `firmware-standard.bin` - Complete standard firmware, can be re-flashed (1.2MB)
-- `upload-ota.bat` - Windows OTA firmware upload script
-- `upload-standard.bat` - Windows standard firmware upload script
-- `upload.sh` - macOS/Linux upload script (supports both firmware types)
+- `upload-ota.bat` - Windows upload script
+- `upload.sh` - macOS/Linux upload script
 - `requirements.txt` - Python dependencies (esptool)
 - `config.txt.example.simple` - Minimal configuration (bare essentials)
 - `config.txt.example.smb` - SMB/network share configuration

@@ -72,7 +72,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bt-c{color:#aa66ff;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bd-i{font-size:.79em;color:#8f98a0;margin-top:4px;min-height:1.1em;padding-left:2px}
 .hdr{margin-bottom:2px}
-.hdr svg{height:72px;width:auto;display:block}
+.hdr svg{height:108px;width:auto;display:block}
 .hdr-spin{transform-origin:25px 25px;animation:hSpin 8s linear infinite}
 @keyframes hSpin{100%{transform:rotate(360deg)}}
 .hdr-arrow{animation:hUp 2s ease-in-out infinite}
@@ -91,15 +91,82 @@ nav button:hover:not(.act){background:#3a5a7e}
 #mon-active-banner h3{color:#bb88ff;font-size:1em;margin-bottom:6px}
 #mon-active-banner p{color:#b0a0c0;font-size:.84em;line-height:1.5}
 @keyframes monPulse{0%,100%{border-color:#8b4dbb}50%{border-color:#bb88ff}}
-@media(max-width:600px){.hdr svg{height:72px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
+@media(max-width:600px){.hdr svg{height:108px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
 </style></head><body>
 <div class=wrap>
 <div class=hdr>
-<svg viewBox="0 0 420 50" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',system-ui,-apple-system,sans-serif"><defs><linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1a6b8a"/><stop offset="100%" stop-color="#0d4a6b"/></linearGradient><linearGradient id="wg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2dd4bf"/><stop offset="50%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#818cf8"/></linearGradient><linearGradient id="ag" x1="0%" y1="100%" x2="0%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2dd4bf"/></linearGradient></defs><circle class="hdr-spin" cx="25" cy="25" r="23.5" fill="none" stroke="url(#wg)" stroke-width="1.2" stroke-dasharray="7 5 12 5 19 5 31 5 50 5" stroke-linecap="round" opacity=".85"/><circle cx="25" cy="25" r="22" fill="url(#cg)"/><circle cx="25" cy="25" r="22" fill="none" stroke="url(#wg)" stroke-width=".7" opacity=".6"/><g transform="translate(15,15)"><path d="M2.5,0 L10,0 L13,3 L13,12.5 Q13,13 12,13 L1,13 Q0,13 0,12 L0,1 Q0,0 1,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width=".8" opacity=".9"/><rect x="2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="4.2" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="6.4" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/><rect x="8.6" y="9" width="1.5" height="3.5" rx=".3" fill="#2dd4bf" opacity=".85"/></g><g transform="translate(33.5,21.5)"><g class="hdr-arrow"><line x1="0" y1="8" x2="0" y2="2" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round"/><polyline points="-2.5,4 0,.5 2.5,4" fill="none" stroke="url(#ag)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></g><line x1="-3" y1="9.5" x2="3" y2="9.5" stroke="#38bdf8" stroke-width="1.2" stroke-linecap="round" opacity=".7"/></g><g transform="translate(25,37)"><path class="hdr-wave" d="M-10,0 C-8.5,-.8 -8,-.8 -6.5,0 C-5,.8 -4.5,.8 -3,0 C-1.5,-3.5 -.8,-3.5 .7,-1.5 C1.5,-.3 1.8,3 3,3 C4,3 4.3,.3 5.5,-1.5 C6.5,-3.5 7.2,-3.5 8.5,-1.5 C9.5,0 10,0 10,0" fill="none" stroke="url(#wg)" stroke-width="1" stroke-linecap="round"/></g><g transform="translate(25,11)"><path class="hw1" d="M-3.5,3.5 Q0,-.8 3.5,3.5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><path class="hw2" d="M-2,5 Q0,2.8 2,5" fill="none" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/><circle class="hw3" cx="0" cy="6" r=".8" fill="#38bdf8"/></g><text x="56" y="22" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">CPAP<tspan fill="url(#wg)"> Data</tspan></text><text x="56" y="40" font-size="18" font-weight="700" letter-spacing="-.3" fill="white">Uploader</text><rect x="56" y="44" width="140" height="1.5" rx=".75" fill="url(#wg)" opacity=".5"/></svg>
+<svg viewBox="0 0 480 160" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',system-ui,-apple-system,sans-serif" preserveAspectRatio="xMidYMid meet">
+<defs>
+<style>
+.spin-ring{transform-origin:80px 80px;animation:hSpin 8s linear infinite}
+.arrow-anim{animation:hUp 2s ease-in-out infinite}
+.pulse-wave{animation:hPulse 3.5s ease-in-out infinite}
+.wifi-1{animation:hWifi 1.5s infinite 0s}
+.wifi-2{animation:hWifi 1.5s infinite 0.25s}
+.wifi-3{animation:hWifi 1.5s infinite 0.5s}
+</style>
+<linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#0f1923"/>
+<stop offset="100%" stop-color="#0f1923"/>
+</linearGradient>
+<linearGradient id="circleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#1a6b8a"/>
+<stop offset="100%" stop-color="#0d4a6b"/>
+</linearGradient>
+<linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+<stop offset="0%" stop-color="#2dd4bf"/>
+<stop offset="50%" stop-color="#38bdf8"/>
+<stop offset="100%" stop-color="#818cf8"/>
+</linearGradient>
+<linearGradient id="arrowGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+<stop offset="0%" stop-color="#38bdf8"/>
+<stop offset="100%" stop-color="#2dd4bf"/>
+</linearGradient>
+<filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+<feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+<feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter>
+<filter id="waveGlow" x="-10%" y="-50%" width="120%" height="200%">
+<feGaussianBlur stdDeviation="1.8" result="coloredBlur"/>
+<feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter>
+</defs>
+<rect width="480" height="160" rx="18" fill="url(#bgGrad)"/>
+<circle class="spin-ring" cx="80" cy="80" r="58" fill="none" stroke="url(#waveGrad)" stroke-width="3" stroke-dasharray="126 13 78 13 48 13 30 13 18 13" stroke-linecap="round" opacity="0.85"/>
+<circle cx="80" cy="80" r="54" fill="url(#circleGrad)"/>
+<circle cx="80" cy="80" r="54" fill="none" stroke="url(#waveGrad)" stroke-width="1" opacity="0.6"/>
+<g transform="translate(52,52)">
+<path d="M7,0 L29,0 L36,7 L36,34 Q36,36 34,36 L2,36 Q0,36 0,34 L0,2 Q0,0 2,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width="1.2" opacity="0.9"/>
+<rect x="6" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
+<rect x="12" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
+<rect x="18" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
+<rect x="24" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
+<line x1="29" y1="0" x2="36" y2="7" stroke="#38bdf8" stroke-width="1.2" opacity="0.7"/>
+</g>
+<g transform="translate(96,70)" filter="url(#glow)">
+<g class="arrow-anim">
+<line x1="0" y1="22" x2="0" y2="6" stroke="url(#arrowGrad)" stroke-width="3" stroke-linecap="round"/>
+<polyline points="-6,10 0,2 6,10" fill="none" stroke="url(#arrowGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<line x1="-7" y1="25" x2="7" y2="25" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+</g>
+<g transform="translate(80,108)" filter="url(#waveGlow)">
+<path class="pulse-wave" d="M-28,0 C-24,-2 -22,-2 -18,0 C-14,2 -12,2 -8,0 C-4,-10 -2,-10 2,-4 C4,-1 5,8 8,8 C11,8 12,1 15,-4 C18,-10 20,-10 24,-4 C26,0 28,0 28,0" fill="none" stroke="url(#waveGrad)" stroke-width="2.2" stroke-linecap="round"/>
+</g>
+<g transform="translate(80,36)" filter="url(#glow)">
+<path class="wifi-1" d="M-10,10 Q0,-2 10,10" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
+<path class="wifi-2" d="M-6,14 Q0,8 6,14" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
+<circle class="wifi-3" cx="0" cy="17" r="2.2" fill="#38bdf8"/>
+</g>
+<text x="154" y="68" font-size="38" font-weight="700" letter-spacing="-0.5" fill="white">CPAP</text>
+<text x="154" y="110" font-size="38" font-weight="700" letter-spacing="-0.5" fill="url(#waveGrad)">AutoSync</text>
+<rect x="154" y="125" width="272" height="2.5" rx="1.25" fill="url(#waveGrad)" opacity="0.7"/>
+</svg>
 </div>
 <p class=sub id=sub>Connecting...</p>
 <div id=reboot-overlay><h3>&#8635; Device is unreachable or rebooting&hellip;</h3><p>If the device is rebooting, this is normal &mdash; it may reboot periodically by design to maintain stability and will be back online in a few seconds.<br>If it has been powered off or moved out of WiFi range, this page will reconnect automatically once the device is reachable again.</p></div>
 <div id=mon-active-banner><h3>&#128270; SD Access Monitoring is active</h3><p>All automatic uploads are <strong>paused</strong> while monitoring is running.<br>Go to the <strong>SD Access</strong> tab and click <strong>Stop</strong> to resume normal operation.</p></div>
+<div id=brownout-banner style="display:none;background:#3a2a0a;border:1px solid #cc8800;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center"><h3 style="color:#ffaa00;font-size:1em;margin-bottom:6px">&#9888; Brownout Detection Disabled</h3><p style="color:#c0b090;font-size:.84em;line-height:1.5">BROWNOUT_DETECT is set to OFF in config.txt. The device will <strong>not</strong> reset on power drops &mdash; this may cause data corruption.</p></div>
 <nav>
 <button id=t-dash onclick="tab('dash')" class=act>Dashboard</button>
 <button id=t-logs onclick="tab('logs')">Logs</button>
@@ -363,7 +430,17 @@ function tab(t){
     document.getElementById('t-'+x).classList.toggle('act',x===t);
   });
   curTab=t;
-  if(t==='logs'){if(!backfillDone){fetchBackfill();}else if(!sseConnected){startLogPoll();}}else{stopLogPoll();stopSse();}
+  if(t==='logs'){
+    if(!backfillDone){
+      fetchBackfill();
+    }else{
+      fetchLogs();
+      if(!sseConnected){startSse();}
+    }
+  }else{
+    stopLogPoll();
+    stopSse();
+  }
   if(t==='cfg'){loadCfg();}
   if(t==='mon'){checkMonUploadState();syncMonBtn();}
   if(t==='mem'){updateHeapChart();updateCpuChart();}
@@ -394,7 +471,8 @@ function renderStatus(d){
   document.getElementById('reboot-overlay').style.display='none';
   rebootExpected=false;
   var _newSt=d.state||'';
-  if(_newSt!==currentFsmState){currentFsmState=_newSt;seti('d-st',badgeHtml(currentFsmState||'?'));}
+  currentFsmState=_newSt;
+  seti('d-st',badgeHtml(currentFsmState||'?'));
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
   var mode=(cfg.upload_mode||'—').toUpperCase();
   set('d-mode',mode);
@@ -499,6 +577,8 @@ function renderStatus(d){
   set('hd-c0',c0+'%');set('hd-c1',c1+'%');
   cpuHistory.push({c0:c0,c1:c1});if(cpuHistory.length>MAX_HEAP_SAMPLES)cpuHistory.shift();
   if(curTab==='mem'){updateHeapChart();updateCpuChart();}
+  var bb=document.getElementById('brownout-banner');
+  if(bb)bb.style.display=(cfg.brownout_detect_mode==='OFF')?'block':'none';
 }
 
 var statusTimer=null;
@@ -507,15 +587,16 @@ function pollStatus(){
     renderStatus(d);
   }).catch(function(){
     statusFailCount++;
-    if(statusFailCount>=2||rebootExpected){
+    if(statusFailCount>=5||rebootExpected){
       document.getElementById('reboot-overlay').style.display='block';
       seti('d-st','<span class="badge bc">REBOOTING</span>');
     } else {
-      set('d-st','Offline');
+      seti('d-st','<span class="badge bc">OFFLINE</span>');
     }
   });
 }
 function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
+document.addEventListener('visibilitychange',function(){if(!document.hidden){statusFailCount=0;}});
 
 var cpuHistory=[];
 function updateHeapChart(){
@@ -762,7 +843,7 @@ function _renderLogBuf(){
   b.textContent=clientLogBuf.join('\n');
   if(logAtBottom)b.scrollTop=b.scrollHeight;
 }
-var sseSource=null,sseConnected=false,backfillDone=false,backfillRetries=0;
+var sseSource=null,sseConnected=false,backfillDone=false,backfillRetries=0,sseReconnAttempts=0;
 function fetchLogs(){
   if(curTab!=='logs')return;
   fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
@@ -828,6 +909,7 @@ function startSse(){
   sseSource=new EventSource('/api/logs/stream');
   sseSource.onopen=function(){
     sseConnected=true;
+    sseReconnAttempts=0;
     stopLogPoll();
     set('log-st','SSE Live \u2022 '+clientLogBuf.length+' lines');
   };
@@ -840,9 +922,16 @@ function startSse(){
   sseSource.onerror=function(){
     sseConnected=false;
     if(sseSource){sseSource.close();sseSource=null;}
-    backfillDone=false;
-    set('log-st','SSE lost \u2014 reconnecting\u2026');
-    setTimeout(function(){if(curTab==='logs'){fetchBackfill();}else{startLogPoll();}},3000);
+    sseReconnAttempts++;
+    if(sseReconnAttempts<=3){
+      var delay=Math.min(2000*sseReconnAttempts,6000);
+      set('log-st','SSE lost \u2014 retry '+sseReconnAttempts+'/3 in '+(delay/1000)+'s\u2026');
+      setTimeout(function(){if(curTab==='logs'){startSse();}},delay);
+    } else {
+      sseReconnAttempts=0;
+      set('log-st','SSE unavailable \u2014 falling back to polling');
+      startLogPoll();
+    }
   };
 }
 function stopSse(){

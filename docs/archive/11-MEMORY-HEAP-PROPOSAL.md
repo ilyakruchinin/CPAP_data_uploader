@@ -559,7 +559,7 @@ After boot, the heap layout is fixed. All runtime operations (TLS connect, SMB t
 | **Client-side buffer** | 2000 lines max (`LOG_BUF_MAX = 2000`) | `web_ui.h:484` |
 | **Emergency flush before reboot** | `dumpSavedLogsPeriodic()` called before `esp_restart()` at all 4 reboot points | `main.cpp:803,927,959,968` |
 | **Emergency flush if SAVE_LOGS=false** | **Logs are lost** — `dumpSavedLogsPeriodic()` is a no-op if logging not enabled | `Logger.cpp:529` |
-| **LittleFS partition** | 960 KB (`0xF0000`) — labeled `spiffs` in partition table | `partitions_ota.csv:6` |
+| **LittleFS partition** | 960 KB (`0xF0000`) — labeled `littlefs` in the partition table with `littlefs` subtype | `partitions_ota.csv:6` |
 | **Config key** | `SAVE_LOGS` (with `LOG_TO_SD_CARD` as legacy alias) | `Config.cpp:194` |
 | **Log message bug** | Line 381 says "every 10 seconds" but actual interval is 5 seconds | `main.cpp:381` vs `main.cpp:102` |
 

@@ -1,7 +1,7 @@
 # Main Application Controller
 
 ## Overview
-The main application controller (`main.cpp`) orchestrates the entire CPAP data uploader system, managing initialization, the upload state machine, web interface, and system lifecycle events.
+The main application controller (`main.cpp`) orchestrates the entire CPAP AutoSync system, managing initialization, the upload state machine, web interface, and system lifecycle events.
 
 ## Core Responsibilities
 
@@ -98,10 +98,10 @@ const unsigned long CONFIG_EDIT_LOCK_TIMEOUT_MS = 30 * 60 * 1000;  // 30 min
 
 ## Power Management
 - **Boot**: CPU at 80 MHz from first instruction, Bluetooth memory released
-- **WiFi**: 802.11b disabled (OFDM only), TX power default 8.5 dBm, MIN_MODEM sleep default
+- **WiFi**: 802.11b disabled (OFDM only), TX power default 5 dBm, MIN_MODEM sleep default
 - **DFS**: CPU scales 80-160 MHz automatically via `esp_pm_configure()`
 - **Loop yields**: State-appropriate `vTaskDelay()` calls (10-100ms) allow DFS to engage
-- **Compile-time**: `CONFIG_BT_ENABLED=n`, `CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=11`, `CONFIG_PM_ENABLE=y`
+- **Compile-time**: `CONFIG_BT_ENABLED=n`, `CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10`, `CONFIG_PM_ENABLE=y`
 
 ## Configuration Dependencies
 - All timing parameters (inactivity, exclusive access, cooldown)

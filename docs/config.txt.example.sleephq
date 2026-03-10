@@ -1,4 +1,4 @@
-# CPAP Data Uploader Configuration
+# CPAP AutoSync Configuration
 
 # WiFi Settings
 WIFI_SSID = YourNetworkName

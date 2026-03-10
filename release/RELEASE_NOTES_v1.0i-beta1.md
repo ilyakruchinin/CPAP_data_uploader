@@ -1,4 +1,4 @@
-# CPAP Data Uploader v1.0i-beta1 Release Notes
+# CPAP AutoSync v1.0i-beta1 Release Notes
 
 ## 🚀 Major Release — Dual-Backend Uploads, Complete Web UI Overhaul, Stability & Logging
 

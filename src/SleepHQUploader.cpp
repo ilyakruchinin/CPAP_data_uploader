@@ -27,8 +27,20 @@ static const char* GTS_ROOT_R4_CA = \
     "p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n" \
     "-----END CERTIFICATE-----\n";
 
-// Upload buffer size for streaming files
-#define CLOUD_UPLOAD_BUFFER_SIZE 4096
+// Upload buffer size for streaming files — adaptive based on heap pressure.
+// Smaller buffers reduce peak current from concurrent SD read + TLS encrypt + WiFi TX,
+// at the cost of more SD read calls per file. Network throughput is the bottleneck,
+// not SD read speed, so smaller buffers have negligible transfer time impact.
+#define CLOUD_UPLOAD_BUFFER_SIZE_MAX  4096
+#define CLOUD_UPLOAD_BUFFER_SIZE_MID  2048
+#define CLOUD_UPLOAD_BUFFER_SIZE_MIN  1024
+
+static size_t getAdaptiveBufferSize() {
+    uint32_t ma = ESP.getMaxAllocHeap();
+    if (ma > 50000) return CLOUD_UPLOAD_BUFFER_SIZE_MAX;
+    if (ma > 35000) return CLOUD_UPLOAD_BUFFER_SIZE_MID;
+    return CLOUD_UPLOAD_BUFFER_SIZE_MIN;
+}
 
 SleepHQUploader::SleepHQUploader(Config* cfg)
     : config(cfg),
@@ -409,7 +421,7 @@ String SleepHQUploader::computeContentHash(fs::FS &sd, const String& localPath, 
     MD5Init(&md5ctx);
     
     // Hash exactly snapshotSize bytes (not file.available() which can grow)
-    uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE];
+    uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE_MAX];
     unsigned long totalHashed = 0;
     while (totalHashed < snapshotSize) {
         size_t toRead = sizeof(buffer);
@@ -461,18 +473,29 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
         fileName = fileName.substring(lastSlash + 1);
     }
     
-    // Compute content hash (returns the exact byte count hashed for size-locked upload)
-    unsigned long lockedFileSize = 0;
-    String contentHash = computeContentHash(sd, localPath, fileName, lockedFileSize);
-    if (contentHash.isEmpty()) {
+    // ── Single-pass upload: content_hash computed on-the-fly ──
+    // The SleepHQ API accepts content_hash in the multipart footer (after file
+    // data), so we no longer need a separate pre-computation pass.
+    // This eliminates one full file read per upload (~50% SD active time reduction).
+    // File size is snapshotted at open time to lock the byte count.
+    File sizeCheckFile = sd.open(localPath, FILE_READ);
+    if (!sizeCheckFile) {
+        LOG_ERRORF("[SleepHQ] Cannot open file: %s", localPath.c_str());
         return false;
+    }
+    unsigned long lockedFileSize = sizeCheckFile.size();
+    sizeCheckFile.close();
+    
+    if (lockedFileSize == 0) {
+        LOG_WARNF("[SleepHQ] Skipping empty file: %s", localPath.c_str());
+        return true;
     }
     
     uint32_t freeHeap = ESP.getFreeHeap();
     uint32_t maxAlloc = ESP.getMaxAllocHeap();
     
-    LOG_DEBUGF("[SleepHQ] Uploading: %s (%lu bytes, hash: %s, free: %u, max_alloc: %u)",
-               localPath.c_str(), lockedFileSize, contentHash.c_str(), freeHeap, maxAlloc);
+    LOG_DEBUGF("[SleepHQ] Uploading: %s (%lu bytes, free: %u, max_alloc: %u)",
+               localPath.c_str(), lockedFileSize, freeHeap, maxAlloc);
     
     // Prefer one persistent TLS session across the entire import.
     // Reconnecting per large file increases TLS handshake churn and heap fragmentation risk.
@@ -493,13 +516,14 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
     // ensuring full performance when transmitting. Modem-sleep only engages between
     // packet bursts when the radio would be idle anyway.
     
-    // Upload via multipart POST using the same byte count that was hashed
+    // Upload via multipart POST — content_hash computed on-the-fly and sent in footer
     String path = "/api/v1/imports/" + currentImportId + "/files";
     String responseBody;
     int httpCode;
     
     String calculatedFileChecksum;
-    if (!httpMultipartUpload(path, fileName, localPath, contentHash, lockedFileSize, sd, bytesTransferred, responseBody, httpCode, &calculatedFileChecksum, useKeepAlive)) {
+    // contentHash is empty — httpMultipartUpload computes it on-the-fly
+    if (!httpMultipartUpload(path, fileName, localPath, "", lockedFileSize, sd, bytesTransferred, responseBody, httpCode, &calculatedFileChecksum, useKeepAlive)) {
         LOG_ERRORF("[SleepHQ] Upload failed for: %s", localPath.c_str());
         return false;
     }
@@ -950,13 +974,16 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         struct MD5Context md5ctx;
         MD5Init(&md5ctx);
         
-        uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE];
+        uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE_MAX];
+        // Adaptive chunk size: smaller reads when heap is constrained
+        // to reduce peak current from concurrent SD + TLS + WiFi operations
+        const size_t adaptiveChunk = getAdaptiveBufferSize();
         unsigned long totalSent = 0;
         bool writeError = false;
         int readRetries = 0;
         
         while (totalSent < fileSize) {
-            size_t toRead = sizeof(buffer);
+            size_t toRead = adaptiveChunk;
             if (fileSize - totalSent < toRead) {
                 toRead = fileSize - totalSent;
             }
@@ -1020,6 +1047,12 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             // Feed software watchdog during large file streaming
             extern volatile unsigned long g_uploadHeartbeat;
             g_uploadHeartbeat = millis();
+            
+            // ── POWER: Yield between chunks to allow DFS frequency scaling ──
+            // Without yields, the upload loop monopolizes the CPU at max frequency.
+            // taskYIELD() lets the IDLE task run briefly, allowing the DFS governor
+            // to scale down if no other high-priority work is pending.
+            taskYIELD();
         }
         file.close();
 
@@ -1054,6 +1087,9 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             }
             return false;
         }
+        
+        // Append filename to hash: content_hash = MD5(file_content + filename)
+        MD5Update(&md5ctx, (const uint8_t*)fnStr, strlen(fnStr));
         
         // Finalize checksum — use stack buffer, no String allocation
         uint8_t digest[16];

@@ -5,42 +5,29 @@ set -e  # Exit on error
 
 # Function to show usage
 show_usage() {
-    echo "Usage: $0 [build|upload|both] [firmware_type] [port]"
+    echo "Usage: $0 [build|upload|both] [port]"
     echo ""
     echo "Commands:"
     echo "  build         - Build firmware only (no sudo required)"
     echo "  upload        - Upload firmware only (requires sudo)"
     echo "  both          - Build and upload (default, requires sudo for upload)"
     echo ""
-    echo "Firmware Types (REQUIRED):"
-    echo "  pico32        - Standard firmware (3MB partition, no OTA)"
-    echo "  pico32-ota    - OTA firmware (1.5MB partitions, web updates)"
-    echo ""
     echo "Options:"
     echo "  port          - Serial port (e.g., /dev/ttyUSB0, /dev/ttyACM0)"
     echo "                  If not specified, PlatformIO will auto-detect"
     echo ""
     echo "Examples:"
-    echo "  $0 build pico32-ota                    # Build OTA firmware only"
-    echo "  $0 build pico32                        # Build standard firmware only"
-    echo "  $0 upload pico32-ota                   # Upload OTA firmware (requires previous build)"
-    echo "  $0 upload pico32 /dev/ttyUSB0          # Upload standard firmware to specific port"
-    echo "  $0 both pico32-ota                     # Build and upload OTA firmware"
-    echo "  $0 both pico32 /dev/ttyUSB0            # Build and upload standard firmware to specific port"
+    echo "  $0 build                               # Build OTA firmware only"
+    echo "  $0 upload                              # Upload OTA firmware (requires previous build)"
+    echo "  $0 both                                # Build and upload OTA firmware"
+    echo "  $0 both /dev/ttyUSB0                   # Build and upload to specific port"
 }
 
 # Parse command line arguments
 COMMAND=${1:-both}
-FIRMWARE_TYPE=$2
-PORT=$3
-
-# Check if firmware type is provided
-if [ -z "$FIRMWARE_TYPE" ]; then
-    echo "Error: Firmware type is required!"
-    echo ""
-    show_usage
-    exit 1
-fi
+PORT=$2
+FIRMWARE_TYPE="pico32-ota"
+FIRMWARE_DESC="OTA firmware (1.5MB partitions, web updates)"
 
 # Validate command
 case $COMMAND in
@@ -55,29 +42,6 @@ case $COMMAND in
         echo ""
         show_usage
         exit 1
-        ;;
-esac
-
-# Validate firmware type
-case $FIRMWARE_TYPE in
-    pico32|pico32-ota)
-        ;;
-    *)
-        echo "Error: Invalid firmware type '$FIRMWARE_TYPE'"
-        echo "Valid options: pico32, pico32-ota"
-        echo ""
-        show_usage
-        exit 1
-        ;;
-esac
-
-# Set firmware description
-case $FIRMWARE_TYPE in
-    pico32)
-        FIRMWARE_DESC="Standard firmware (3MB partition, no OTA)"
-        ;;
-    pico32-ota)
-        FIRMWARE_DESC="OTA firmware (1.5MB partitions, web updates)"
         ;;
 esac
 
@@ -118,7 +82,7 @@ if [ "$COMMAND" = "upload" ] || [ "$COMMAND" = "both" ]; then
     # Check if firmware exists
     if [ ! -f ".pio/build/$FIRMWARE_TYPE/firmware.bin" ]; then
         echo "Error: Firmware not found. Please build first with:"
-        echo "  $0 build $FIRMWARE_TYPE"
+        echo "  $0 build"
         exit 1
     fi
     

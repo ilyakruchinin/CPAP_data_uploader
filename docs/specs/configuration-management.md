@@ -60,11 +60,12 @@ ENDPOINT = //192.168.1.100/cpap_backups
 
 ### Power Management
 - `CPU_SPEED_MHZ` - 80, 160, or 240 (default: 80)
-- `WIFI_TX_PWR` - "low" (5dBm), "mid" (8.5dBm), "high" (11dBm), "max" (19.5dBm) (default: "mid")
-- `WIFI_PWR_SAVING` - "none", "mid"/"modem" (MIN_MODEM), "max" (MAX_MODEM) (default: "mid")
+- `WIFI_TX_PWR` - "lowest" (-1dBm), "low" (2dBm), "mid" (5dBm), "high" (8.5dBm), "max" (10dBm) (default: "mid")
+- `WIFI_PWR_SAVING` - "none", "mid" (MIN_MODEM), "max" (MAX_MODEM) (default: "mid")
+- `BROWNOUT_DETECT` - "off" to disable brownout detector at runtime (default: enabled)
 
 ### Debugging
-- `PERSISTENT_LOGS` - Enable persistent internal logging (default: false). Aliases: `SAVE_LOGS`, `LOG_TO_SD_CARD`
+- `PERSISTENT_LOGS` - Enable persistent internal logging (default: false)
 
 ## Validation Rules
 - **Ranges**: Hours (0-23), minutes (1-60), seconds (10-3600)

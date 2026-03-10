@@ -1,4 +1,4 @@
-# CPAP Data Uploader v0.11.0 Release Notes
+# CPAP AutoSync v0.11.0 Release Notes
 
 ## ⚡ Power Optimization — AirSense 11 Compatibility
 

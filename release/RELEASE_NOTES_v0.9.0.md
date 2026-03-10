@@ -1,4 +1,4 @@
-# CPAP Data Uploader v0.9.0 Release Notes
+# CPAP AutoSync v0.9.0 Release Notes
 
 ## Overview
 Major performance release with progressive web app, intelligent heap management, and efficient backend initialization.

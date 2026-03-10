@@ -672,6 +672,9 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             }
 
             feedUploadHeartbeat();
+            
+            // ── POWER: Yield between chunks to allow DFS frequency scaling ──
+            taskYIELD();
 
             // Print progress for large files (every 1MB)
             if (attemptBytesTransferred % (1024 * 1024) == 0) {

@@ -2,6 +2,7 @@
 #include "Logger.h"
 #include "pins_config.h"
 #include <SD_MMC.h>
+#include <driver/gpio.h>
 
 // Global config reference to check enableSdCmd0Reset
 #include "Config.h"
@@ -51,12 +52,21 @@ bool SDCardManager::takeControl() {
     // SD cards need time to stabilize voltage and complete internal initialization
     delay(500);
 
-    // Initialize SD_MMC (mode1bit=false for 4-bit mode, format_if_mount_failed=false, 
-    // maxOpenFiles=5). Note: SD_MMC in Arduino core currently doesn't expose a dedicated
-    // read-only mount parameter in begin(). We rely on not writing to the FS.
-    // If the core supports it in v3.x, we'd pass it here, but for now we enforce
-    // logic read-only by moving all state/log files to LittleFS.
-    if (!SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {
+    // ── POWER: Reduce GPIO drive strength on SD pins before mount ──
+    // Reducing drive from default ~20mA (CAP_2) to ~5mA (CAP_0) slows
+    // edge rates, reducing di/dt current spikes on the 3.3V rail.
+    gpio_set_drive_capability((gpio_num_t)SD_CMD_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_CLK_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_D0_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_D1_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_D2_PIN, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability((gpio_num_t)SD_D3_PIN, GPIO_DRIVE_CAP_0);
+
+    // Mount SD in 1-bit or 4-bit mode based on config.
+    // 4-bit is default and safer for CPAP handoff.
+    // 1-bit uses less ESP-side bus current but requires a compatibility remount on release.
+    bool use1Bit = config.getEnable1BitSdMode();
+    if (!SD_MMC.begin("/sdcard", use1Bit ? SDIO_BIT_MODE_SLOW : SDIO_BIT_MODE_FAST, false, SDMMC_FREQ_DEFAULT)) {
         LOG("SD card mount failed");
         releaseControl();
         return false;
@@ -83,66 +93,26 @@ void SDCardManager::releaseControl() {
     unsigned long holdDurationMs = millis() - controlAcquiredAt;
     LOGF("Releasing SD card. Total mount duration: %lu ms", holdDurationMs);
 
-    // Perform software reset of SD card state machine before handing back to CPAP
-    // if configured to do so. This crashes the card's Transfer state back to Idle,
-    // forcing the CPAP to cleanly remount it instead of failing on RCA mismatch.
-    if (config.getEnableSdCmd0Reset()) {
-        LOG_DEBUG("Bit-banging CMD0 (GO_IDLE_STATE) to force SD card protocol reset...");
-        
-        // Reconfigure CMD pin as standard GPIO output
-        pinMode(SD_CMD_PIN, OUTPUT);
-        digitalWrite(SD_CMD_PIN, HIGH);
-        delayMicroseconds(10);
-        
-        // CMD0 Frame: 01000000 00000000 00000000 00000000 00000000 10010101
-        // (Start:0, Tx:1, Cmd:0 | Arg:0 | CRC:0x4A, End:1)
-        const uint8_t cmd0[6] = { 0x40, 0x00, 0x00, 0x00, 0x00, 0x95 };
-        
-        // Very basic SPI bit-bang. Since we don't have the clock running, 
-        // we'll just toggle the CMD line to simulate the frame.
-        // Actually, SD cards expect the clock to be running during commands.
-        // A more reliable way is to configure the SPI peripheral temporarily,
-        // or bit-bang both CLK and CMD.
-        
-        pinMode(SD_CLK_PIN, OUTPUT);
-        digitalWrite(SD_CLK_PIN, LOW);
-        
-        // Send 74 dummy clocks with CMD high to ensure card is ready
-        digitalWrite(SD_CMD_PIN, HIGH);
-        for(int i=0; i<74; i++) {
-            digitalWrite(SD_CLK_PIN, HIGH);
-            delayMicroseconds(2);
-            digitalWrite(SD_CLK_PIN, LOW);
-            delayMicroseconds(2);
+    SD_MMC.end();
+    initialized = false;
+
+    gpio_set_drive_capability((gpio_num_t)SD_CMD_PIN, GPIO_DRIVE_CAP_2);
+    gpio_set_drive_capability((gpio_num_t)SD_CLK_PIN, GPIO_DRIVE_CAP_2);
+    gpio_set_drive_capability((gpio_num_t)SD_D0_PIN, GPIO_DRIVE_CAP_2);
+    gpio_set_drive_capability((gpio_num_t)SD_D1_PIN, GPIO_DRIVE_CAP_2);
+    gpio_set_drive_capability((gpio_num_t)SD_D2_PIN, GPIO_DRIVE_CAP_2);
+    gpio_set_drive_capability((gpio_num_t)SD_D3_PIN, GPIO_DRIVE_CAP_2);
+
+    // If we mounted in 1-bit mode, do a brief 4-bit compatibility remount
+    // so the card's negotiated bus width is restored to 4-bit before the CPAP takes over.
+    if (config.getEnable1BitSdMode()) {
+        if (SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {
+            SD_MMC.end();
+        } else {
+            LOG_WARN("SD handoff compatibility remount failed");
         }
-        
-        // Send CMD0
-        for (int i = 0; i < 6; i++) {
-            uint8_t b = cmd0[i];
-            for (int bit = 7; bit >= 0; bit--) {
-                digitalWrite(SD_CMD_PIN, (b & (1 << bit)) ? HIGH : LOW);
-                delayMicroseconds(2);
-                digitalWrite(SD_CLK_PIN, HIGH);
-                delayMicroseconds(2);
-                digitalWrite(SD_CLK_PIN, LOW);
-            }
-        }
-        
-        // Send 8 dummy clocks to finish
-        digitalWrite(SD_CMD_PIN, HIGH);
-        for(int i=0; i<8; i++) {
-            digitalWrite(SD_CLK_PIN, HIGH);
-            delayMicroseconds(2);
-            digitalWrite(SD_CLK_PIN, LOW);
-            delayMicroseconds(2);
-        }
-        
-        // Return pins to floating state before MUX switch
-        pinMode(SD_CMD_PIN, INPUT);
-        pinMode(SD_CLK_PIN, INPUT);
     }
 
-    SD_MMC.end();
     setControlPin(false);
     espHasControl = false;
     LOG("SD card control released to CPAP machine");

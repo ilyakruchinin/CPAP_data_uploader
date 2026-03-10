@@ -1,9 +1,9 @@
 #!/bin/bash
-# Setup script for CPAP Data Uploader development environment
+# Setup script for CPAP AutoSync development environment
 
 set -e  # Exit on error
 
-echo "Setting up CPAP Data Uploader development environment..."
+echo "Setting up CPAP AutoSync development environment..."
 
 # Check if Python 3 is available
 if ! command -v python3 &> /dev/null; then
@@ -46,5 +46,4 @@ echo "To activate the environment in the future, run:"
 echo "  source venv/bin/activate"
 echo ""
 echo "To build and upload firmware, run:"
-echo "  ./build_upload.sh build pico32        # Standard firmware"
-echo "  ./build_upload.sh build pico32-ota    # OTA firmware"
+echo "  ./build_upload.sh both        # Build and upload OTA firmware"
