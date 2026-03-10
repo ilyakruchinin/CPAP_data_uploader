@@ -56,7 +56,7 @@ enum class WifiPowerSaving {
 802.11b (DSSS) is disabled at connection time via `esp_wifi_set_protocol()`. Only 802.11g/n (OFDM) is allowed. This caps peak TX current to ~205-250 mA (down from 370 mA with 802.11b).
 
 ### Compile-Time Power Caps
-- `CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=11` in `sdkconfig.defaults` caps PHY-level TX power at 11 dBm even before runtime code runs
+- `CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10` in `sdkconfig.defaults` caps PHY-level TX power at 10 dBm (Kconfig minimum) even before runtime code runs
 - `CONFIG_BT_ENABLED=n` disables Bluetooth at compile time (WiFi-only firmware)
 
 ### Dynamic Frequency Scaling (DFS)

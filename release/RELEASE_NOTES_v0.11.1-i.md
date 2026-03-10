@@ -1,4 +1,4 @@
-# CPAP Data Uploader v0.11.1-i Release Notes
+# CPAP AutoSync v0.11.1-i Release Notes
 
 ## ⚡ Power Optimization & Stability — Deep Sleep, Cipher Hardening, Critical Bug Fixes
 

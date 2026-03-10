@@ -1,4 +1,4 @@
-# CPAP Data Uploader v0.8.2 Release Notes
+# CPAP AutoSync v0.8.2 Release Notes
 
 ## Overview
 v0.8.2 is a bug-fix release that resolves two critical issues reported in v0.8.1:

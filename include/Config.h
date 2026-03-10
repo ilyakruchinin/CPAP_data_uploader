@@ -6,10 +6,11 @@
 
 // Power management enums
 enum class WifiTxPower {
-    POWER_LOW,     // 5.0 dBm — minimum practical, router must be very close
-    POWER_MID,     // 8.5 dBm — default, good for typical bedroom placement
-    POWER_HIGH,    // 11.0 dBm — router in adjacent room or through walls
-    POWER_MAX      // 19.5 dBm — maximum power, only if other settings fail
+    POWER_LOWEST,  // -1 dBm — router on same nightstand
+    POWER_LOW,     //  2 dBm — router within 1-2 metres
+    POWER_MID,     //  5 dBm — default, typical bedroom (3-5m)
+    POWER_HIGH,    //  8.5 dBm — router in adjacent room
+    POWER_MAX      // 10 dBm — through walls, last resort (PHY-capped)
 };
 
 enum class WifiPowerSaving {
@@ -24,6 +25,12 @@ enum class WifiPowerSaving {
 #else
     #include <Preferences.h>
 #endif
+
+enum class BrownoutDetectMode {
+    ENABLED,
+    RELAXED,
+    OFF
+};
 
 class Config {
 public:
@@ -61,7 +68,7 @@ private:
     int inactivitySeconds;         // Z: seconds of bus silence before upload
     int exclusiveAccessMinutes;    // X: max minutes of exclusive SD access
     int cooldownMinutes;           // Y: minutes to release SD between upload cycles
-    bool enableSdCmd0Reset;        // Whether to force a CMD0 reset when releasing SD card
+    bool enable1BitSdMode;         // Whether to use 1-bit SDIO mode instead of 4-bit
     bool minimizeReboots;           // Skip elective reboots between upload sessions
     
     // Cached endpoint type flags (computed once during loadFromSD)
@@ -73,6 +80,7 @@ private:
     int cpuSpeedMhz;
     WifiTxPower wifiTxPower;
     WifiPowerSaving wifiPowerSaving;
+    BrownoutDetectMode brownoutDetectMode;
     
     // Credential storage mode flags
     bool storePlainText;
@@ -147,7 +155,7 @@ public:
     int getInactivitySeconds() const;
     int getExclusiveAccessMinutes() const;
     int getCooldownMinutes() const;
-    bool getEnableSdCmd0Reset() const;
+    bool getEnable1BitSdMode() const;
     bool getMinimizeReboots() const;
     bool isSmartMode() const;
     
@@ -155,6 +163,7 @@ public:
     int getCpuSpeedMhz() const;
     WifiTxPower getWifiTxPower() const;
     WifiPowerSaving getWifiPowerSaving() const;
+    BrownoutDetectMode getBrownoutDetectMode() const;
     
     // Credential storage mode getters
     bool isStoringPlainText() const;

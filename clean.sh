@@ -3,7 +3,7 @@
 
 set -e  # Exit on error
 
-echo "Cleaning CPAP Data Uploader project..."
+echo "Cleaning CPAP AutoSync project..."
 
 # Remove build artifacts
 if [ -d ".pio/build" ]; then
@@ -46,5 +46,5 @@ echo ""
 echo "To set up the environment again, run:"
 echo "  ./setup.sh"
 echo ""
-echo "To build firmware, run:"
-echo "  ./build_upload.sh build [pico32|pico32-ota]"
+echo "Available commands:"
+echo "  ./build_upload.sh build [pico32-ota]"echo "  ./build_upload.sh both"

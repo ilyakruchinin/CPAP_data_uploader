@@ -38,10 +38,16 @@ public:
     void resetIdleTracking();         // Reset silence counter (e.g., on state transition)
     
     // Sample buffer for SD Activity Monitor web UI
+    // Buffer is only allocated when monitoring mode is active (saves ~2.4KB RAM)
     static const int MAX_SAMPLES = 300;  // 5 minutes at 1 sample/sec
     const ActivitySample* getSampleBuffer() const;
     int getSampleCount() const;
     int getSampleHead() const;        // Circular buffer head index
+    
+    // Buffer allocation control
+    void enableSampleBuffer();         // Allocate buffer (call when entering MONITORING)
+    void disableSampleBuffer();        // Free buffer (call when leaving MONITORING)
+    bool isSampleBufferEnabled() const;
     
     // Statistics
     uint32_t getLongestIdleMs() const;
@@ -69,10 +75,11 @@ private:
     unsigned long _lastSecondTime;
     uint32_t _secondPulseAccumulator;
     
-    // Circular sample buffer
-    ActivitySample _sampleBuffer[MAX_SAMPLES];
+    // Circular sample buffer (dynamically allocated only when MONITORING)
+    ActivitySample* _sampleBuffer;
     int _sampleHead;
     int _sampleCount;
+    bool _bufferEnabled;
     
     // Statistics
     uint32_t _longestIdleMs;

@@ -5,6 +5,8 @@
 #include <esp_pm.h>
 #include <esp_sleep.h>
 #include <driver/gpio.h>
+#include <driver/rtc_io.h>
+#include <soc/rtc_cntl_reg.h>
 #include <esp_freertos_hooks.h>
 #include <Preferences.h>
 #include <LittleFS.h>
@@ -19,12 +21,27 @@
 
 #include "TrafficMonitor.h"
 #include "UploadFSM.h"
+#include <ESPmDNS.h>
 
 // True when esp_restart() was the reset cause (ESP_RST_SW).
 // Any programmatic restart means the CPAP machine was already idle and
 // voltages are stable, so cold-boot delays (stabilization, Smart Wait,
 // NTP settle) can be skipped.  Set once in setup() from esp_reset_reason().
 bool g_heapRecoveryBoot = false;
+
+// ── POWER: Brownout-recovery degraded boot ──
+// When the previous reset was ESP_RST_BROWNOUT, boot in a reduced-but-reachable
+// mode: no mDNS, lowest TX power, MAX power save. SSE remains active (lightest
+// transport). Automatically clears after one successful upload cycle or on next
+// clean boot.
+bool g_brownoutRecoveryBoot = false;
+
+// ── POWER: Timed mDNS ──
+// mDNS runs for 60 seconds after boot/reconnect then stops to eliminate
+// continuous multicast group membership and associated radio wakes.
+unsigned long g_mdnsStartTime = 0;
+const unsigned long MDNS_ACTIVE_DURATION_MS = 60000;  // 60 seconds
+bool g_mdnsTimedOut = false;
 
 #ifdef ENABLE_OTA_UPDATES
 #include "OTAManager.h"
@@ -127,6 +144,7 @@ bool g_debugMode = false;
 #ifdef ENABLE_WEBSERVER
 // External trigger flags (defined in WebServer.cpp)
 extern volatile bool g_triggerUploadFlag;
+extern volatile bool g_forceRecentOnlyFlag;
 extern volatile bool g_resetStateFlag;
 
 // Monitoring trigger flags (defined in WebServer.cpp)
@@ -225,6 +243,16 @@ void setup() {
     // CRITICAL: Immediately release SD card control to CPAP machine
     // This must happen before any delays to prevent CPAP machine errors
     // Initialize control pins
+    // ── Fix for ULP firmware residue: release RTC GPIO hold on CS_SENSE ──
+    // A previous firmware version configured GPIO 33 as an RTC GPIO with
+    // rtc_gpio_hold_en().  RTC hold survives software resets (OTA updates),
+    // locking the pin in RTC mode and disconnecting it from the digital GPIO
+    // matrix — which makes PCNT invisible to the signal.  Explicitly release
+    // the hold and switch back to normal GPIO before anything else touches
+    // the pin.  Safe to call even if the hold was never set (no-op).
+    rtc_gpio_hold_dis((gpio_num_t)CS_SENSE);
+    rtc_gpio_deinit((gpio_num_t)CS_SENSE);
+
     pinMode(CS_SENSE, INPUT);
     pinMode(SD_SWITCH_PIN, OUTPUT);
     digitalWrite(SD_SWITCH_PIN, SD_SWITCH_CPAP_VALUE);
@@ -252,6 +280,12 @@ void setup() {
         LOG_ERROR(" - the CPAP was disconnected from the power supply");
         LOG_ERROR(" - the card was removed");
         LOG_ERROR(" - the CPAP machine cannot provide enough power");
+        // ── POWER: Activate brownout-recovery degraded mode ──
+        // Boot in reduced-but-reachable mode: no mDNS, no SSE, lowest TX power,
+        // MAX power save. This reduces current draw on hardware that just proved
+        // it cannot sustain normal operation.
+        g_brownoutRecoveryBoot = true;
+        LOG_WARN("[POWER] Brownout-recovery mode ACTIVE — degraded boot to reduce power draw");
     } else if (resetReason == ESP_RST_PANIC) {
         LOG_WARN("System reset due to software panic - check for stability issues");
     } else if (resetReason == ESP_RST_WDT || resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT) {
@@ -263,6 +297,7 @@ void setup() {
         LOG_ERROR("Failed to mount LittleFS - state and logs cannot be saved!");
     } else {
         LOG("LittleFS mounted successfully");
+        Logger::getInstance().enableLogSaving(false, &LittleFS);
     }
 
     // Initialize SD card control
@@ -273,6 +308,7 @@ void setup() {
     
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
+    
 
     // Determine boot type: software reset (ESP_RST_SW) = soft-reboot / FastBoot.
     // Cold boots (power-on, brownout, watchdog) use distinct reason codes.
@@ -305,8 +341,9 @@ void setup() {
     } else {
         // Cold boot: wait for power-rail stabilization and CPAP boot sequence to settle,
         // then wait for SD bus silence before attempting to take SD card control.
-        LOG("Waiting 15s for electrical stabilization...");
-        delay(15000);
+        // 8 seconds is sufficient for voltage rails and CPAP initialization.
+        LOG("Waiting 8s for electrical stabilization...");
+        delay(8000);
         runSmartWait();
     }
     
@@ -408,12 +445,15 @@ void setup() {
     // Check if a previous boot left an emergency error log on the SD card
     Logger::getInstance().checkPreviousBootError(sdManager.getFS());
 
-    // Always enable persistent logging with multi-file rotation (syslog.0-3.txt)
-    // First call also migrates legacy log files (syslog.A/B, last_reboot_log, etc.)
-    Logger::getInstance().enableLogSaving(true, &LittleFS);
-    // Flush immediately so boot logs (reset reason, Smart Wait, config load)
-    // are captured to NAND before upload activity overwrites the 8KB buffer.
-    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+    // Configure LittleFS-backed syslog rotation for optional periodic persistence.
+    // The filesystem pointer is already registered so emergency pre-reboot
+    // flushes can persist logs even with PERSISTENT_LOGS=false.
+    Logger::getInstance().enableLogSaving(config.getSaveLogs(), &LittleFS);
+    if (config.getSaveLogs()) {
+        // Flush immediately so boot logs (reset reason, Smart Wait, config load)
+        // are captured to NAND before upload activity overwrites the 8KB buffer.
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+    }
 
     // Release SD card back to CPAP machine
     sdManager.releaseControl();
@@ -421,12 +461,22 @@ void setup() {
     // Apply power management settings from config
     LOG("Applying power management settings...");
     
-    // Update CPU frequency from config (boot default is 80 MHz, set in early setup)
+    // Read target CPU frequency but do NOT apply yet — defer until after WiFi
+    // has stabilised to avoid compounding a PLL relock spike with the RF
+    // calibration spike during WiFi.mode(WIFI_STA).
     int targetCpuMhz = config.getCpuSpeedMhz();
-    if (targetCpuMhz != getCpuFrequencyMhz()) {
-        setCpuFrequencyMhz(targetCpuMhz);
+
+    // ── POWER: Optionally disable brownout detector ──
+    // Must happen BEFORE WiFi init (the highest-current boot phase).
+    if (config.getBrownoutDetectMode() == BrownoutDetectMode::OFF || 
+        config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+        LOG_WARNF("BROWNOUT_DETECT=%s — disabling brownout detection per config",
+                config.getBrownoutDetectMode() == BrownoutDetectMode::OFF ? "OFF" : "RELAXED");
+        if (config.getBrownoutDetectMode() == BrownoutDetectMode::OFF) {
+            LOG_WARN("[POWER] WARNING: Device will NOT reset on power drops. Risk of data corruption.");
+        }
+        CLEAR_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
     }
-    LOGF("CPU frequency: %dMHz", getCpuFrequencyMhz());
 
     // Setup WiFi event handlers for logging
     wifiManager.setupEventHandlers();
@@ -448,15 +498,36 @@ void setup() {
             sdManager.releaseControl();
         }
         
+        // Re-enable brownout detection if it was only relaxed for boot
+        if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+            LOG_INFO("[POWER] WiFi connection phase complete — re-enabling brownout detection");
+            SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+        }
+
         return;
     }
     
-    // Start mDNS responder (allows access via http://cpap.local or configured hostname)
-    wifiManager.startMDNS(config.getHostname());
-    
-    // Apply WiFi power settings after connection is established
-    wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
+    // ── POWER: mDNS and WiFi power settings (brownout-aware) ──
+    if (g_brownoutRecoveryBoot) {
+        // Brownout-recovery: skip mDNS entirely, force lowest TX power + MAX power save
+        LOG_WARN("[POWER] Brownout-recovery: skipping mDNS, forcing lowest TX power + MAX power save");
+        wifiManager.applyPowerSettings(WifiTxPower::POWER_LOWEST, WifiPowerSaving::SAVE_MAX);
+    } else {
+        // Normal boot: small delay lets the 3.3V rail recover from the WiFi
+        // association + DHCP burst before mDNS fires its multicast announcement.
+        delay(200);
+        wifiManager.startMDNS(config.getHostname());
+        g_mdnsStartTime = millis();
+        g_mdnsTimedOut = false;
+        wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
+    }
     LOG("WiFi power management settings applied");
+    
+    // Re-enable brownout detection if it was only relaxed for boot
+    if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+        LOG_INFO("[POWER] WiFi connection phase complete — re-enabling brownout detection");
+        SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+    }
     
     // ── POWER: Configure Dynamic Frequency Scaling (DFS) + Auto Light-Sleep ──
     // With CONFIG_PM_ENABLE=y in sdkconfig, the CPU can automatically scale
@@ -485,6 +556,14 @@ void setup() {
     } else {
         LOGF("PM configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
     }
+    
+    // ── POWER: Apply CPU frequency AFTER WiFi has stabilised ──
+    // During boot, the CPU stays at 80 MHz through WiFi init to avoid
+    // compounding a PLL relock spike with the RF calibration spike.
+    if (targetCpuMhz != getCpuFrequencyMhz()) {
+        setCpuFrequencyMhz(targetCpuMhz);
+    }
+    LOGF("CPU frequency: %dMHz", getCpuFrequencyMhz());
     
     // ── POWER: Configure GPIO wakeup for auto light-sleep ──
     // GPIO 33 (CS_SENSE) is an RTC GPIO that detects CPAP SD card bus activity.
@@ -715,19 +794,33 @@ void handleUploading() {
         // ── First call: determine filter and spawn upload task ──
         ScheduleManager* sm = uploader->getScheduleManager();
         DataFilter filter;
-        bool canFresh = sm->canUploadFreshData();
-        bool canOld = sm->canUploadOldData();
-        
-        if (canFresh && canOld) {
-            filter = DataFilter::ALL_DATA;
-        } else if (canFresh) {
+
+#ifdef ENABLE_WEBSERVER
+        // Force Upload outside scheduled window → recent data only
+        bool forceRecent = g_forceRecentOnlyFlag;
+        g_forceRecentOnlyFlag = false;
+#else
+        bool forceRecent = false;
+#endif
+
+        if (forceRecent) {
             filter = DataFilter::FRESH_ONLY;
-        } else if (canOld) {
-            filter = DataFilter::OLD_ONLY;
+            LOG("[FSM] Force upload (recent only) — outside scheduled window");
         } else {
-            LOG_WARN("[FSM] No data category eligible, releasing");
-            transitionTo(UploadState::RELEASING);
-            return;
+            bool canFresh = sm->canUploadFreshData();
+            bool canOld = sm->canUploadOldData();
+            
+            if (canFresh && canOld) {
+                filter = DataFilter::ALL_DATA;
+            } else if (canFresh) {
+                filter = DataFilter::FRESH_ONLY;
+            } else if (canOld) {
+                filter = DataFilter::OLD_ONLY;
+            } else {
+                LOG_WARN("[FSM] No data category eligible, releasing");
+                transitionTo(UploadState::RELEASING);
+                return;
+            }
         }
 
         LOGF("[FSM] Heap before upload task: fh=%u ma=%u",
@@ -826,6 +919,7 @@ void handleReleasing() {
     // If monitoring was requested during upload, go to MONITORING instead of COOLDOWN
     if (monitoringRequested) {
         monitoringRequested = false;
+        trafficMonitor.enableSampleBuffer();  // Allocate buffer for web UI
         trafficMonitor.resetStatistics();
         LOG("[FSM] Monitoring requested during upload — entering MONITORING after release");
         transitionTo(UploadState::MONITORING);
@@ -899,6 +993,13 @@ void handleCooldown() {
 }
 
 void handleComplete() {
+    // Clear brownout-recovery mode after a successful upload — the device
+    // has proven it can sustain a full upload cycle at current power levels.
+    if (g_brownoutRecoveryBoot) {
+        g_brownoutRecoveryBoot = false;
+        LOG_INFO("[POWER] Brownout-recovery mode cleared — successful upload cycle");
+    }
+    
     ScheduleManager* sm = uploader->getScheduleManager();
     
     if (sm->isSmartMode()) {
@@ -922,6 +1023,7 @@ void handleMonitoring() {
     if (stopMonitoringRequested) {
         stopMonitoringRequested = false;
         LOG("[FSM] Monitoring stopped by user");
+        trafficMonitor.disableSampleBuffer();  // Free ~2.4KB buffer
         ScheduleManager* sm = uploader ? uploader->getScheduleManager() : nullptr;
         if (sm && sm->isSmartMode()) {
             trafficMonitor.resetIdleTracking();
@@ -938,9 +1040,12 @@ void handleMonitoring() {
 void loop() {
     // ── Always-on tasks ──
     
-    // Periodic persisted-log flush (every 10 seconds, always-on)
-    // Uses multi-file rotation on LittleFS — independent of SD_MMC / upload task
-    {
+    // Periodic persisted-log flush (every 10 seconds)
+    // Uses multi-file rotation on LittleFS — independent of SD_MMC / upload task.
+    // ── POWER: Skip during active uploads to avoid internal SPI flash writes
+    // overlapping with SD reads, TLS encryption, and WiFi TX bursts.
+    // flushBeforeReboot() ensures no logs are lost on post-upload reboot.
+    if (!uploadTaskRunning) {
         unsigned long currentTime = millis();
         if (currentTime - lastLogFlushTime >= LOG_FLUSH_INTERVAL_MS) {
             Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
@@ -959,15 +1064,24 @@ void loop() {
     // Handle web server requests
     if (webServer) {
         webServer->handleClient();
-        // Push SSE log events to connected client (if any)
+        // Push SSE log events to connected client (if any).
+        // Upload-time throttling is handled inside pushSseLogs() so logs remain
+        // near-live without generating continuous high-rate traffic.
         pushSseLogs();
-        // Refresh status snapshot every 3 s — assembles JSON using snprintf into
-        // g_webStatusBuf (stack only, zero heap allocation).
-        static unsigned long lastStatusSnapMs = 0;
-        if (millis() - lastStatusSnapMs >= 3000) {
-            webServer->updateStatusSnapshot();
-            lastStatusSnapMs = millis();
-        }
+        // Status snapshot is rebuilt on-demand in handleApiStatus() — no periodic
+        // rebuild needed. The API handler calls updateStatusSnapshot() before
+        // serving, so the data is always fresh when a client requests it.
+    }
+    
+    // ── POWER: Timed mDNS — stop responder after 60 seconds ──
+    // mDNS is only needed for initial .local discovery. After the browser
+    // resolves the hostname and gets redirected to the IP, mDNS can stop
+    // to eliminate multicast group membership and associated radio wakes.
+    if (!g_mdnsTimedOut && g_mdnsStartTime > 0 &&
+        (millis() - g_mdnsStartTime >= MDNS_ACTIVE_DURATION_MS)) {
+        g_mdnsTimedOut = true;
+        MDNS.end();
+        LOG_DEBUG("[POWER] Timed mDNS stopped after 60 seconds");
     }
     
     // ── Software watchdog for upload task ──
@@ -1072,20 +1186,33 @@ void loop() {
                 return;
             }
             
+            // ── POWER: Relax brownout detection before reconnecting ──
+            if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+                LOG_INFO("[POWER] Relaxing brownout detection for WiFi reconnect");
+                CLEAR_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+            }
+            
             if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
                 LOG_ERROR("Failed to reconnect to WiFi");
                 lastWifiReconnectAttempt = currentTime;
+                
+                // Re-enable if we failed early
+                if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+                    SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+                }
                 return;
             }
             LOG_DEBUG("WiFi reconnected successfully");
             
-            // Restart mDNS responder after reconnection
-            wifiManager.startMDNS(config.getHostname());
-            
-            lastNtpSyncAttempt = 0;
-            lastWifiReconnectAttempt = 0;
+            // Re-enable brownout detection after a successful reconnect attempt.
+            if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+                LOG_INFO("[POWER] WiFi reconnect complete — re-enabling brownout detection");
+                SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+            }
         }
-        return;  // Skip FSM while WiFi is down
+
+        // Initialize web server regardless of connection success
+        // It will either serve normal UI or AP setup UIFSM while WiFi is down
     }
 
     // ── NTP sync retry ──
@@ -1105,6 +1232,7 @@ void loop() {
             if (currentState == UploadState::ACQUIRING && sdManager.hasControl()) {
                 sdManager.releaseControl();
             }
+            trafficMonitor.enableSampleBuffer();  // Allocate buffer for web UI
             trafficMonitor.resetStatistics();
             transitionTo(UploadState::MONITORING);
         }

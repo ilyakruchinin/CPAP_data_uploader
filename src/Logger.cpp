@@ -506,7 +506,9 @@ void Logger::enableLogSaving(bool enable, fs::FS* logFS) {
     }
     
     logSavingEnabled = enable;
-    logFileSystem = enable ? logFS : nullptr;
+    if (logFS != nullptr) {
+        logFileSystem = logFS;
+    }
     
     if (enable) {
         // Reset dump tracking when enabling
@@ -535,13 +537,13 @@ void Logger::enableLogSaving(bool enable, fs::FS* logFS) {
 }
 
 // Periodic log flush with multi-file rotation (syslog.0..3.txt)
-bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
+bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager, bool forceFlush) {
 #ifdef UNIT_TEST
     return false;
 #else
     (void)sdManager;
 
-    if (!logSavingEnabled || logFileSystem == nullptr) {
+    if (((!logSavingEnabled && !forceFlush) || logFileSystem == nullptr)) {
         return false;
     }
     if (!initialized || buffer == nullptr || mutex == nullptr) {
@@ -565,9 +567,12 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
     if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         return false;
     }
+
+    uint32_t gapBytes = 0;
     
     // If writer overtook our read pointer, skip to tail on a clean line boundary
     if (lastDumpedBytes < tailIndex) {
+        uint32_t previousDumpedBytes = lastDumpedBytes;
         lastDumpedBytes = tailIndex;
         uint32_t scanLimit = (headIndex - tailIndex);
         if (scanLimit > 512) scanLimit = 512;
@@ -578,6 +583,7 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
                 break;
             }
         }
+        gapBytes = lastDumpedBytes - previousDumpedBytes;
     }
     
     uint32_t bytesToDump = headIndex - lastDumpedBytes;
@@ -596,6 +602,27 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager) {
         logFile = logFileSystem->open("/syslog.0.txt", FILE_WRITE);
         if (!logFile) {
             return false;
+        }
+    }
+
+    if (gapBytes > 0) {
+        char gapMessage[320];
+        int gapLen = snprintf(
+            gapMessage,
+            sizeof(gapMessage),
+            "=== LOG GAP ===\n"
+            "Some log lines were not persisted because the RAM log buffer overflowed before the next LittleFS flush.\n"
+            "Bytes lost: %lu\n"
+            "High log volume during active uploads can trigger this because periodic flash flushing is deferred while uploads are running.\n"
+            "=== END LOG GAP ===\n",
+            (unsigned long)gapBytes
+        );
+        if (gapLen > 0) {
+            size_t bytesToWrite = (size_t)gapLen;
+            if (bytesToWrite >= sizeof(gapMessage)) {
+                bytesToWrite = sizeof(gapMessage) - 1;
+            }
+            logFile.write((const uint8_t*)gapMessage, bytesToWrite);
         }
     }
     
@@ -740,7 +767,7 @@ bool Logger::dumpToSD(fs::FS& fs, const char* filename, const char* reason) {
 // Flush all pending circular-buffer content to NAND before reboot.
 // Simply calls the periodic flush — no separate file needed.
 bool Logger::flushBeforeReboot() {
-    return dumpSavedLogsPeriodic(nullptr);
+    return dumpSavedLogsPeriodic(nullptr, true);
 }
 
 // Check if a previous boot failure left an emergency log on the SD card
@@ -759,5 +786,5 @@ void Logger::checkPreviousBootError(fs::FS& fs, const char* filename) {
 // Legacy compatibility — flush to syslog rotation
 bool Logger::dumpSavedLogs(const String& reason) {
     (void)reason;
-    return dumpSavedLogsPeriodic(nullptr);
+    return dumpSavedLogsPeriodic(nullptr, true);
 }

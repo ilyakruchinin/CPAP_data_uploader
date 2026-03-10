@@ -51,10 +51,10 @@ bool ScheduleManager::syncTime() {
     // Allow network to stabilize after WiFi connection.
     // Skip on heap-recovery reboots — WiFi re-connects to a known AP in <1 s.
     if (g_heapRecoveryBoot) {
-        LOG("[NTP] [FastBoot] Skipping 5 s network-stabilize delay");
+        LOG("[NTP] [FastBoot] Skipping network-stabilize delay");
     } else {
-        LOG("[NTP] Waiting 5 seconds for network to stabilize...");
-        delay(5000);
+        LOG("[NTP] Waiting 2 seconds for network to stabilize...");
+        delay(2000);
     }
     
     // Skip ICMP ping pre-check to reduce dependency footprint.

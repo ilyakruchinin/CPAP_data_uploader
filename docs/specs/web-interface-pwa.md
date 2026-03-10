@@ -95,7 +95,7 @@ const char* getMainPageHtml() {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>CPAP Data Uploader</title>
+    <title>CPAP AutoSync</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script>
         // Auto-refresh every 3 seconds
@@ -122,6 +122,7 @@ The Logs tab maintains a persistent in-browser ring buffer (up to 2000 lines) th
 - **Reboot detection**: The boot banner (`=== CPAP Data Auto-Uploader ===`) is always present in server responses (ring buffer starts from boot). A genuinely new reboot is detected only when `lastSeenLine` is absent from the response **or** appears before the boot banner. In that case a `─── DEVICE REBOOTED ───` separator is inserted. Same-boot polls are treated as normal tails.
 - **Copy to clipboard**: A "Copy to clipboard" button exports the entire buffer as plain text.
 - **Clear buffer**: Resets the buffer and `lastSeenLine` state.
+- **Tab revisit behavior**: Leaving the Logs tab closes the live SSE stream; returning immediately fetches the latest circular-buffer tail and then re-establishes SSE.
 
 ## API Endpoints
 
