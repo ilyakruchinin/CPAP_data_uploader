@@ -48,6 +48,12 @@ This release focuses on reducing power consumption, improving WiFi reliability o
 - **Server-side keepalive** — the device sends a heartbeat every 15 seconds on idle connections, preventing browsers and proxies from closing the stream due to inactivity.
 - **Upload logs remain near-live during active transfers** — SSE is no longer fully suppressed while an upload task is running. Instead, log pushes are throttled during uploads so the Logs tab stays responsive without creating continuous high-rate WiFi traffic.
 
+### Persistent Logging Behaviour
+
+- **`PERSISTENT_LOGS` now matches its documented intent again** — periodic LittleFS syslog flushing is only enabled when `PERSISTENT_LOGS=true`. The default remains `false`.
+- **Emergency log persistence remains always on** — regardless of `PERSISTENT_LOGS`, the firmware still flushes the RAM log buffer to LittleFS before reboot and still writes `/uploader_error.txt` to the SD card for boot-time failures that prevent normal web access.
+- **Persisted log gaps are now explicit** — if heavy log volume overruns the 8 KB RAM circular buffer before the next LittleFS flush, the persisted `syslog.*.txt` stream now inserts a single `LOG GAP` marker with the number of lost bytes instead of silently skipping that missing region.
+
 ### "REBOOTING" Banner Fix
 
 - **No more stuck "REBOOTING" badge** — previously, a single missed status poll could show "REBOOTING" even though the device was fine. Now:

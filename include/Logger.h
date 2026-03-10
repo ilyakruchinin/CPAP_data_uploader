@@ -138,11 +138,13 @@ public:
      * Periodic persisted-log flush — call from main loop every ~10 seconds.
      * Appends new circular-buffer content to syslog.0.txt.
      * Rotates files when syslog.0.txt exceeds SYSLOG_MAX_FILE_SIZE.
+     * If forceFlush is true, flushes even if log saving is disabled.
      *
      * @param sdManager Unused compatibility parameter
+     * @param forceFlush Force flush even if log saving is disabled
      * @return true if logs were flushed, false if skipped or failed
      */
-    bool dumpSavedLogsPeriodic(class SDCardManager* sdManager);
+    bool dumpSavedLogsPeriodic(class SDCardManager* sdManager, bool forceFlush = false);
 
     /**
      * Stream all saved log files (oldest first) to a Print destination.

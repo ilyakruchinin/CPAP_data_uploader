@@ -297,6 +297,7 @@ void setup() {
         LOG_ERROR("Failed to mount LittleFS - state and logs cannot be saved!");
     } else {
         LOG("LittleFS mounted successfully");
+        Logger::getInstance().enableLogSaving(false, &LittleFS);
     }
 
     // Initialize SD card control
@@ -444,12 +445,15 @@ void setup() {
     // Check if a previous boot left an emergency error log on the SD card
     Logger::getInstance().checkPreviousBootError(sdManager.getFS());
 
-    // Always enable persistent logging with multi-file rotation (syslog.0-3.txt)
-    // First call also migrates legacy log files (syslog.A/B, last_reboot_log, etc.)
-    Logger::getInstance().enableLogSaving(true, &LittleFS);
-    // Flush immediately so boot logs (reset reason, Smart Wait, config load)
-    // are captured to NAND before upload activity overwrites the 8KB buffer.
-    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+    // Configure LittleFS-backed syslog rotation for optional periodic persistence.
+    // The filesystem pointer is already registered so emergency pre-reboot
+    // flushes can persist logs even with PERSISTENT_LOGS=false.
+    Logger::getInstance().enableLogSaving(config.getSaveLogs(), &LittleFS);
+    if (config.getSaveLogs()) {
+        // Flush immediately so boot logs (reset reason, Smart Wait, config load)
+        // are captured to NAND before upload activity overwrites the 8KB buffer.
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+    }
 
     // Release SD card back to CPAP machine
     sdManager.releaseControl();
