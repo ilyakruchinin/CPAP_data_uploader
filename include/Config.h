@@ -26,6 +26,12 @@ enum class WifiPowerSaving {
     #include <Preferences.h>
 #endif
 
+enum class BrownoutDetectMode {
+    ENABLED,
+    RELAXED,
+    OFF
+};
+
 class Config {
 public:
     // Max line length for config file
@@ -74,7 +80,7 @@ private:
     int cpuSpeedMhz;
     WifiTxPower wifiTxPower;
     WifiPowerSaving wifiPowerSaving;
-    bool brownoutDetectOff;
+    BrownoutDetectMode brownoutDetectMode;
     
     // Credential storage mode flags
     bool storePlainText;
@@ -157,7 +163,7 @@ public:
     int getCpuSpeedMhz() const;
     WifiTxPower getWifiTxPower() const;
     WifiPowerSaving getWifiPowerSaving() const;
-    bool isBrownoutDetectOff() const;
+    BrownoutDetectMode getBrownoutDetectMode() const;
     
     // Credential storage mode getters
     bool isStoringPlainText() const;

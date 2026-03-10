@@ -42,7 +42,7 @@ Config::Config() :
     cpuSpeedMhz(80),  // Default: 80MHz (minimum for WiFi, saves ~30-40mA)
     wifiTxPower(WifiTxPower::POWER_MID),  // Default: 5.0dBm (typical bedroom placement, reduces peak current)
     wifiPowerSaving(WifiPowerSaving::SAVE_MID),  // Default: MIN_MODEM (preserves mDNS)
-    brownoutDetectOff(false)  // Default: brownout detection enabled
+    brownoutDetectMode(BrownoutDetectMode::ENABLED)  // Default: brownout detection enabled
 {}
 
 Config::~Config() {
@@ -237,9 +237,15 @@ void Config::setConfigValue(String key, String value) {
     } else if (key == "MINIMIZE_REBOOTS") {
         minimizeReboots = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "BROWNOUT_DETECT") {
-        brownoutDetectOff = value.equalsIgnoreCase("off");
+        if (value.equalsIgnoreCase("off")) {
+            brownoutDetectMode = BrownoutDetectMode::OFF;
+        } else if (value.equalsIgnoreCase("relaxed")) {
+            brownoutDetectMode = BrownoutDetectMode::RELAXED;
+        } else {
+            brownoutDetectMode = BrownoutDetectMode::ENABLED;
+        }
     } else {
-        LOGF("WARN: Unknown config key '%s'. Skipping.", key.c_str());
+        LOG_WARN(String("Unknown config key: ") + key);
     }
 }
 
@@ -601,7 +607,7 @@ bool Config::hasWebdavEndpoint() const { return _hasWebdavEndpoint; }
 int Config::getCpuSpeedMhz() const { return cpuSpeedMhz; }
 WifiTxPower Config::getWifiTxPower() const { return wifiTxPower; }
 WifiPowerSaving Config::getWifiPowerSaving() const { return wifiPowerSaving; }
-bool Config::isBrownoutDetectOff() const { return brownoutDetectOff; }
+BrownoutDetectMode Config::getBrownoutDetectMode() const { return brownoutDetectMode; }
 
 // Upload FSM getters
 const String& Config::getUploadMode() const { return uploadMode; }

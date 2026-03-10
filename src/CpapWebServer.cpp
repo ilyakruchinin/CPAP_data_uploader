@@ -741,7 +741,7 @@ void CpapWebServer::initConfigSnapshot() {
         ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
         ",\"gmt_offset_hours\":%d,\"max_days\":%d,\"recent_folder_days\":%d"
         ",\"cloud_configured\":%s"
-        ",\"brownout_detect_off\":%s"
+        ",\"brownout_detect_mode\":\"%s\""
         ",\"firmware\":\"%s\"}",
         config->getWifiSSID().c_str(),
         config->getHostname().c_str(),
@@ -753,7 +753,8 @@ void CpapWebServer::initConfigSnapshot() {
         config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),
         config->getGmtOffsetHours(), config->getMaxDays(), config->getRecentFolderDays(),
         hasCloud ? "true" : "false",
-        config->isBrownoutDetectOff() ? "true" : "false",
+        config->getBrownoutDetectMode() == BrownoutDetectMode::OFF ? "OFF" : 
+        (config->getBrownoutDetectMode() == BrownoutDetectMode::RELAXED ? "RELAXED" : "ENABLED"),
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webConfigBuf, buf, n + 1);
