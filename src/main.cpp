@@ -1061,11 +1061,9 @@ void loop() {
     if (webServer) {
         webServer->handleClient();
         // Push SSE log events to connected client (if any).
-        // ── POWER: Suppress SSE during uploads to eliminate continuous WiFi TX
-        // churn from log streaming while SD + TLS + WiFi are all active.
-        if (!uploadTaskRunning) {
-            pushSseLogs();
-        }
+        // Upload-time throttling is handled inside pushSseLogs() so logs remain
+        // near-live without generating continuous high-rate traffic.
+        pushSseLogs();
         // Status snapshot is rebuilt on-demand in handleApiStatus() — no periodic
         // rebuild needed. The API handler calls updateStatusSnapshot() before
         // serving, so the data is always fresh when a client requests it.
