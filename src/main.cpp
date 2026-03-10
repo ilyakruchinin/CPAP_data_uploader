@@ -1185,9 +1185,20 @@ void loop() {
                 return;
             }
             
+            // ── POWER: Relax brownout detection before reconnecting ──
+            if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+                LOG_INFO("[POWER] Relaxing brownout detection for WiFi reconnect");
+                CLEAR_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+            }
+            
             if (!wifiManager.connectStation(config.getWifiSSID(), config.getWifiPassword())) {
                 LOG_ERROR("Failed to reconnect to WiFi");
                 lastWifiReconnectAttempt = currentTime;
+                
+                // Re-enable if we failed early
+                if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+                    SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+                }
                 return;
             }
             LOG_DEBUG("WiFi reconnected successfully");
