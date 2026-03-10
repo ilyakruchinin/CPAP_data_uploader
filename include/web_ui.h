@@ -72,7 +72,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bt-c{color:#aa66ff;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bd-i{font-size:.79em;color:#8f98a0;margin-top:4px;min-height:1.1em;padding-left:2px}
 .hdr{margin-bottom:2px}
-.hdr svg{height:72px;width:auto;display:block}
+.hdr svg{height:108px;width:auto;display:block}
 .hdr-spin{transform-origin:25px 25px;animation:hSpin 8s linear infinite}
 @keyframes hSpin{100%{transform:rotate(360deg)}}
 .hdr-arrow{animation:hUp 2s ease-in-out infinite}
@@ -91,7 +91,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 #mon-active-banner h3{color:#bb88ff;font-size:1em;margin-bottom:6px}
 #mon-active-banner p{color:#b0a0c0;font-size:.84em;line-height:1.5}
 @keyframes monPulse{0%,100%{border-color:#8b4dbb}50%{border-color:#bb88ff}}
-@media(max-width:600px){.hdr svg{height:72px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
+@media(max-width:600px){.hdr svg{height:108px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
 </style></head><body>
 <div class=wrap>
 <div class=hdr>
