@@ -37,7 +37,7 @@ This release focuses on reducing power consumption, improving WiFi reliability o
 
 ### Brownout Detection & WiFi Sleep Control
 
-- **Default brownout level restored to Level 0 (~2.43V)** — beta1 used Level 7 (~2.74V), which triggered too many unnecessary resets on CPAP-powered hardware.
+- **Default brownout level restored to Level 0 (~2.43V)** — tried using Level 7 (~2.74V), which triggered too many unnecessary resets on CPAP-powered hardware.
 - **New config option: `BROWNOUT_DETECT=OFF`** — if your device still resets frequently due to power dips, you can now disable the brownout detector entirely via config.txt. When disabled, a **persistent orange warning banner** appears on the web dashboard reminding you of the risk.
 - **Deep sleep tuning (`listen_interval`)** — When `WIFI_PWR_SAVING` is set to `MAX`, the WiFi radio is now explicitly configured to sleep for multiple DTIM intervals (`listen_interval = 10`), significantly reducing average current draw during idle phases at the cost of ping latency.
 
