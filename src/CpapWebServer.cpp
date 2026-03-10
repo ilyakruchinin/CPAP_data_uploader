@@ -1422,11 +1422,14 @@ void pushSseLogs() {
 
     Logger& logger = Logger::getInstance();
     uint32_t currentHead = logger.getHeadIndex();
+    unsigned long now = millis();
+    static unsigned long lastDataPushAt = 0;
+    const bool uploadInProgress = uploadTaskRunning;
+    const unsigned long minPushIntervalMs = uploadInProgress ? 250 : 0;
 
     if (currentHead == g_sseLastPushedIndex) {
         // No new log data — send periodic keepalive to prevent idle timeout
         static unsigned long lastKeepalive = 0;
-        unsigned long now = millis();
         if (now - lastKeepalive >= 15000) {
             lastKeepalive = now;
             if (g_sseClient.connected()) {
@@ -1435,6 +1438,10 @@ void pushSseLogs() {
                 g_sseActive = false;
             }
         }
+        return;
+    }
+
+    if (minPushIntervalMs && (now - lastDataPushAt) < minPushIntervalMs) {
         return;
     }
 
@@ -1449,7 +1456,8 @@ void pushSseLogs() {
     }
 
     // Cap per-push to avoid blocking the loop too long
-    if (newBytes > 2048) newBytes = 2048;
+    const uint32_t maxBytesPerPush = uploadInProgress ? 512 : 2048;
+    if (newBytes > maxBytesPerPush) newBytes = maxBytesPerPush;
 
     // Build SSE "data:" lines from the buffer content.
     // SSE format: "data: <line>\n\n" for each line.
@@ -1506,5 +1514,6 @@ void pushSseLogs() {
         }
     }
 
+    lastDataPushAt = now;
     g_sseLastPushedIndex += newBytes;
 }

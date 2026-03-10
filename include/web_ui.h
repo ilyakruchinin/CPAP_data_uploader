@@ -430,7 +430,17 @@ function tab(t){
     document.getElementById('t-'+x).classList.toggle('act',x===t);
   });
   curTab=t;
-  if(t==='logs'){if(!backfillDone){fetchBackfill();}else if(!sseConnected){startSse();}}else{stopLogPoll();}
+  if(t==='logs'){
+    if(!backfillDone){
+      fetchBackfill();
+    }else{
+      fetchLogs();
+      if(!sseConnected){startSse();}
+    }
+  }else{
+    stopLogPoll();
+    stopSse();
+  }
   if(t==='cfg'){loadCfg();}
   if(t==='mon'){checkMonUploadState();syncMonBtn();}
   if(t==='mem'){updateHeapChart();updateCpuChart();}
