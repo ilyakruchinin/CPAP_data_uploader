@@ -72,7 +72,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 .bt-c{color:#aa66ff;font-size:.82em;font-weight:700;letter-spacing:.5px}
 .bd-i{font-size:.79em;color:#8f98a0;margin-top:4px;min-height:1.1em;padding-left:2px}
 .hdr{margin-bottom:2px}
-.hdr svg{width:min(100%,480px);height:auto;display:block}
+.hdr svg{height:72px;width:auto;display:block}
 .hdr-spin{transform-origin:25px 25px;animation:hSpin 8s linear infinite}
 @keyframes hSpin{100%{transform:rotate(360deg)}}
 .hdr-arrow{animation:hUp 2s ease-in-out infinite}
@@ -91,80 +91,76 @@ nav button:hover:not(.act){background:#3a5a7e}
 #mon-active-banner h3{color:#bb88ff;font-size:1em;margin-bottom:6px}
 #mon-active-banner p{color:#b0a0c0;font-size:.84em;line-height:1.5}
 @keyframes monPulse{0%,100%{border-color:#8b4dbb}50%{border-color:#bb88ff}}
-@media(max-width:600px){.hdr svg{width:min(100%,360px)}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
+@media(max-width:600px){.hdr svg{height:72px}nav{gap:4px}nav button{padding:5px 9px;font-size:.78em}.log-btns{flex-direction:column;gap:4px}.log-btns button{width:100%}}
 </style></head><body>
 <div class=wrap>
 <div class=hdr>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 160" width="480" height="160" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
-  <defs>
-    <style>
-      .spin-ring { transform-origin: 80px 80px; animation: spin 8s linear infinite; }
-      @keyframes spin { 100% { transform: rotate(360deg); } }
-      .arrow-anim { animation: upload 2s ease-in-out infinite; }
-      @keyframes upload { 0% { transform: translateY(4px); opacity: 0; } 40% { opacity: 1; } 100% { transform: translateY(-12px); opacity: 0; } }
-      .pulse-wave { animation: pulse 3.5s ease-in-out infinite; }
-      @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; filter: brightness(1.3); } }
-      .wifi-1 { animation: wifiBlink 1.5s infinite 0s; }
-      .wifi-2 { animation: wifiBlink 1.5s infinite 0.25s; }
-      .wifi-3 { animation: wifiBlink 1.5s infinite 0.5s; }
-      @keyframes wifiBlink { 0%, 100% { opacity: 0.4; filter: brightness(1); } 50% { opacity: 1; filter: brightness(1.8) drop-shadow(0 0 2px #38bdf8); } }
-    </style>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0f1f3d;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#0a2a3a;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="circleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#1a6b8a;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#0d4a6b;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#2dd4bf;stop-opacity:1" />
-      <stop offset="50%" style="stop-color:#38bdf8;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#818cf8;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="arrowGrad" x1="0%" y1="100%" x2="0%" y2="0%">
-      <stop offset="0%" style="stop-color:#38bdf8;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#2dd4bf;stop-opacity:1" />
-    </linearGradient>
-    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
-      <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-    <filter id="waveGlow" x="-10%" y="-50%" width="120%" height="200%">
-      <feGaussianBlur stdDeviation="1.8" result="coloredBlur"/>
-      <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-  </defs>
-  <rect width="480" height="160" rx="18" fill="url(#bgGrad)"/>
-  <circle class="spin-ring" cx="80" cy="80" r="58" fill="none" stroke="url(#waveGrad)" stroke-width="3" stroke-dasharray="126 13 78 13 48 13 30 13 18 13" stroke-linecap="round" opacity="0.85"/>
-  <circle cx="80" cy="80" r="54" fill="url(#circleGrad)"/>
-  <circle cx="80" cy="80" r="54" fill="none" stroke="url(#waveGrad)" stroke-width="1" opacity="0.6"/>
-  <g transform="translate(52, 52)">
-    <path d="M7,0 L29,0 L36,7 L36,34 Q36,36 34,36 L2,36 Q0,36 0,34 L0,2 Q0,0 2,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width="1.2" opacity="0.9"/>
-    <rect x="6" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
-    <rect x="12" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
-    <rect x="18" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
-    <rect x="24" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
-    <line x1="29" y1="0" x2="36" y2="7" stroke="#38bdf8" stroke-width="1.2" opacity="0.7"/>
-  </g>
-  <g transform="translate(96, 70)" filter="url(#glow)">
-    <g class="arrow-anim">
-      <line x1="0" y1="22" x2="0" y2="6" stroke="url(#arrowGrad)" stroke-width="3" stroke-linecap="round"/>
-      <polyline points="-6,10 0,2 6,10" fill="none" stroke="url(#arrowGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    </g>
-    <line x1="-7" y1="25" x2="7" y2="25" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
-  </g>
-  <g transform="translate(80, 108)" filter="url(#waveGlow)">
-    <path class="pulse-wave" d="M-28,0 C-24,-2 -22,-2 -18,0 C-14,2 -12,2 -8,0 C-4,-10 -2,-10 2,-4 C4,-1 5,8 8,8 C11,8 12,1 15,-4 C18,-10 20,-10 24,-4 C26,0 28,0 28,0" fill="none" stroke="url(#waveGrad)" stroke-width="2.2" stroke-linecap="round"/>
-  </g>
-  <g transform="translate(80, 36)" filter="url(#glow)">
-    <path class="wifi-1" d="M-10,10 Q0,-2 10,10" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
-    <path class="wifi-2" d="M-6,14 Q0,8 6,14" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
-    <circle class="wifi-3" cx="0" cy="17" r="2.2" fill="#38bdf8"/>
-  </g>
-  <text x="154" y="68" font-size="38" font-weight="700" letter-spacing="-0.5" fill="white">CPAP</text>
-  <text x="154" y="110" font-size="38" font-weight="700" letter-spacing="-0.5" fill="url(#waveGrad)">AutoSync</text>
-  <rect x="154" y="125" width="272" height="2.5" rx="1.25" fill="url(#waveGrad)" opacity="0.7"/>
+<svg viewBox="0 0 480 160" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',system-ui,-apple-system,sans-serif" preserveAspectRatio="xMidYMid meet">
+<defs>
+<style>
+.spin-ring{transform-origin:80px 80px;animation:hSpin 8s linear infinite}
+.arrow-anim{animation:hUp 2s ease-in-out infinite}
+.pulse-wave{animation:hPulse 3.5s ease-in-out infinite}
+.wifi-1{animation:hWifi 1.5s infinite 0s}
+.wifi-2{animation:hWifi 1.5s infinite 0.25s}
+.wifi-3{animation:hWifi 1.5s infinite 0.5s}
+</style>
+<linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#0f1923"/>
+<stop offset="100%" stop-color="#0f1923"/>
+</linearGradient>
+<linearGradient id="circleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#1a6b8a"/>
+<stop offset="100%" stop-color="#0d4a6b"/>
+</linearGradient>
+<linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+<stop offset="0%" stop-color="#2dd4bf"/>
+<stop offset="50%" stop-color="#38bdf8"/>
+<stop offset="100%" stop-color="#818cf8"/>
+</linearGradient>
+<linearGradient id="arrowGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+<stop offset="0%" stop-color="#38bdf8"/>
+<stop offset="100%" stop-color="#2dd4bf"/>
+</linearGradient>
+<filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+<feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+<feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter>
+<filter id="waveGlow" x="-10%" y="-50%" width="120%" height="200%">
+<feGaussianBlur stdDeviation="1.8" result="coloredBlur"/>
+<feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter>
+</defs>
+<rect width="480" height="160" rx="18" fill="url(#bgGrad)"/>
+<circle class="spin-ring" cx="80" cy="80" r="58" fill="none" stroke="url(#waveGrad)" stroke-width="3" stroke-dasharray="126 13 78 13 48 13 30 13 18 13" stroke-linecap="round" opacity="0.85"/>
+<circle cx="80" cy="80" r="54" fill="url(#circleGrad)"/>
+<circle cx="80" cy="80" r="54" fill="none" stroke="url(#waveGrad)" stroke-width="1" opacity="0.6"/>
+<g transform="translate(52,52)">
+<path d="M7,0 L29,0 L36,7 L36,34 Q36,36 34,36 L2,36 Q0,36 0,34 L0,2 Q0,0 2,0 Z" fill="#0a2233" stroke="#38bdf8" stroke-width="1.2" opacity="0.9"/>
+<rect x="6" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
+<rect x="12" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
+<rect x="18" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
+<rect x="24" y="24" width="4" height="10" rx="1" fill="#2dd4bf" opacity="0.85"/>
+<line x1="29" y1="0" x2="36" y2="7" stroke="#38bdf8" stroke-width="1.2" opacity="0.7"/>
+</g>
+<g transform="translate(96,70)" filter="url(#glow)">
+<g class="arrow-anim">
+<line x1="0" y1="22" x2="0" y2="6" stroke="url(#arrowGrad)" stroke-width="3" stroke-linecap="round"/>
+<polyline points="-6,10 0,2 6,10" fill="none" stroke="url(#arrowGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<line x1="-7" y1="25" x2="7" y2="25" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+</g>
+<g transform="translate(80,108)" filter="url(#waveGlow)">
+<path class="pulse-wave" d="M-28,0 C-24,-2 -22,-2 -18,0 C-14,2 -12,2 -8,0 C-4,-10 -2,-10 2,-4 C4,-1 5,8 8,8 C11,8 12,1 15,-4 C18,-10 20,-10 24,-4 C26,0 28,0 28,0" fill="none" stroke="url(#waveGrad)" stroke-width="2.2" stroke-linecap="round"/>
+</g>
+<g transform="translate(80,36)" filter="url(#glow)">
+<path class="wifi-1" d="M-10,10 Q0,-2 10,10" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
+<path class="wifi-2" d="M-6,14 Q0,8 6,14" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
+<circle class="wifi-3" cx="0" cy="17" r="2.2" fill="#38bdf8"/>
+</g>
+<text x="154" y="68" font-size="38" font-weight="700" letter-spacing="-0.5" fill="white">CPAP</text>
+<text x="154" y="110" font-size="38" font-weight="700" letter-spacing="-0.5" fill="url(#waveGrad)">AutoSync</text>
+<rect x="154" y="125" width="272" height="2.5" rx="1.25" fill="url(#waveGrad)" opacity="0.7"/>
 </svg>
 </div>
 <p class=sub id=sub>Connecting...</p>
