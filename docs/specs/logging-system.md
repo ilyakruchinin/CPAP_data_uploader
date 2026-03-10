@@ -11,7 +11,7 @@ The Logging System (`Logger.cpp/.h`) provides structured logging capabilities fo
 - **LittleFS storage**: Optional persisted logging (`/syslog.A.txt` / `/syslog.B.txt`, 64 KB each)
 - **Pre-reboot dump**: `/last_reboot_log.txt` on LittleFS — written unconditionally before every `esp_restart()`
 - **SD card emergency dump**: `/uploader_error.txt` on SD card — written on boot-time failures (config error, WiFi failure) where the user has no network access
-- **SSE live stream**: `/api/logs/stream` endpoint pushes new log lines to the browser in real-time via Server-Sent Events
+- **SSE live stream**: `/api/logs/stream` endpoint pushes new log lines to the browser in real-time via Server-Sent Events, with throttled push cadence during active uploads
 
 ### Log Levels
 ```cpp
@@ -226,7 +226,7 @@ When the device cannot establish WiFi (config failure, wrong credentials, hardwa
 - **`/api/logs/full`**: Streams NAND saved logs + previous reboot log + circular buffer (initial backfill)
 - **`/api/logs/stream`**: SSE endpoint for real-time log push (single client)
 - **`/api/logs/saved`**: Downloads persisted LittleFS log files as attachment
-- **Log viewing**: `/logs` SPA tab — fetches backfill on first open, then SSE live stream with polling fallback
+- **Log viewing**: `/logs` SPA tab — fetches backfill on first open, performs immediate RAM-buffer catch-up when revisited, then resumes SSE live stream with polling fallback
 
 ### Configuration
 - **PERSISTENT_LOGS**: Optional persisted file-based logging (aliases: `SAVE_LOGS`, `LOG_TO_SD_CARD`)

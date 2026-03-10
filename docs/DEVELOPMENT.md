@@ -430,7 +430,7 @@ When enabled:
 **Web GUI Log Endpoints:**
 - `GET /api/logs` — circular buffer (polling fallback)
 - `GET /api/logs/full` — NAND saved logs + previous reboot log + circular buffer (initial backfill)
-- `GET /api/logs/stream` — SSE live push (single client, main-loop driven)
+- `GET /api/logs/stream` — SSE live push (single client, main-loop driven, throttled during active uploads)
 - `GET /api/logs/saved` — download persisted LittleFS log files as attachment
 
 ### Memory Usage

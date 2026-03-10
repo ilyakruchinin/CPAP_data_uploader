@@ -559,6 +559,8 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 
 ### Logs Tab
 - **Live streaming** log feed via Server-Sent Events (SSE) with automatic reconnect and fallback polling
+- Leaving the Logs tab closes the live stream; returning performs an immediate RAM-buffer catch-up and then resumes SSE live streaming
+- Live logs remain near-real-time even during active uploads; SSE is throttled during uploads rather than fully paused
 - On first visit, backfills full log history from internal flash (streaming progress indicator with KB counter)
 - Automatic reboot detection: re-fetches NAND history when a new boot is detected
 - **⬇ Download All Logs** — flushes current logs to flash and downloads all saved + current logs as a single `cpap_logs.txt` file (requires `SAVE_LOGS=true`)

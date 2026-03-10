@@ -43,18 +43,23 @@ This release focuses on reducing power consumption, improving WiFi reliability o
 
 ### Improved Log Streaming (SSE)
 
-- **SSE stays connected across tab switches** — previously, switching away from the Logs tab and back would kill the live stream and trigger a full log re-download. Now it stays connected in the background.
+- **Logs tab now catches up immediately after tab switches** — leaving the Logs tab closes the live SSE stream, but returning to it now performs an immediate RAM-buffer catch-up and then re-establishes SSE live streaming without forcing a full history re-download.
 - **Smarter reconnect** — if the live stream drops, the browser retries 3 times before falling back to polling. Previously it immediately triggered a heavy full-log re-download.
 - **Server-side keepalive** — the device sends a heartbeat every 15 seconds on idle connections, preventing browsers and proxies from closing the stream due to inactivity.
-- **SSE no longer suppressed in brownout-recovery mode** — SSE is the lightest log transport available, so it no longer makes sense to disable it when the device is trying to conserve power.
+- **Upload logs remain near-live during active transfers** — SSE is no longer fully suppressed while an upload task is running. Instead, log pushes are throttled during uploads so the Logs tab stays responsive without creating continuous high-rate WiFi traffic.
 
 ### "REBOOTING" Banner Fix
 
 - **No more stuck "REBOOTING" badge** — previously, a single missed status poll could show "REBOOTING" even though the device was fine. Now:
-  - 1–4 missed polls show "Offline — reconnecting..." instead
+  - 1–4 missed polls show `OFFLINE` instead
   - Only 5+ consecutive failures (or an expected reboot) show the REBOOTING overlay
   - The badge always updates on the next successful poll (previously it could get stuck showing stale text)
 - **Mobile tab resume fixed** — switching to another app and back no longer triggers a false "REBOOTING" state
+
+### Web UI Polish
+
+- **Updated header branding** — the embedded animated logo now uses the refreshed CPAP AutoSync artwork in the web interface header.
+- **Offline badge simplified** — the temporary disconnected state now uses a short all-caps `OFFLINE` badge for consistency with the rest of the dashboard state badges.
 
 ### Uploads & Stability
 
