@@ -31,7 +31,8 @@ This release focuses on reducing power consumption, improving WiFi reliability o
 
 - **Brownout-recovery degraded boot** — If the device detects that its previous restart was caused by a hardware brownout (`ESP_RST_BROWNOUT`), it intentionally boots into a degraded "recovery" profile: mDNS is disabled, TX power is locked to `LOWEST`, and WiFi power saving is locked to `MAX`. This maximizes the chance of successfully connecting to WiFi and uploading data on a severely constrained power supply. The profile automatically clears after one successful upload cycle.
 - **CPU frequency boost deferred** — the CPU now stays at 80 MHz throughout WiFi initialisation, then boosts to your configured speed afterward. Previously the CPU and WiFi powered up simultaneously, compounding current spikes.
-- **Timed mDNS (60s limit)** — The local network discovery broadcast (`cpap.local`) now stops after 60 seconds of uptime. This gives you time to load the web interface after boot, but eliminates periodic multicast wake-ups during the long idle/cooldown phases, saving power.
+- **Timed mDNS:** To save power, local network discovery (`cpap.local`) only resolves during the first 60 seconds after boot/reconnect, after which mDNS shuts down. Accessing the UI within this 60-second window automatically redirects your browser to the device's actual IP address so your session isn't interrupted when mDNS stops.
+- **Dynamic Brownout Handling:** A new `BROWNOUT_DETECT=RELAXED` configuration option temporarily disables brownout detection only during the high-current WiFi connection phase. This is specifically to help rare models of the AirSense 11 power supply that sag slightly.
 - **mDNS delayed by 200ms after WiFi connects** — gives the 3.3V power rail a moment to recover from the WiFi association burst before mDNS fires its first multicast announcement.
 
 ### Brownout Detection & WiFi Sleep Control
@@ -85,4 +86,5 @@ The WiFi power saving aliases `MODEM`, `OFF`, `HIGH` for `WIFI_PWR_SAVING` and `
 
 - **OTA upgrade from beta1:** Upload `firmware-ota-upgrade.bin` via the web interface at `http://cpap.local/ota`. No USB/Serial needed.
 - **Config changes:** If your `config.txt` uses any of the removed aliases listed above, update them to the new key names before upgrading. The device will still boot, but the old keys will be silently ignored (with a warning in the log).
-- **WIFI_TX_PWR default changed:** The default is now `MID` (5 dBm). If you had no `WIFI_TX_PWR` line in your config and were relying on the old default, your WiFi range is unchanged or slightly increased (previous constructor default was also 5 dBm under a different name). If you experience connection issues, add `WIFI_TX_PWR = HIGH` or `WIFI_TX_PWR = MAX` to your config.txt.
+  - **WIFI_TX_PWR default changed:** The default is now `MID` (5 dBm). If you had no `WIFI_TX_PWR` line in your config and were relying on the old default, your WiFi range is unchanged or slightly increased (previous constructor default was also 5 dBm under a different name). If you experience connection issues, add `WIFI_TX_PWR = HIGH` or `WIFI_TX_PWR = MAX` to your config.txt.
+  - **LDAP support removed:** LDAP functionality and associated dummy files have been completely removed from the codebase and documentation to streamline the project.

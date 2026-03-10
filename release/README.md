@@ -114,7 +114,7 @@ Want more control? See [Configuration Reference](#configuration-reference) for a
 - Automatically uploads CPAP data files from SD card to your network storage or the Cloud (SleepHQ)
 - Uploads automatically when therapy ends (Smart Mode) or at a scheduled time
 - Respects CPAP machine access to the SD card (short upload sessions)
-- **Local Network Discovery (mDNS):** Access the device via `http://cpap.local` instead of IP address
+- **Local Network Discovery (mDNS):** Access the device via `http://cpap.local` instead of its IP address *(Note: To save power, `cpap.local` only resolves during the first 60 seconds after the device boots. Accessing it within this window automatically redirects your browser to the device's actual IP address, so your session won't drop when the 60 seconds are up).*
 - Tracks which files have been uploaded (no duplicates)
 - Automatically creates directories on remote shares as needed
 - **Supported CPAP Machines:** ResMed Series 9, 10, and 11 (other brands not supported)
@@ -346,9 +346,9 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
   - `MAX` — MAX_MODEM (lowest power but may miss mDNS queries)
 
 **BROWNOUT_DETECT** (optional, default: enabled)
-- Set to `OFF` to disable the hardware brownout detector at runtime
-- **Use only as a last resort** for devices that reset frequently due to power drops
-- When disabled, a persistent warning banner is shown on the web dashboard
+- Set to `RELAXED` to temporarily disable the hardware brownout detector during WiFi connection, re-enabling it afterwards.
+- Set to `OFF` to disable it permanently (use only as a last resort).
+- When disabled or relaxed, a warning banner is shown on the web dashboard.
 
 > **Note:** 802.11b is disabled at the firmware level to reduce peak power draw. Bluetooth is also fully disabled. These are not configurable.
 
@@ -651,9 +651,13 @@ If your device randomly reboots (shows "REBOOTING" constantly) or drops WiFi, it
 3. **Try Experimental 1-Bit SD Mode**
    `ENABLE_1BIT_SD_MODE = true`
    *(Reduces the number of active SD data lines, halving bus toggle current during uploads. Note: only use if your CPAP does not throw "SD Card Error" when using this mode).*
-4. **Disable Brownout Detection (Last Resort)**
-   `BROWNOUT_DETECT = OFF`
-   *(Prevents the ESP32 from intentionally restarting when voltage drops. Device may still crash if voltage drops too low).*
+4. **Relax or Disable Brownout Detection (Last Resort)**
+   `BROWNOUT_DETECT = RELAXED` (first choice)
+   *(Temporarily bypasses strict voltage checks only during the initial WiFi power spike, and re-enables it for safer general running. Try this if your device repeatedly fails to connect or logs show a brown-out reset).*
+   
+   If `RELAXED` still doesn't work, try:
+   `BROWNOUT_DETECT = OFF` (absolute last resort)
+   *(Prevents the ESP32 from intentionally restarting when voltage drops. Device may still crash if voltage drops too low and risks data corruption).*
 
 ---
 
@@ -737,8 +741,17 @@ In scheduled mode the uploader **only runs during the configured window** (e.g. 
 **Upload incomplete**
 - Increase `EXCLUSIVE_ACCESS_MINUTES` if files are large
 - Check available space on network share
-- Verify network stability
-- Check logs for specific errors
+- Verify `MAX_DAYS` is set correctly
+
+### WiFi / Power Connectivity Issues
+
+- If you still experience issues, check the `WIFI_PWR_SAVING` and `WIFI_TX_PWR` options in `config.txt`
+- If your device repeatedly fails to connect or logs show `[ERROR] WARNING: System reset due to brown-out (insufficient power supply)`:
+  1. Remove the SD card, put it in a card reader connected to your computer.
+  2. Open `config.txt` and add `BROWNOUT_DETECT=RELAXED`.
+  3. Put the card back in the CPAP. This allows the ESP to bypass the strict voltage checks during the initial WiFi power spike.
+  4. If it still fails, try `BROWNOUT_DETECT=OFF`. 
+  *Note: Some rare AirSense 11 machines (particularly those made in Singapore) have power supply tolerances that lead to brief voltage sags when the ESP32 turns on its WiFi radio. The RELAXED mode is specifically designed for these machines.*
 
 **Same files uploading repeatedly**
 - Check LittleFS is mounted (look for `LittleFS mounted successfully` in logs)

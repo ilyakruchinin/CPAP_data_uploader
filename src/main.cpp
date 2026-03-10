@@ -464,9 +464,14 @@ void setup() {
 
     // ── POWER: Optionally disable brownout detector ──
     // Must happen BEFORE WiFi init (the highest-current boot phase).
-    if (config.isBrownoutDetectOff()) {
-        LOG_WARN("[POWER] BROWNOUT_DETECT=OFF — disabling brownout detection per config");
-        LOG_WARN("[POWER] WARNING: Device will NOT reset on power drops. Risk of data corruption.");
+    if (config.getBrownoutDetectMode() == BrownoutDetectMode::OFF || 
+        config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+        LOG_WARN(String("[POWER] BROWNOUT_DETECT=") + 
+                (config.getBrownoutDetectMode() == BrownoutDetectMode::OFF ? "OFF" : "RELAXED") + 
+                " — disabling brownout detection per config");
+        if (config.getBrownoutDetectMode() == BrownoutDetectMode::OFF) {
+            LOG_WARN("[POWER] WARNING: Device will NOT reset on power drops. Risk of data corruption.");
+        }
         CLEAR_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
     }
 
@@ -490,6 +495,12 @@ void setup() {
             sdManager.releaseControl();
         }
         
+        // Re-enable brownout detection if it was only relaxed for boot
+        if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+            LOG_INFO("[POWER] WiFi connection phase complete — re-enabling brownout detection");
+            SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+        }
+
         return;
     }
     
@@ -508,6 +519,12 @@ void setup() {
         wifiManager.applyPowerSettings(config.getWifiTxPower(), config.getWifiPowerSaving());
     }
     LOG("WiFi power management settings applied");
+    
+    // Re-enable brownout detection if it was only relaxed for boot
+    if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+        LOG_INFO("[POWER] WiFi connection phase complete — re-enabling brownout detection");
+        SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+    }
     
     // ── POWER: Configure Dynamic Frequency Scaling (DFS) + Auto Light-Sleep ──
     // With CONFIG_PM_ENABLE=y in sdkconfig, the CPU can automatically scale
@@ -1174,18 +1191,25 @@ void loop() {
                 return;
             }
             LOG_DEBUG("WiFi reconnected successfully");
-            
-            // Restart timed mDNS after reconnection (unless brownout-recovery mode)
-            if (!g_brownoutRecoveryBoot) {
-                wifiManager.startMDNS(config.getHostname());
-                g_mdnsStartTime = millis();
-                g_mdnsTimedOut = false;
+          } else {
+            // Unrecoverable WiFi failure
+            LOG_ERROR("WiFi failed to connect after maximum attempts.");
+            if (fastBoot && g_heapRecoveryBoot) {
+                // If this was a fast boot to recover heap and WiFi failed, it might be due to 
+                // deeper state issues. Do a hard reboot.
+                LOG_ERROR("WiFi failed after heap recovery boot. Forcing hard reboot.");
+                ESP.restart();
             }
-            
-            lastNtpSyncAttempt = 0;
-            lastWifiReconnectAttempt = 0;
         }
-        return;  // Skip FSM while WiFi is down
+        
+        // Re-enable brownout detection if it was only relaxed for boot
+        if (config.getBrownoutDetectMode() == BrownoutDetectMode::RELAXED) {
+            LOG_INFO("[POWER] WiFi connection phase complete — re-enabling brownout detection");
+            SET_PERI_REG_MASK(RTC_CNTL_BROWN_OUT_REG, RTC_CNTL_BROWN_OUT_ENA);
+        }
+
+        // Initialize web server regardless of connection success
+        // It will either serve normal UI or AP setup UIFSM while WiFi is down
     }
 
     // ── NTP sync retry ──

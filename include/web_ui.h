@@ -100,7 +100,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <p class=sub id=sub>Connecting...</p>
 <div id=reboot-overlay><h3>&#8635; Device is unreachable or rebooting&hellip;</h3><p>If the device is rebooting, this is normal &mdash; it may reboot periodically by design to maintain stability and will be back online in a few seconds.<br>If it has been powered off or moved out of WiFi range, this page will reconnect automatically once the device is reachable again.</p></div>
 <div id=mon-active-banner><h3>&#128270; SD Access Monitoring is active</h3><p>All automatic uploads are <strong>paused</strong> while monitoring is running.<br>Go to the <strong>SD Access</strong> tab and click <strong>Stop</strong> to resume normal operation.</p></div>
-<div id=brownout-banner style="display:none;background:#3a2a0a;border:1px solid #cc8800;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center"><h3 style="color:#ffaa00;font-size:1em;margin-bottom:6px">&#9888; Brownout Detection Disabled</h3><p style="color:#c0b090;font-size:.84em;line-height:1.5">BROWNOUT_DETECT=OFF is set in config.txt. The device will <strong>not</strong> reset on power drops &mdash; this may cause data corruption.</p></div>
+<div id=brownout-banner style="display:none;background:#3a2a0a;border:1px solid #cc8800;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center"><h3 style="color:#ffaa00;font-size:1em;margin-bottom:6px">&#9888; Brownout Detection Disabled</h3><p style="color:#c0b090;font-size:.84em;line-height:1.5">BROWNOUT_DETECT is set to OFF or RELAXED in config.txt. The device will <strong>not</strong> reset on power drops &mdash; this may cause data corruption.</p></div>
 <nav>
 <button id=t-dash onclick="tab('dash')" class=act>Dashboard</button>
 <button id=t-logs onclick="tab('logs')">Logs</button>
@@ -502,7 +502,7 @@ function renderStatus(d){
   cpuHistory.push({c0:c0,c1:c1});if(cpuHistory.length>MAX_HEAP_SAMPLES)cpuHistory.shift();
   if(curTab==='mem'){updateHeapChart();updateCpuChart();}
   var bb=document.getElementById('brownout-banner');
-  if(bb)bb.style.display=cfg.brownout_detect_off?'block':'none';
+  if(bb)bb.style.display=(cfg.brownout_detect_mode==='OFF'||cfg.brownout_detect_mode==='RELAXED')?'block':'none';
 }
 
 var statusTimer=null;
