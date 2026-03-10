@@ -1,7 +1,7 @@
 # Main Application Controller
 
 ## Overview
-The main application controller (`main.cpp`) orchestrates the entire CPAP data uploader system, managing initialization, the upload state machine, web interface, and system lifecycle events.
+The main application controller (`main.cpp`) orchestrates the entire CPAP AutoSync system, managing initialization, the upload state machine, web interface, and system lifecycle events.
 
 ## Core Responsibilities
 

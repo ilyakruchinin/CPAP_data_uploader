@@ -1,4 +1,4 @@
-# CPAP Data Uploader v0.9.2 Release Notes
+# CPAP AutoSync v0.9.2 Release Notes
 
 ## Overview
 

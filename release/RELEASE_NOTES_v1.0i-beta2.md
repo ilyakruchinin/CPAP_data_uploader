@@ -1,4 +1,4 @@
-# CPAP Data Uploader v1.0i-beta2 Release Notes
+# CPAP AutoSync v1.0i-beta2 Release Notes
 
 ## Power, Stability & Quality-of-Life Improvements
 

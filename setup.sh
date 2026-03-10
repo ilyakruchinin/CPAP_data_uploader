@@ -1,9 +1,9 @@
 #!/bin/bash
-# Setup script for CPAP Data Uploader development environment
+# Setup script for CPAP AutoSync development environment
 
 set -e  # Exit on error
 
-echo "Setting up CPAP Data Uploader development environment..."
+echo "Setting up CPAP AutoSync development environment..."
 
 # Check if Python 3 is available
 if ! command -v python3 &> /dev/null; then

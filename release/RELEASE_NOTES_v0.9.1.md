@@ -1,4 +1,4 @@
-# CPAP Data Uploader v0.9.1 Release Notes
+# CPAP AutoSync v0.9.1 Release Notes
 
 ## Overview
 Stability release that eliminates the persistent endless reboot loop affecting mixed SMB+Cloud configurations, and improves the web UI log viewer.

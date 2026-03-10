@@ -3,7 +3,7 @@
 
 set -e  # Exit on error
 
-echo "Cleaning CPAP Data Uploader project..."
+echo "Cleaning CPAP AutoSync project..."
 
 # Remove build artifacts
 if [ -d ".pio/build" ]; then

@@ -1,6 +1,6 @@
 # Build Troubleshooting Guide
 
-This guide helps resolve common build issues with the ESP32 CPAP Data Uploader project.
+This guide helps resolve common build issues with the ESP32 CPAP AutoSync project.
 
 ## Quick Fixes
 

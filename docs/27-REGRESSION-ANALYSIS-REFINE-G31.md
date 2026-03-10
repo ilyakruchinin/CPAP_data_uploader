@@ -32,7 +32,7 @@ The requirement to align the defaults is noted. Both the initial system construc
 
 **Rationale:**
 1. **Current Spikes & Stability:** At 19.5 dBm, the ESP32 radio can draw transient currents exceeding 350–400 mA. This is the primary catalyst for voltage sags and brownout resets, especially on a device heavily reliant on SD card operations.
-2. **Use-Case Suitability:** A CPAP data uploader is an indoor device typically residing in a bedroom, relatively close to a home router. Maximum RF output is unnecessary and introduces massive stability risks for negligible gain.
+2. **Use-Case Suitability:** A CPAP AutoSync is an indoor device typically residing in a bedroom, relatively close to a home router. Maximum RF output is unnecessary and introduces massive stability risks for negligible gain.
 3. **Current Reality:** Since the codebase already caps the PHY level to 11 dBm at compile time (`CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=11`), the 19.5 dBm mode is already non-functional. Dropping it formally aligns the configuration options with reality and enforces a safer hardware power envelope.
 
 ### 1.3 The WiFi Initialisation Power Spike

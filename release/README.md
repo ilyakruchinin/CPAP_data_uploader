@@ -1,4 +1,4 @@
-# ESP32 CPAP Data Uploader - User Guide
+# ESP32 CPAP AutoSync - User Guide
 
 This package contains precompiled firmware for automatically uploading CPAP data from your SD card to a network share or the Cloud (**SleepHQ**).
 
@@ -171,7 +171,7 @@ Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
 
 #### When upgrading OTA firmware via web interface
 
-1. Go to the CPAP Data uploader web interface: `http://<device-ip>/ota`
+1. Go to the CPAP AutoSync web interface: `http://<device-ip>/ota`
 2. Use **Method 1** to upload `firmware-ota-upgrade.bin` from your computer
 3. Or use **Method 2** to download firmware directly from GitHub
 4. Device will restart automatically after update

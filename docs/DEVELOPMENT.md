@@ -1,6 +1,6 @@
 # Development Guide
 
-This document is for developers who want to build, modify, or contribute to the ESP32 CPAP Data Uploader project.
+This document is for developers who want to build, modify, or contribute to the ESP32 CPAP AutoSync project.
 
 ## Table of Contents
 - [Architecture](#architecture)

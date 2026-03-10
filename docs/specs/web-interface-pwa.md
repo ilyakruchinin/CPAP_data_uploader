@@ -95,7 +95,7 @@ const char* getMainPageHtml() {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>CPAP Data Uploader</title>
+    <title>CPAP AutoSync</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script>
         // Auto-refresh every 3 seconds
