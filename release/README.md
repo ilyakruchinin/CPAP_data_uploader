@@ -348,7 +348,7 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 **BROWNOUT_DETECT** (optional, default: enabled)
 - Set to `RELAXED` to temporarily disable the hardware brownout detector during WiFi connection, re-enabling it afterwards.
 - Set to `OFF` to disable it permanently (use only as a last resort).
-- When disabled or relaxed, a warning banner is shown on the web dashboard.
+- When disabled (set to `OFF`), a warning banner is shown on the web dashboard.
 
 > **Note:** 802.11b is disabled at the firmware level to reduce peak power draw. Bluetooth is also fully disabled. These are not configurable.
 
