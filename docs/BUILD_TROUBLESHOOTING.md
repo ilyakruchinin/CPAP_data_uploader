@@ -11,7 +11,7 @@ If you encounter strange build errors, try a clean build:
 # Use the cleanup script (recommended)
 ./clean.sh
 ./setup.sh
-./build_upload.sh build pico32
+./build_upload.sh build
 
 # Or manual cleanup
 pio run --target clean
@@ -30,7 +30,7 @@ pio lib update
 # Complete reset
 ./clean.sh
 ./setup.sh
-./build_upload.sh build pico32-ota
+./build_upload.sh build
 ```
 
 ## Common Build Errors
@@ -61,11 +61,11 @@ grep "lib_extra_dirs" platformio.ini
 2. Check that `library_build.py` is present
 3. Run setup script: `./scripts/setup_libsmb2.sh`
 4. Clean and rebuild:
-   ```bash
-   ./clean.sh
-   ./setup.sh
-   ./build_upload.sh build pico32
-   ```
+  ```bash
+  ./clean.sh
+  ./setup.sh
+  ./build_upload.sh build
+  ```
 
 #### Error: "file format not recognized" when linking
 
@@ -74,7 +74,7 @@ grep "lib_extra_dirs" platformio.ini
 **Solution:** This should not happen with the current setup. If it does:
 1. Clean everything: `./clean.sh`
 2. Fresh setup: `./setup.sh`
-3. Rebuild: `./build_upload.sh build pico32`
+3. Rebuild: `./build_upload.sh build`
 
 ### 2. Compilation Errors
 
@@ -83,7 +83,7 @@ grep "lib_extra_dirs" platformio.ini
 **Example:**
 ```
 error: 'FileUploader::wifiManager' will be initialized after
-error:   'UploadStateManager* FileUploader::stateManager'
+error:  'UploadStateManager* FileUploader::stateManager'
 ```
 
 **Cause:** Constructor initialization list order doesn't match member declaration order in header.
@@ -94,18 +94,18 @@ error:   'UploadStateManager* FileUploader::stateManager'
 ```cpp
 class FileUploader {
 private:
-    Config* config;
-    UploadStateManager* stateManager;
-    WiFiManager* wifiManager;  // Declared after stateManager
+  Config* config;
+  UploadStateManager* stateManager;
+  WiFiManager* wifiManager; // Declared after stateManager
 };
 ```
 
 **Correct initialization in constructor:**
 ```cpp
-FileUploader::FileUploader(Config* cfg, WiFiManager* wifi) 
-    : config(cfg),
-      stateManager(nullptr),   // Initialize in declaration order
-      wifiManager(wifi)        // Not before stateManager
+FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
+  : config(cfg),
+   stateManager(nullptr),  // Initialize in declaration order
+   wifiManager(wifi)    // Not before stateManager
 {}
 ```
 
@@ -126,10 +126,10 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
 
 **Solution:**
 1. Reduce debug level in `platformio.ini`:
-   ```ini
-   build_flags = 
-       -DCORE_DEBUG_LEVEL=1  ; Change from 3 to 1
-   ```
+  ```ini
+  build_flags =
+    -DCORE_DEBUG_LEVEL=1 ; Change from 3 to 1
+  ```
 2. Disable unused features (comment out feature flags)
 3. Use `IRAM_ATTR` sparingly
 
@@ -149,13 +149,13 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
 **Solution:**
 1. Check your board's actual flash size (SD WIFI PRO has 4MB)
 2. Use appropriate partition scheme in `platformio.ini`:
-   ```ini
-   # For standard build (3MB app space)
-   board_build.partitions = huge_app.csv
-   
-   # For OTA build (1.5MB app space per partition)
-   board_build.partitions = partitions_ota.csv
-   ```
+  ```ini
+  # For standard build (3MB app space)
+  board_build.partitions = huge_app.csv
+ 
+  # For OTA build (1.5MB app space per partition)
+  board_build.partitions = partitions_ota.csv
+  ```
 
 ### 4. Upload Issues
 
@@ -165,17 +165,17 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
 1. Hold BOOT button while uploading
 2. Check USB cable (use data cable, not charge-only)
 3. Verify correct port:
-   ```bash
-   pio device list
-   ```
+  ```bash
+  pio device list
+  ```
 4. Try different upload speed:
-   ```ini
-   upload_speed = 115200  ; Slower but more reliable
-   ```
+  ```ini
+  upload_speed = 115200 ; Slower but more reliable
+  ```
 5. Use the build script with specific port:
-   ```bash
-   ./build_upload.sh upload pico32 /dev/ttyUSB0
-   ```
+  ```bash
+  ./build_upload.sh upload /dev/ttyUSB0
+  ```
 
 #### Error: "Permission denied" on upload
 
@@ -184,7 +184,7 @@ FileUploader::FileUploader(Config* cfg, WiFiManager* wifi)
 **Solution:**
 ```bash
 # Use the build script (handles sudo automatically)
-./build_upload.sh upload pico32
+./build_upload.sh upload
 
 # Or manual upload with sudo
 sudo pio run -e pico32 -t upload
@@ -223,19 +223,18 @@ sudo pio run -e pico32 -t upload
 
 **Solutions:**
 1. **For OTA build (`pico32-ota`)** - 1.5MB limit:
-   ```bash
-   # Disable verbose logging to save space
-   # In platformio.ini, comment out:
-   # -DENABLE_VERBOSE_LOGGING
-   
-   # Reduce log buffer size
-   -DLOG_BUFFER_SIZE=16384  ; Reduce from 32KB to 16KB
-   ```
+  ```bash
+  # Disable verbose logging to save space
+  # In platformio.ini, comment out:
+  # -DENABLE_VERBOSE_LOGGING
+ 
+  # Reduce log buffer size
+  -DLOG_BUFFER_SIZE=16384 ; Reduce from 32KB to 16KB
+  ```
 
 2. **Switch to standard build** if OTA not needed:
-   ```bash
-   ./build_upload.sh build pico32  # 3MB limit instead of 1.5MB
-   ```
+  ```bash
+  ```
 
 #### Choosing Between Firmware Types
 
@@ -294,53 +293,50 @@ Should show the xtensa toolchain being used.
 If you're still stuck:
 
 1. **Check the documentation:**
-   - [LIBSMB2_INTEGRATION.md](LIBSMB2_INTEGRATION.md) - libsmb2 setup
-   - [FEATURE_FLAGS.md](FEATURE_FLAGS.md) - Feature configuration
+  - [LIBSMB2_INTEGRATION.md](LIBSMB2_INTEGRATION.md) - libsmb2 setup
+  - [FEATURE_FLAGS.md](FEATURE_FLAGS.md) - Feature configuration
 
 2. **Enable verbose build output:**
-   ```bash
-   source venv/bin/activate
-   pio run -e pico32 -v
-   ```
+  ```bash
+  source venv/bin/activate
+  pio run -e pico32 -v
+  ```
 
 3. **Try different firmware type:**
-   ```bash
-   # If pico32-ota fails, try standard build
-   ./build_upload.sh build pico32
-   
-   # If pico32 fails, try OTA build
-   ./build_upload.sh build pico32-ota
-   ```
+  ```bash
+  # If pico32-ota fails, try standard build
+  ./build_upload.sh build
+ 
+  # If pico32 fails, try OTA build
+  ./build_upload.sh build
+  ```
 
 4. **Provide build information when asking for help:**
-   ```bash
-   source venv/bin/activate
-   pio run -e pico32 -v > build_log.txt 2>&1
-   ```
+  ```bash
+  source venv/bin/activate
+  pio run -e pico32 -v > build_log.txt 2>&1
+  ```
 
 5. **Check for similar issues:**
-   - PlatformIO: https://community.platformio.org/
-   - ESP32 Arduino: https://github.com/espressif/arduino-esp32/issues
-   - libsmb2: https://github.com/sahlberg/libsmb2/issues
+  - PlatformIO: https://community.platformio.org/
+  - ESP32 Arduino: https://github.com/espressif/arduino-esp32/issues
+  - libsmb2: https://github.com/sahlberg/libsmb2/issues
 
 ## Useful Commands
 
 ```bash
 # Clean and setup
-./clean.sh                     # Clean all build artifacts and components
-./setup.sh                     # Fresh environment setup (includes libsmb2)
+./clean.sh           # Clean all build artifacts and components
+./setup.sh           # Fresh environment setup (includes libsmb2)
 
 # Build commands
-./build_upload.sh build pico32     # Build standard firmware
-./build_upload.sh build pico32-ota # Build OTA firmware
-./build_upload.sh upload pico32    # Upload standard firmware
-./build_upload.sh upload pico32-ota # Upload OTA firmware
+./build_upload.sh build   # Build
+./build_upload.sh upload  # Upload
 
 # PlatformIO commands (after source venv/bin/activate)
-pio run -e pico32 --target clean   # Clean standard build
+pio run -e pico32 --target clean  # Clean standard build
 pio run -e pico32-ota --target clean # Clean OTA build
-pio run -e pico32               # Build standard firmware
-pio run -e pico32-ota           # Build OTA firmware
+pio run -e pico32        # Build
 
 # Build with verbose output
 pio run -e pico32 -v

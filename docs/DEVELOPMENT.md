@@ -67,44 +67,44 @@ Power settings are applied automatically during startup and maintain full web se
 ## Project Structure
 
 ```
-├── src/                      # Main application code
-│   ├── main.cpp             # Application entry point
-│   ├── Config.cpp           # Configuration management
-│   ├── SDCardManager.cpp    # SD card control
-│   ├── WiFiManager.cpp      # WiFi connection handling
-│   ├── FileUploader.cpp     # File upload orchestration
-│   ├── UploadStateManager.cpp # Upload state tracking
-│   ├── ScheduleManager.cpp    # Upload scheduling
-│   ├── SMBUploader.cpp        # SMB upload implementation
-│   ├── WebServer.cpp      # Web server (optional)
-│   ├── Logger.cpp             # Circular buffer logging
-│   ├── WebDAVUploader.cpp     # WebDAV upload (placeholder)
-│   └── SleepHQUploader.cpp    # SleepHQ cloud upload (OAuth, multipart, TLS)
-├── include/                  # Header files
-│   ├── pins_config.h        # Pin definitions for SD WIFI PRO
-│   └── *.h                  # Component headers
-├── test/                     # Unit tests
-│   ├── test_config/
-│   ├── test_credential_migration/
-│   ├── test_logger_circular_buffer/
-│   ├── test_native/
-│   ├── test_schedule_manager/
-│   ├── test_upload_state_manager/
-│   └── mocks/               # Mock implementations
-├── components/               # ESP-IDF components (not in git)
-│   └── libsmb2/             # SMB2/3 client library (cloned by setup script)
-├── scripts/                  # Build and release scripts
-│   ├── setup_libsmb2.sh     # Setup SMB library
-│   └── prepare_release.sh   # Create release packages
-├── release/                  # Release package files
-│   ├── upload.sh            # macOS/Linux upload script
-│   ├── upload.bat           # Windows upload script
-│   └── README.md            # End-user documentation
-├── docs/                     # Developer documentation
-├── setup.sh                 # Quick project setup
-├── build_upload.sh          # Quick build and upload
-├── monitor.sh               # Quick serial monitor
-└── platformio.ini           # PlatformIO configuration
+├── src/           # Main application code
+│  ├── main.cpp       # Application entry point
+│  ├── Config.cpp      # Configuration management
+│  ├── SDCardManager.cpp  # SD card control
+│  ├── WiFiManager.cpp   # WiFi connection handling
+│  ├── FileUploader.cpp   # File upload orchestration
+│  ├── UploadStateManager.cpp # Upload state tracking
+│  ├── ScheduleManager.cpp  # Upload scheduling
+│  ├── SMBUploader.cpp    # SMB upload implementation
+│  ├── WebServer.cpp   # Web server (optional)
+│  ├── Logger.cpp       # Circular buffer logging
+│  ├── WebDAVUploader.cpp   # WebDAV upload (placeholder)
+│  └── SleepHQUploader.cpp  # SleepHQ cloud upload (OAuth, multipart, TLS)
+├── include/         # Header files
+│  ├── pins_config.h    # Pin definitions for SD WIFI PRO
+│  └── *.h         # Component headers
+├── test/           # Unit tests
+│  ├── test_config/
+│  ├── test_credential_migration/
+│  ├── test_logger_circular_buffer/
+│  ├── test_native/
+│  ├── test_schedule_manager/
+│  ├── test_upload_state_manager/
+│  └── mocks/        # Mock implementations
+├── components/        # ESP-IDF components (not in git)
+│  └── libsmb2/       # SMB2/3 client library (cloned by setup script)
+├── scripts/         # Build and release scripts
+│  ├── setup_libsmb2.sh   # Setup SMB library
+│  └── prepare_release.sh  # Create release packages
+├── release/         # Release package files
+│  ├── upload.sh      # macOS/Linux upload script
+│  ├── upload.bat      # Windows upload script
+│  └── README.md      # End-user documentation
+├── docs/           # Developer documentation
+├── setup.sh         # Quick project setup
+├── build_upload.sh     # Quick build and upload
+├── monitor.sh        # Quick serial monitor
+└── platformio.ini      # PlatformIO configuration
 ```
 
 ---
@@ -180,9 +180,9 @@ The project works with:
 The system supports configurable power management through `config.txt`:
 
 ```ini
-CPU_SPEED_MHZ = 80         # CPU frequency: 80-240MHz (default: 80, locks CPU — no DFS)
-WIFI_TX_PWR = mid          # WiFi TX power: "lowest"/"low"/"mid"/"high"/"max" (default: "mid" = 5 dBm)
-WIFI_PWR_SAVING = mid      # WiFi power save: "none"/"mid"/"max" (default: "mid")
+CPU_SPEED_MHZ = 80     # CPU frequency: 80-240MHz (default: 80, locks CPU — no DFS)
+WIFI_TX_PWR = mid     # WiFi TX power: "lowest"/"low"/"mid"/"high"/"max" (default: "mid" = 5 dBm)
+WIFI_PWR_SAVING = mid   # WiFi power save: "none"/"mid"/"max" (default: "mid")
 ```
 
 **Implementation Details:**
@@ -214,12 +214,12 @@ The system supports direct upload to SleepHQ cloud service via REST API. This ca
 
 ```json
 {
-  "WIFI_SSID": "MyNetwork",
-  "WIFI_PASS": "wifi_password",
-  "ENDPOINT_TYPE": "CLOUD",
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "GMT_OFFSET_HOURS": -8
+ "WIFI_SSID": "MyNetwork",
+ "WIFI_PASS": "wifi_password",
+ "ENDPOINT_TYPE": "CLOUD",
+ "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+ "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+ "GMT_OFFSET_HOURS": -8
 }
 ```
 
@@ -229,15 +229,15 @@ Upload to both a local NAS and SleepHQ simultaneously:
 
 ```json
 {
-  "WIFI_SSID": "MyNetwork",
-  "WIFI_PASS": "wifi_password",
-  "ENDPOINT": "//192.168.1.100/share/cpap",
-  "ENDPOINT_TYPE": "SMB,CLOUD",
-  "ENDPOINT_USER": "smbuser",
-  "ENDPOINT_PASS": "smbpass",
-  "CLOUD_CLIENT_ID": "your-sleephq-client-id",
-  "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
-  "GMT_OFFSET_HOURS": -8
+ "WIFI_SSID": "MyNetwork",
+ "WIFI_PASS": "wifi_password",
+ "ENDPOINT": "//192.168.1.100/share/cpap",
+ "ENDPOINT_TYPE": "SMB,CLOUD",
+ "ENDPOINT_USER": "smbuser",
+ "ENDPOINT_PASS": "smbpass",
+ "CLOUD_CLIENT_ID": "your-sleephq-client-id",
+ "CLOUD_CLIENT_SECRET": "your-sleephq-client-secret",
+ "GMT_OFFSET_HOURS": -8
 }
 ```
 
@@ -259,16 +259,16 @@ The cloud upload follows the SleepHQ import lifecycle:
 
 ```
 Session Start
-  ├─ OAuth authenticate (client_id + client_secret)
-  ├─ Discover team_id (if not configured)
-  ├─ Create import session
-  │
-  ├─ For each file:
-  │   ├─ Compute content_hash = MD5(file_content + filename)
-  │   ├─ Multipart POST: name, path, content_hash, file
-  │   └─ Track bytes transferred
-  │
-  └─ Process import (triggers SleepHQ server-side processing)
+ ├─ OAuth authenticate (client_id + client_secret)
+ ├─ Discover team_id (if not configured)
+ ├─ Create import session
+ │
+ ├─ For each file:
+ │  ├─ Compute content_hash = MD5(file_content + filename)
+ │  ├─ Multipart POST: name, path, content_hash, file
+ │  └─ Track bytes transferred
+ │
+ └─ Process import (triggers SleepHQ server-side processing)
 ```
 
 #### TLS Security
@@ -293,7 +293,7 @@ To limit uploads to recent data only (useful for initial setup with large histor
 
 ```json
 {
-  "MAX_DAYS": 30
+ "MAX_DAYS": 30
 }
 ```
 
@@ -323,22 +323,22 @@ Cloud upload adds approximately:
 The `build_upload.sh` script supports both firmware types and separate build/upload steps:
 
 ```bash
-# Build and upload standard firmware (default)
-./build_upload.sh both pico32
+# Build and upload (default)
+./build_upload.sh both
 
 # Build and upload OTA firmware
-./build_upload.sh both pico32-ota
+./build_upload.sh both
 
 # Build only (no sudo required)
-./build_upload.sh build pico32
-./build_upload.sh build pico32-ota
+./build_upload.sh build
+./build_upload.sh build
 
 # Upload only (requires sudo, must build first)
-./build_upload.sh upload pico32
-./build_upload.sh upload pico32-ota
+./build_upload.sh upload
+./build_upload.sh upload
 
 # Upload to specific port
-./build_upload.sh upload pico32 /dev/ttyUSB0
+./build_upload.sh upload /dev/ttyUSB0
 
 # Show help
 ./build_upload.sh --help
@@ -374,21 +374,18 @@ pio run -e pico32-ota
 
 ```bash
 source venv/bin/activate
-pio run -e pico32              # Build standard firmware
-pio run -e pico32-ota          # Build OTA firmware
-sudo pio run -e pico32 -t upload    # Upload (requires sudo)
+pio run -e pico32       # Build
+sudo pio run -e pico32 -t upload  # Upload (requires sudo)
 ```
 
 ### Build Targets
 
 ```bash
-pio run -e pico32              # Build standard firmware
-pio run -e pico32-ota          # Build OTA firmware
-pio run -e pico32 -t upload    # Upload standard firmware
-pio run -e pico32-ota -t upload # Upload OTA firmware
-pio run -e pico32 -t clean     # Clean build
-pio run -e pico32 -t size      # Show memory usage
-pio run -e pico32 -t erase     # Erase flash
+pio run -e pico32       # Build
+pio run -e pico32 -t upload  # Upload
+pio run -e pico32 -t clean   # Clean build
+pio run -e pico32 -t size   # Show memory usage
+pio run -e pico32 -t erase   # Erase flash
 ```
 
 ### Build Configuration
@@ -397,11 +394,11 @@ Edit `platformio.ini` to configure:
 
 **Feature Flags:**
 ```ini
-build_flags = 
-    -DENABLE_SMB_UPLOAD          ; Enable SMB/CIFS upload
-    ; -DENABLE_WEBDAV_UPLOAD     ; Enable WebDAV (TODO)
-    ; -DENABLE_SLEEPHQ_UPLOAD    ; Enable Cloud/SleepHQ upload (HTTPS + OAuth)
-    -DENABLE_WEBSERVER      ; Enable web server
+build_flags =
+  -DENABLE_SMB_UPLOAD     ; Enable SMB/CIFS upload
+  ; -DENABLE_WEBDAV_UPLOAD   ; Enable WebDAV (TODO)
+  ; -DENABLE_SLEEPHQ_UPLOAD  ; Enable Cloud/SleepHQ upload (HTTPS + OAuth)
+  -DENABLE_WEBSERVER   ; Enable web server
 ```
 
 Multiple upload backends can be enabled simultaneously. Use `ENDPOINT_TYPE` in `config.txt` to select active backends at runtime (e.g., `"SMB"`, `"CLOUD"`, or `"SMB,CLOUD"`).
@@ -409,9 +406,9 @@ Multiple upload backends can be enabled simultaneously. Use `ENDPOINT_TYPE` in `
 **Logging:**
 ```ini
 build_flags =
-    -DLOG_BUFFER_SIZE=16384      ; 16KB log buffer (default: 8KB, static BSS)
-    -DCORE_DEBUG_LEVEL=3         ; ESP32 core debug level (0-5)
-    -DENABLE_VERBOSE_LOGGING     ; Enable debug logs (compiled out by default)
+  -DLOG_BUFFER_SIZE=16384   ; 16KB log buffer (default: 8KB, static BSS)
+  -DCORE_DEBUG_LEVEL=3     ; ESP32 core debug level (0-5)
+  -DENABLE_VERBOSE_LOGGING   ; Enable debug logs (compiled out by default)
 ```
 
 **Debug Logging:** By default, `LOG_DEBUG()` and `LOG_DEBUGF()` macros are compiled out (zero overhead). Enable with `-DENABLE_VERBOSE_LOGGING` to see detailed diagnostics including progress updates, state details, and troubleshooting information. Saves ~10-15KB flash and ~35-75ms per upload session when disabled.
@@ -471,7 +468,7 @@ pio test -e native -f test_upload_state_manager
 
 ### Test Coverage
 
-- `test_config`: 33 tests - Configuration parsing and validation  
+- `test_config`: 33 tests - Configuration parsing and validation
 - `test_credential_migration`: 6 tests - Secure credential storage
 - `test_logger_circular_buffer`: Logger circular buffer tests
 - `test_native`: 9 tests - Mock infrastructure
@@ -527,42 +524,42 @@ git push origin v0.3.0
 ### Test Procedure
 
 1. **Flash Firmware**
-   ```bash
-   ./build_upload.sh
-   ```
+  ```bash
+  ./build_upload.sh
+  ```
 
 2. **Monitor Serial Output**
-   ```bash
-   ./monitor.sh
-   ```
+  ```bash
+  ./monitor.sh
+  ```
 
 3. **Verify Startup**
-   - [ ] Config loaded successfully
-   - [ ] WiFi connected
-   - [ ] NTP time synchronized
-   - [ ] SMB connection established (if SMB enabled)
-   - [ ] Cloud OAuth authentication successful (if Cloud enabled)
-   - [ ] Team ID discovered or loaded from config (if Cloud enabled)
+  - [ ] Config loaded successfully
+  - [ ] WiFi connected
+  - [ ] NTP time synchronized
+  - [ ] SMB connection established (if SMB enabled)
+  - [ ] Cloud OAuth authentication successful (if Cloud enabled)
+  - [ ] Team ID discovered or loaded from config (if Cloud enabled)
 
 4. **Test Upload**
-   - [ ] Files uploaded to SMB share (if SMB enabled)
-   - [ ] Files uploaded to SleepHQ (if Cloud enabled)
-   - [ ] `.upload_state.v2.smb`/`.cloud` and `.upload_state.v2.smb.log`/`.cloud.log` created on internal LittleFS (depending on enabled backends)
-   - [ ] No errors in serial output
+  - [ ] Files uploaded to SMB share (if SMB enabled)
+  - [ ] Files uploaded to SleepHQ (if Cloud enabled)
+  - [ ] `.upload_state.v2.smb`/`.cloud` and `.upload_state.v2.smb.log`/`.cloud.log` created on internal LittleFS (depending on enabled backends)
+  - [ ] No errors in serial output
 
 5. **Test Web Interface** (if enabled)
-   - [ ] Access `http://<device-ip>/`, you can get the device IP from the serial port after a reset.
-   - [ ] Trigger manual upload
-   - [ ] View logs
-   - [ ] Check status — verify `cloud_configured` field
-   - [ ] Check config — verify cloud fields (secret should show `***STORED_IN_FLASH***`)
+  - [ ] Access `http://<device-ip>/`, you can get the device IP from the serial port after a reset.
+  - [ ] Trigger manual upload
+  - [ ] View logs
+  - [ ] Check status — verify `cloud_configured` field
+  - [ ] Check config — verify cloud fields (secret should show `***STORED_IN_FLASH***`)
 
 6. **Test Cloud Upload** (if Cloud enabled)
-   - [ ] Verify import created in serial log (`[SleepHQ] Import created: <id>`)
-   - [ ] Verify files uploaded with content hash
-   - [ ] Verify import processed (`[SleepHQ] Import <id> submitted for processing`)
-   - [ ] Check SleepHQ web interface for imported data
-   - [ ] Verify `CLOUD_CLIENT_SECRET` censored in `config.txt` after first boot
+  - [ ] Verify import created in serial log (`[SleepHQ] Import created: <id>`)
+  - [ ] Verify files uploaded with content hash
+  - [ ] Verify import processed (`[SleepHQ] Import <id> submitted for processing`)
+  - [ ] Check SleepHQ web interface for imported data
+  - [ ] Verify `CLOUD_CLIENT_SECRET` censored in `config.txt` after first boot
 
 ### Common Issues
 
@@ -611,31 +608,27 @@ To add a new backend (e.g., FTP):
 
 ```bash
 # Development
-./setup.sh                     # Initial setup
-./clean.sh                     # Clean all build artifacts
-./build_upload.sh build pico32 # Build standard firmware (no sudo)
-./build_upload.sh build pico32-ota # Build OTA firmware (no sudo)
-./build_upload.sh upload pico32    # Upload standard firmware (requires sudo)
-./build_upload.sh upload pico32-ota # Upload OTA firmware (requires sudo)
-./build_upload.sh both pico32      # Build and upload standard
-./build_upload.sh both pico32-ota  # Build and upload OTA
-./monitor.sh                   # Serial monitor
+./setup.sh           # Initial setup
+./clean.sh           # Clean all build artifacts
+./build_upload.sh build # Build (no sudo)
+./build_upload.sh upload  # Upload (requires sudo)
+./build_upload.sh both   # Build and upload
+./monitor.sh          # Serial monitor
 
 # PlatformIO
-pio run -e pico32              # Build standard firmware
-pio run -e pico32-ota          # Build OTA firmware
-sudo pio run -e pico32 -t upload    # Upload standard (requires sudo)
+pio run -e pico32       # Build
+sudo pio run -e pico32 -t upload  # Upload standard (requires sudo)
 sudo pio run -e pico32-ota -t upload # Upload OTA (requires sudo)
-pio run -t clean               # Clean
-pio test -e native             # Run tests
-pio device list                # List serial ports
-pio device monitor             # Serial monitor
+pio run -t clean        # Clean
+pio test -e native       # Run tests
+pio device list        # List serial ports
+pio device monitor       # Serial monitor
 
 # Release
-./scripts/prepare_release.sh   # Create release package
+./scripts/prepare_release.sh  # Create release package
 
 # Cleanup
-./clean.sh                     # Clean build artifacts and venv
+./clean.sh           # Clean build artifacts and venv
 ```
 
 ---
@@ -665,27 +658,27 @@ The system uses the ESP32 Preferences library (a high-level wrapper around NVS) 
 ```cpp
 // Initialize Preferences
 bool Config::initPreferences() {
-    if (!preferences.begin(PREFS_NAMESPACE, false)) {
-        LOG("ERROR: Failed to initialize Preferences");
-        return false;
-    }
-    return true;
+  if (!preferences.begin(PREFS_NAMESPACE, false)) {
+    LOG("ERROR: Failed to initialize Preferences");
+    return false;
+  }
+  return true;
 }
 
 // Store credential
 bool Config::storeCredential(const char* key, const String& value) {
-    size_t written = preferences.putString(key, value);
-    return written > 0;
+  size_t written = preferences.putString(key, value);
+  return written > 0;
 }
 
 // Load credential
 String Config::loadCredential(const char* key, const String& defaultValue) {
-    return preferences.getString(key, defaultValue);
+  return preferences.getString(key, defaultValue);
 }
 
 // Close Preferences
 void Config::closePreferences() {
-    preferences.end();
+  preferences.end();
 }
 ```
 
@@ -695,21 +688,21 @@ When secure mode is enabled (default), the system automatically migrates credent
 
 1. **Detection:** System checks if credentials in `config.txt` are censored
 2. **Migration:** If plain text detected, credentials are:
-   - Stored in NVS using Preferences library
-   - Verified by reading back from NVS
-   - Censored in `config.txt` (replaced with `***STORED_IN_FLASH***`)
+  - Stored in NVS using Preferences library
+  - Verified by reading back from NVS
+  - Censored in `config.txt` (replaced with `***STORED_IN_FLASH***`)
 3. **Subsequent Boots:** Credentials loaded directly from NVS
 
 **Migration Flow:**
 
 ```
 Boot → Load config.txt
-  ├─ STORE_CREDENTIALS_PLAIN_TEXT = true?
-  │    └─ YES → Use plain text (no migration)
-  │
-  └─ NO/ABSENT → Check if censored
-       ├─ YES → Load from NVS
-       └─ NO → Migrate to NVS + Censor config.txt
+ ├─ STORE_CREDENTIALS_PLAIN_TEXT = true?
+ │  └─ YES → Use plain text (no migration)
+ │
+ └─ NO/ABSENT → Check if censored
+    ├─ YES → Load from NVS
+    └─ NO → Migrate to NVS + Censor config.txt
 ```
 
 ### Error Handling
@@ -735,17 +728,17 @@ The WebServer component respects credential storage mode:
 
 ```cpp
 void CpapWebServer::handleApiConfig() {
+  // ...
+  if (config) {
+    // Check if credentials are stored in secure mode
+    bool credentialsSecured = config->areCredentialsInFlash();
+   
+    json += "\"wifi_ssid\":\"" + escapeJson(config->getWifiSSID()) + "\",";
+    json += "\"wifi_password\":\"***HIDDEN***\",";
     // ...
-    if (config) {
-        // Check if credentials are stored in secure mode
-        bool credentialsSecured = config->areCredentialsInFlash();
-        
-        json += "\"wifi_ssid\":\"" + escapeJson(config->getWifiSSID()) + "\",";
-        json += "\"wifi_password\":\"***HIDDEN***\",";
-        // ...
-        json += "\"credentials_secured\":" + String(credentialsSecured ? "true" : "false");
-    }
-    // ...
+    json += "\"credentials_secured\":" + String(credentialsSecured ? "true" : "false");
+  }
+  // ...
 }
 ```
 
@@ -795,32 +788,32 @@ pio test -e native -f test_config
 **Hardware Tests:**
 
 1. **Test Secure Mode (Default):**
-   ```bash
-   # 1. Create config.txt with plain text credentials
-   # 2. Set STORE_CREDENTIALS_PLAIN_TEXT = false or omit
-   # 3. Flash and boot device
-   # 4. Check serial output for migration messages
-   # 5. Verify config.txt shows ***STORED_IN_FLASH***
-   # 6. Verify WiFi connects and uploads work
-   # 7. Check web interface shows censored values
-   ```
+  ```bash
+  # 1. Create config.txt with plain text credentials
+  # 2. Set STORE_CREDENTIALS_PLAIN_TEXT = false or omit
+  # 3. Flash and boot device
+  # 4. Check serial output for migration messages
+  # 5. Verify config.txt shows ***STORED_IN_FLASH***
+  # 6. Verify WiFi connects and uploads work
+  # 7. Check web interface shows censored values
+  ```
 
 2. **Test Plain Text Mode:**
-   ```bash
-   # 1. Set STORE_CREDENTIALS_PLAIN_TEXT = true
-   # 2. Flash and boot device
-   # 3. Verify credentials remain in config.txt
-   # 4. Verify web interface shows actual values
-   ```
+  ```bash
+  # 1. Set STORE_CREDENTIALS_PLAIN_TEXT = true
+  # 2. Flash and boot device
+  # 3. Verify credentials remain in config.txt
+  # 4. Verify web interface shows actual values
+  ```
 
 3. **Test Migration:**
-   ```bash
-   # 1. Start with plain text config
-   # 2. Change STORE_CREDENTIALS_PLAIN_TEXT to false
-   # 3. Reboot device
-   # 4. Verify migration occurs
-   # 5. Verify system continues to work
-   ```
+  ```bash
+  # 1. Start with plain text config
+  # 2. Change STORE_CREDENTIALS_PLAIN_TEXT to false
+  # 3. Reboot device
+  # 4. Verify migration occurs
+  # 5. Verify system continues to work
+  ```
 
 ## Architecture Decisions
 

@@ -24,4 +24,4 @@ fi
 echo "Starting serial monitor..."
 # Use full path to pio to work with sudo
 PIO_PATH=$(which pio)
-sudo -E "$PIO_PATH" device monitor -e pico32
+sudo -E "$PIO_PATH" device monitor -e pico32-ota
