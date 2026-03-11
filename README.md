@@ -2,7 +2,7 @@
 
 Automatically upload CPAP therapy data from your SD card to a network share or SleepHQ — **within minutes of taking your mask off.**
 
-**Supports:** ResMed Series 9, 10, and 11 · **Hardware:** [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) (ESP32-based SD card adapter)
+**Supports:** ResMed Series 9, 10, and 11 · **Hardware:** [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) — an ESP32-powered SD card that physically inserts into your CPAP's SD card slot like a regular memory card
 
 ---
 
@@ -32,7 +32,7 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 ## 🚀 Quick Start — 4 Steps
 
 ### 1. Get the hardware
-[SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) — an ESP32-based SD card adapter that replaces your CPAP's SD card slot.
+[SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) — an ESP32-powered SD card that physically inserts into your CPAP's SD card slot like a regular memory card.
 
 ### 2. Flash the firmware
 👉 **[Download Latest Release](../../releases)** — includes firmware binaries and upload scripts for Windows, Mac, and Linux. Follow the included instructions.
@@ -86,7 +86,7 @@ CLOUD_CLIENT_SECRET = your-client-secret
 
 That's it. The device connects to WiFi, waits for your therapy session to end, and uploads automatically.
 
-Open **[http://cpap.local](http://cpap.local)** in your browser to see live upload status, view logs, and manage settings.
+Open **[http://cpap.local](http://cpap.local)** in your browser to see live upload status, view logs, and manage settings. *(Note: `cpap.local` only resolves for the first 60 seconds after boot to save power — accessing it within this window redirects you to the device's IP address.)*
 
 > **From here on, you can edit your config directly in the browser** — Config tab → Edit. No need to pull the SD card again.
 
@@ -112,7 +112,7 @@ See the [Full Setup Guide](release/README.md#️-sd-card-errors--use-scheduled-m
 
 - **Automatic uploads after every therapy session** — smart mode detects when your CPAP finishes and starts uploading within minutes
 - **Uploads to Windows shares, NAS, or SleepHQ** — or both at the same time
-- **Web dashboard at `http://cpap.local`** — live progress, logs, config editor, OTA updates
+- **Web dashboard at `http://cpap.local`** — live progress, logs, config editor, OTA updates *(available for first 60 seconds after boot, then use IP address)*
 - **Edit config from the browser** — no SD card pulls after initial setup
 - **Never uploads the same file twice** — tracks what's been sent, even across reboots
 - **Persistent log storage** — enable `PERSISTENT_LOGS=true` to flush logs to internal flash every 30 seconds; download past sessions from the browser. Emergency logs are always saved to SD card on boot failures and to internal flash before every reboot.

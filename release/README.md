@@ -101,7 +101,7 @@ Insert the SD card into your CPAP machine. The device will automatically:
 - ✅ Wait for therapy to end (Smart Mode)
 - ✅ Upload your CPAP data
 
-**💻 Web Interface:** Once running, access the dashboard at **`http://cpap.local`** to monitor uploads, view logs, and manage settings.
+**💻 Web Interface:** Once running, access the dashboard at **`http://cpap.local`** (for 60 seconds after boot, then use the IP address) to monitor uploads, view logs, and manage settings.
 
 **No complex setup. No JSON syntax. Just simple key = value pairs.**
 
@@ -546,7 +546,7 @@ The firmware includes a web interface accessible at **`http://cpap.local`** (or 
 
 ### Accessing the Web Interface
 
-Once the device connects to WiFi, open a browser and navigate to `http://cpap.local`. All features are accessible through a single-page dashboard with the following tabs:
+Once the device connects to WiFi, open a browser and navigate to `http://cpap.local` *(first 60 seconds after boot only — redirects to IP address)*. All features are accessible through a single-page dashboard with the following tabs:
 
 ---
 
