@@ -108,7 +108,7 @@ If bad timing is causing your errors, you can avoid it entirely by switching to 
 ```ini
 UPLOAD_MODE = scheduled
 UPLOAD_START_HOUR = 9
-UPLOAD_END_HOUR = 23
+UPLOAD_END_HOUR = 21
 ```
 
 See the [Full Setup Guide](release/README.md#️-sd-card-errors--use-scheduled-mode) for details.
