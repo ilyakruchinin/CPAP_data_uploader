@@ -19,6 +19,7 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 - **How to check:** Look at the label on the back/bottom of your AirSense 11 device. The platform code (e.g. R390-...) is usually near the "Made in XXX" text.
 - **Status:** If your machine matches these specific codes, you may experience power issues. Adjusting firmware power settings (`WIFI_TX_PWR`, `WIFI_PWR_SAVING`, `BROWNOUT_DETECT`, `ENABLE_1BIT_SD_MODE`) can help, but may still not be enough to fully resolve the hardware limitation on this specific variant (will require hardware modification).
 
+**👇 Click to expand:**
 <details>
 <summary><b>🔍 How to tell if your CPAP has power issues</b></summary>
 
