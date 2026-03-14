@@ -10,11 +10,14 @@ Automatically upload CPAP therapy data from your SD card to a network share or S
 ## ⚠️ **IMPORTANT COMPATIBILITY NOTICE**
 
 ### **AirSense 11 Power Compatibility**
-Some **Singapore-made AirSense 11 machines** may not provide sufficient power to the SD card adapter:
+Some **Singapore-made AirSense 11 machines** may not provide sufficient power to the SD card adapter, which can cause brownouts or WiFi connection failures:
 
-- **Potentially affected models:** Platform `R390-447/1` with radio module starting with `AIR11M1`
-- **How to check:** Look at the label on the back of your AirSense 11 device
-- **Status:** Investigation ongoing - gathering more data
+- **Potentially affected models:**
+  - Platform: `R390-447/1`
+  - REF: `39517`
+  - Modem (WMOD / FCC ID): `AIR11M1G22`
+- **How to check:** Look at the label on the back/bottom of your AirSense 11 device. The platform code (e.g. R390-...) is usually near the "Made in XXX" text.
+- **Status:** If your machine matches these specific codes, you may experience power issues. Adjusting firmware power settings (`WIFI_TX_PWR`, `CPU_SPEED_MHZ`, `ENABLE_1BIT_SD_MODE`) can help, but may still not be enough to fully resolve the hardware limitation on this specific variant.
 
 ### **Confirmed Working**
 - ✅ **All AirSense 10 models**
