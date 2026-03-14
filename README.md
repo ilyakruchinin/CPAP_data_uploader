@@ -17,7 +17,7 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
   - REF: `39517`
   - Modem (WMOD / FCC ID): `AIR11M1G22`
 - **How to check:** Look at the label on the back/bottom of your AirSense 11 device. The platform code (e.g. R390-...) is usually near the "Made in XXX" text.
-- **Status:** If your machine matches these specific codes, you may experience power issues. Adjusting firmware power settings (`WIFI_TX_PWR`, `CPU_SPEED_MHZ`, `ENABLE_1BIT_SD_MODE`) can help, but may still not be enough to fully resolve the hardware limitation on this specific variant.
+- **Status:** If your machine matches these specific codes, you may experience power issues. Adjusting firmware power settings (`WIFI_TX_PWR`, `WIFI_PWR_SAVING`, `BROWNOUT_DETECT`, `ENABLE_1BIT_SD_MODE`) can help, but may still not be enough to fully resolve the hardware limitation on this specific variant (will require hardware modification).
 
 ### **Confirmed Working**
 - ✅ **All AirSense 10 models**
