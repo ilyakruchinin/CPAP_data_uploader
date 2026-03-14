@@ -49,7 +49,7 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 ### **Confirmed Working**
 - ✅ **All AirSense 10 models**
 - ✅ **Australian-made AirSense 11 models**
-- ✅ **Some Singapore-made AirSense 11 models** (e.g., REF `39523` with modem `AIR11M1U`)
+- ✅ **Some Singapore-made AirSense 11 models** (e.g., REF `39523` with modem `AIR11M1U` have been stable since v1.0-beta1)
 
 > **Versions between v0.11.0 and v1.0i:** Added progressively more aggressive power optimizations (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility, which allowed some previously incompatible models to work.
 
