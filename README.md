@@ -21,6 +21,9 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 
 **👇 Click to expand:**
 
+<details>
+<summary><b>🔍 How to tell if your CPAP has power issues</b></summary>
+
 > **⚠️ Identifying Power Issues**
 >
 > If your CPAP cannot provide enough power to the SD card, the ESP32 chip will reset itself. You might notice:
@@ -40,6 +43,8 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 > [ERROR]  - the card was removed
 > [ERROR]  - the CPAP machine cannot provide enough power
 > ```
+
+</details>
 
 ### **Confirmed Working**
 - ✅ **All AirSense 10 models**
