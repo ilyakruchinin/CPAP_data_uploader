@@ -17,7 +17,7 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
   - REF: `39517`
   - Modem (WMOD / FCC ID): `AIR11M1G22`
 - **How to check:** Look at the label on the back/bottom of your AirSense 11 device. The platform code (e.g. R390-...) is usually near the "Made in XXX" text.
-- **Status:** If your machine matches these specific codes, you may experience power issues. Adjusting firmware power settings (`WIFI_TX_PWR`, `WIFI_PWR_SAVING`, `BROWNOUT_DETECT`, `ENABLE_1BIT_SD_MODE`) can help, but may still not be enough to fully resolve the hardware limitation on this specific variant (will require hardware modification).
+- **Status:** If your machine matches these specific codes, you may experience power issues. Adjusting firmware power settings (`WIFI_TX_PWR`, `WIFI_PWR_SAVING`, `BROWNOUT_DETECT`, `ENABLE_1BIT_SD_MODE`) can help, but may still not be enough to fully resolve the hardware limitation on this specific variant (will likely require hardware modification).
 
 **👇 Click to expand:**
 
@@ -54,7 +54,7 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 
 > **Versions between v0.11.0 and v1.0i:** Added progressively more aggressive power optimizations (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility, which allowed some previously incompatible models to work.
 
-**If you have a Singapore-made AirSense 11 with REF `39517` and modem `AIR11M1G22`, please check your device label and report your experience to help us gather more compatibility data.**
+**If you have a Singapore-made AirSense 11 with REF** `39517` **and modem** `AIR11M1G22`, **please check your device label and report your experience to help us gather more compatibility data.**
 
 ---
 
