@@ -20,9 +20,14 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 - **Status:** If your machine matches these specific codes, you may experience power issues. Adjusting firmware power settings (`WIFI_TX_PWR`, `WIFI_PWR_SAVING`, `BROWNOUT_DETECT`, `ENABLE_1BIT_SD_MODE`) can help, but may still not be enough to fully resolve the hardware limitation on this specific variant (will require hardware modification).
 
 <details>
-<summary><b>🔍 How to tell if you are experiencing a brown-out</b></summary>
+<summary><b>🔍 How to tell if your CPAP has power issues</b></summary>
 
-If your CPAP cannot provide enough power, the ESP32 chip will reset itself. You can verify if this is happening by looking at your logs:
+If your CPAP cannot provide enough power to the SD card, the ESP32 chip will reset itself. You might notice:
+- The device disappears from WiFi frequently
+- Uploads fail midway or never start
+- The web interface is unreliable
+
+You can confirm this is happening by looking at your logs:
 1. If `PERSISTENT_LOGS=true` is set, check the downloaded logs from the web interface.
 2. If the device cannot even stay online long enough to broadcast WiFi, pull the SD card and look for a file called `uploader_error.txt`.
 
