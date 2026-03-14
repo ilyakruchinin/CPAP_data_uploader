@@ -19,14 +19,31 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 - **How to check:** Look at the label on the back/bottom of your AirSense 11 device. The platform code (e.g. R390-...) is usually near the "Made in XXX" text.
 - **Status:** If your machine matches these specific codes, you may experience power issues. Adjusting firmware power settings (`WIFI_TX_PWR`, `WIFI_PWR_SAVING`, `BROWNOUT_DETECT`, `ENABLE_1BIT_SD_MODE`) can help, but may still not be enough to fully resolve the hardware limitation on this specific variant (will require hardware modification).
 
+<details>
+<summary><b>🔍 How to tell if you are experiencing a brown-out</b></summary>
+
+If your CPAP cannot provide enough power, the ESP32 chip will reset itself. You can verify if this is happening by looking at your logs:
+1. If `PERSISTENT_LOGS=true` is set, check the downloaded logs from the web interface.
+2. If the device cannot even stay online long enough to broadcast WiFi, pull the SD card and look for a file called `uploader_error.txt`.
+
+Look for this specific warning:
+```text
+[INFO] Reset reason: Brown-out reset (low voltage)
+[ERROR] WARNING: System reset due to brown-out (insufficient power supply), this could be caused by:
+[ERROR]  - the CPAP was disconnected from the power supply
+[ERROR]  - the card was removed
+[ERROR]  - the CPAP machine cannot provide enough power
+```
+</details>
+
 ### **Confirmed Working**
 - ✅ **All AirSense 10 models**
 - ✅ **Australian-made AirSense 11 models**
 - ✅ **Some Singapore-made AirSense 11 models** (e.g., REF `39523` with modem `AIR11M1U`)
 
-> **v0.11.0+:** Firmware now includes aggressive power optimization (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility.
+> **Versions between v0.11.0 and v1.0i:** Added progressively more aggressive power optimizations (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility, which allowed some previously incompatible models to work.
 
-**If you have a Singapore-made AirSense 11 with AIR11M1 radio module**, please check your device label and report your experience to help us gather more compatibility data.
+**If you have a Singapore-made AirSense 11 with REF `39517` and modem `AIR11M1G22`, please check your device label and report your experience to help us gather more compatibility data.**
 
 ---
 
