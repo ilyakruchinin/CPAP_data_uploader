@@ -22,6 +22,7 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 ### **Confirmed Working**
 - ✅ **All AirSense 10 models**
 - ✅ **Australian-made AirSense 11 models**
+- ✅ **Some Singapore-made AirSense 11 models** (e.g., REF `39523` with modem `AIR11M1U`)
 
 > **v0.11.0+:** Firmware now includes aggressive power optimization (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility.
 
@@ -98,15 +99,17 @@ Open **[http://cpap.local](http://cpap.local)** in your browser to see live uplo
 
 ## 🚨 Seeing an SD Card Error on your CPAP?
 
-> Add these lines to `config.txt` and the errors will stop:
+SD card errors typically happen for two reasons:
+1. **Power Limits:** The CPAP machine cannot provide enough peak current to the SD slot during WiFi uploads. (Ensure you are running the latest firmware, which includes aggressive power-saving features).
+2. **Bad Timing (Collisions):** In **smart** mode, uploads begin shortly after therapy ends. If you briefly pause therapy and then resume it while an upload is actively running, the CPAP and the WiFi SD card will clash over SD access.
+
+If bad timing is causing your errors, you can avoid it entirely by switching to **scheduled** mode in `config.txt`, setting a window during your waking hours:
 
 ```ini
 UPLOAD_MODE = scheduled
 UPLOAD_START_HOUR = 9
 UPLOAD_END_HOUR = 23
 ```
-
-The default **smart** mode detects SD bus activity to know when it's safe to take the card. On some CPAP models this detection is unreliable — **scheduled mode avoids it entirely** by only uploading during a window you set (e.g. while you're awake and not on therapy).
 
 See the [Full Setup Guide](release/README.md#️-sd-card-errors--use-scheduled-mode) for details.
 
