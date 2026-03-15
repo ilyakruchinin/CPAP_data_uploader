@@ -196,7 +196,6 @@ Create a file named `config.txt` in the root of your SD card.
 ```ini
 WIFI_SSID = YourNetworkName
 WIFI_PASSWORD = YourNetworkPassword
-HOSTNAME = cpap
 
 ENDPOINT_TYPE = CLOUD
 CLOUD_CLIENT_ID = your-sleephq-client-id
@@ -209,7 +208,6 @@ GMT_OFFSET_HOURS = 0
 ```ini
 WIFI_SSID = YourNetworkName
 WIFI_PASSWORD = YourNetworkPassword
-HOSTNAME = cpap
 
 ENDPOINT_TYPE = SMB
 ENDPOINT = //192.168.1.100/cpap_backups
