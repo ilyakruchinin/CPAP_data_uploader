@@ -131,7 +131,8 @@ This package includes OTA-enabled firmware with web-based update capability:
 - **`firmware-ota-upgrade.bin`** — App-only binary for subsequent updates via the web interface
 
 **Update methods:**
-- **Initial flash:** Use `firmware-ota.bin` with the included upload scripts (USB/Serial)
+- **Initial flash (preferred):** Use `firmware-ota.bin` with the browser-based web flasher at `https://esptool.spacehuhn.com/`
+- **Initial flash (fallback):** Use the included upload scripts or `esptool` if the browser flasher is not available on your system
 - **Upgrades:** Upload `firmware-ota-upgrade.bin` via the web interface at `http://cpap.local/ota`
 
 ---
@@ -144,23 +145,41 @@ Insert the SD card in your CPAP machine and allow for the CPAP machine to format
 
 ### 1. Upload Firmware
 
-#### First time or when upgrading from a non OTA version
 **Important:** Connect the SD WIFI PRO to the development board with switches set to:
 - Switch 1: OFF
 - Switch 2: ON
 
+**Preferred method: browser-based web flasher**
+
+Use a **desktop Chromium-based browser**:
+- **Supported:** Chrome, Microsoft Edge, Opera
+- **Not supported:** Firefox, Safari
+- **Phones/tablets:** not recommended for this tool
+
+1. Extract this release ZIP to a folder on your computer.
+2. Open `https://esptool.spacehuhn.com/` in Chrome, Edge, or Opera.
+3. Connect the ESP32 board by USB.
+4. Click **Connect** and choose the serial port for the board.
+   - On Windows this often looks like **`USB Serial (COM5)`**, **`USB-SERIAL CH340 (COMx)`**, or **`Silicon Labs CP210x USB to UART Bridge (COMx)`**.
+   - On macOS this usually looks like **`/dev/cu.usbserial-*`** or **`/dev/cu.SLAB_USBtoUART`**.
+   - On Linux this is usually **`/dev/ttyUSB0`** or **`/dev/ttyACM0`**.
+   - If you are not sure which port is correct, click **Connect** first, then plug in the board. The new port that appears is usually the right one.
+5. Delete any existing rows if needed, then click **Add** once.
+6. Make sure the address is **`0x0`**.
+7. Select **`firmware-ota.bin`**.
+8. Click **Erase**.
+9. Click **Program**.
+
+**Important:** `firmware-ota.bin` is the complete image for first-time flashing and any release that requires a full reflash. Do **not** use `firmware-ota-upgrade.bin` in this external flasher for that purpose.
+
+**Fallback: included scripts**
+
+If the browser flasher does not work on your computer, use the included scripts instead.
+
 **Windows:**
-1. Ensure Python 3.7+ is installed (download from https://python.org)
-2. Find your COM port (see "Finding Your Serial Port" below)
-3. Run the upload script:
 ```cmd
 upload-ota.bat COM3
 ```
-
-The script will automatically:
-- Create a virtual environment
-- Install esptool
-- Flash the complete firmware (bootloader + partitions + app)
 
 **macOS/Linux:**
 ```bash
@@ -168,13 +187,6 @@ The script will automatically:
 ```
 
 Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
-
-#### When upgrading OTA firmware via web interface
-
-1. Go to the CPAP AutoSync web interface: `http://<device-ip>/ota`
-2. Use **Method 1** to upload `firmware-ota-upgrade.bin` from your computer
-3. Or use **Method 2** to download firmware directly from GitHub
-4. Device will restart automatically after update
 
 ### 2. Create Configuration File
 
@@ -518,19 +530,24 @@ GMT_OFFSET_HOURS = 0
 - Switch 1: OFF
 - Switch 2: ON
 
+**Easiest method:** Open the web flasher, click **Connect**, then plug in the board. The newly appeared port is usually the correct one.
+
 ### Windows
 1. Open Device Manager (Win+X, then select Device Manager)
 2. Expand "Ports (COM & LPT)"
-3. Look for "USB-SERIAL CH340" or "Silicon Labs CP210x"
-4. Note the COM port number (e.g., COM3, COM4)
+3. Look for entries such as:
+    - `USB Serial (COM5)`
+    - `USB-SERIAL CH340 (COMx)`
+    - `Silicon Labs CP210x USB to UART Bridge (COMx)`
+4. Note the COM port number (for example `COM3`, `COM4`, `COM5`)
 
-**Tip:** If you run `upload.bat` without arguments, it will show detailed instructions for finding your COM port.
+**Tip:** If you use the included Windows upload script, running it without arguments will also show COM port instructions.
 
 ### macOS
 ```bash
 ls /dev/cu.*
 ```
-Look for `/dev/cu.usbserial-*` or `/dev/cu.SLAB_USBtoUART`
+Look for `/dev/cu.usbserial-*`, `/dev/cu.SLAB_USBtoUART`, or another newly appeared USB serial device
 
 ### Linux
 ```bash
@@ -602,6 +619,18 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 
 ### Firmware Upload Issues
 
+**Browser does not support the web flasher**
+- Use Chrome, Microsoft Edge, or Opera on a desktop computer
+- Firefox and Safari do not currently support Web Serial
+- If needed, use the included upload scripts instead
+
+**No serial port appears in the browser**
+- Unplug and reconnect the board after clicking **Connect**
+- Check the USB cable (must be a data cable, not charge-only)
+- Try a different USB port
+- Install USB drivers if needed (CH340 or CP210x)
+- Close other programs that may already be using the serial port
+
 **"Python is not installed" (Windows)**
 - Download Python from https://python.org
 - During installation, check "Add Python to PATH"
@@ -611,8 +640,6 @@ Once the device connects to WiFi, open a browser and navigate to `http://cpap.lo
 - Verify SD WIFI PRO is connected to development board
 - Check switches: Switch 1 OFF, Switch 2 ON
 - Check USB cable (must be data cable, not charge-only)
-- Try different USB port
-- Verify correct serial port selected
 - Try holding the BOOT button during upload
 
 **"Permission denied" (Linux/Mac)**
@@ -850,9 +877,10 @@ Files are uploaded maintaining the same structure:
 
 ---
 
-## Manual Firmware Upload
+## Fallback: Upload Scripts and Manual Firmware Upload
 
-If the upload scripts don't work, you can use esptool directly:
+The browser-based web flasher is the preferred method for most users.
+If it is not available on your system, use the included upload scripts or `esptool` directly:
 
 ### Windows
 ```cmd
@@ -886,8 +914,8 @@ python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0
 
 - `firmware-ota.bin` - Complete firmware for initial flashing (1.3MB)
 - `firmware-ota-upgrade.bin` - App-only binary for web OTA updates (1.2MB)
-- `upload-ota.bat` - Windows upload script
-- `upload.sh` - macOS/Linux upload script
+- `upload-ota.bat` - Windows fallback upload script
+- `upload.sh` - macOS/Linux fallback upload script
 - `requirements.txt` - Python dependencies (esptool)
 - `config.txt.example.simple` - Minimal configuration (bare essentials)
 - `config.txt.example.smb` - SMB/network share configuration

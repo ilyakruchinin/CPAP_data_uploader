@@ -68,7 +68,10 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) — an ESP32-powered SD card that physically inserts into your CPAP's SD card slot like a regular memory card.
 
 ### 2. Flash the firmware
-👉 **[Download Latest Release](../../releases)** — includes firmware binaries and upload scripts for Windows, Mac, and Linux. Follow the included instructions.
+👉 **[Download Latest Release](../../releases)** — the preferred first-time flashing method is the browser-based web flasher in Chrome, Edge, or Opera. The release package also includes fallback scripts for Windows, Mac, and Linux if needed.
+
+Open the release ZIP and follow the **Firmware Upload** steps in the included guide:
+**[Full Setup Guide](release/README.md)**
 
 ### 3. Create `config.txt` on the SD card
 Just WiFi credentials and upload destination — **6 to 10 lines total**.
