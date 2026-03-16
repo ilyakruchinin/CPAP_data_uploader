@@ -1,6 +1,7 @@
 #include "SMBUploader.h"
 #include "Logger.h"
 #include "NetworkRecovery.h"
+#include <esp_task_wdt.h>
 
 #ifdef ENABLE_SMB_UPLOAD
 
@@ -27,6 +28,7 @@ extern "C" {
 extern volatile unsigned long g_uploadHeartbeat;
 
 static inline void feedUploadHeartbeat() {
+    esp_task_wdt_reset();
     g_uploadHeartbeat = millis();
 }
 
