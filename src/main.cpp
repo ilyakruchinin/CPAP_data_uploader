@@ -10,6 +10,7 @@
 #include <driver/rtc_io.h>
 #include <soc/rtc_cntl_reg.h>
 #include <esp_freertos_hooks.h>
+#include <esp_partition.h>
 #include <Preferences.h>
 #include <LittleFS.h>
 
@@ -293,6 +294,28 @@ void setup() {
         LOG_WARN("System reset due to software panic - check for stability issues");
     } else if (resetReason == ESP_RST_WDT || resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT) {
         LOG_WARN("System reset due to watchdog timeout - possible hang or power issue");
+    }
+
+    // ── Guard against LittleFS partition-shrink assertion ──
+    // LittleFS asserts (lfs_fs_grow_) if the partition shrank since the last
+    // format. This happens when the partition table changes (e.g. adding a
+    // coredump partition). We store the last known size in NVS and erase the
+    // partition data before mounting if it got smaller.
+    {
+        const esp_partition_t* lfsPart = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+        if (lfsPart) {
+            Preferences lfsMeta;
+            lfsMeta.begin("lfs_meta", false);
+            uint32_t savedSize = lfsMeta.getUInt("part_size", 0);
+            if (savedSize != 0 && lfsPart->size < savedSize) {
+                LOG_WARNF("LittleFS partition shrank (%u -> %u) — erasing for reformat",
+                          savedSize, (unsigned)lfsPart->size);
+                esp_partition_erase_range(lfsPart, 0, lfsPart->size);
+            }
+            lfsMeta.putUInt("part_size", (uint32_t)lfsPart->size);
+            lfsMeta.end();
+        }
     }
 
     // Initialize LittleFS for state and internal logs

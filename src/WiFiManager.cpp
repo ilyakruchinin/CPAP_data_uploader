@@ -177,15 +177,6 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
 
     WiFi.mode(WIFI_STA);
     
-    // Apply deferred TX power AFTER WiFi.mode() where STA is guaranteed active.
-    // applyTxPowerEarly() stores the value; we apply it here to avoid the
-    // "Neither AP or STA has been started" warning from setTxPower().
-    if (_hasPendingTxPower) {
-        WiFi.setTxPower((wifi_power_t)_pendingTxPower);
-        LOG_DEBUGF("WiFi TX power applied: %d (deferred from applyTxPowerEarly)", (int)_pendingTxPower);
-        _hasPendingTxPower = false;
-    }
-    
     // ── Power optimization: disable 802.11b (DSSS) ──
     // 802.11b uses up to 370 mA peak TX. Restricting to 802.11g/n (OFDM)
     // caps peak TX current to ~205-250 mA. All modern routers support g/n.
@@ -193,6 +184,16 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
     LOG_DEBUG("WiFi protocol restricted to 802.11g/n (802.11b disabled)");
     
     WiFi.begin(ssid.c_str(), password.c_str());
+    
+    // Apply deferred TX power AFTER WiFi.begin() — WiFi.mode(WIFI_STA) is async
+    // and the STA isn't fully started until the STA_START event fires. begin()
+    // blocks until STA is active, so setTxPower() works reliably here.
+    // This caps TX power during the association/DHCP phase.
+    if (_hasPendingTxPower) {
+        WiFi.setTxPower((wifi_power_t)_pendingTxPower);
+        LOG_DEBUGF("WiFi TX power applied: %d (deferred from applyTxPowerEarly)", (int)_pendingTxPower);
+        _hasPendingTxPower = false;
+    }
 
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
