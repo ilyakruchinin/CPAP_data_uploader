@@ -56,8 +56,28 @@ if [ -d "venv" ]; then
 fi
 
 echo "Building OTA firmware (pico32-ota)..."
+
+# Hybrid compile overwrites sdkconfig.defaults with a large generated config.
+# Back it up and restore after build to keep the repo clean.
+SDKCONFIG_DEFAULTS="sdkconfig.defaults"
+SDKCONFIG_BACKUP="${SDKCONFIG_DEFAULTS}.bak"
+if [ -f "$SDKCONFIG_DEFAULTS" ]; then
+    cp "$SDKCONFIG_DEFAULTS" "$SDKCONFIG_BACKUP"
+fi
+
+build_ok=true
 if ! pio run -e pico32-ota; then
     echo -e "${RED}Failed to build OTA firmware${NC}"
+    build_ok=false
+fi
+
+# Restore sdkconfig.defaults regardless of build outcome
+if [ -f "$SDKCONFIG_BACKUP" ]; then
+    mv "$SDKCONFIG_BACKUP" "$SDKCONFIG_DEFAULTS"
+    echo "Restored $SDKCONFIG_DEFAULTS"
+fi
+
+if [ "$build_ok" = false ]; then
     exit 1
 fi
 

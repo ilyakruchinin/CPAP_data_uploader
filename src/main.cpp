@@ -106,8 +106,8 @@ esp_pm_lock_handle_t g_pmLock = nullptr;
 // The diagnostics endpoint samples these counters to compute load %.
 volatile uint32_t g_idleCount0 = 0, g_idleCount1 = 0;
 uint32_t g_cpuLoad0 = 0, g_cpuLoad1 = 0;  // 0-100 percent, updated every 2s
-static bool _idleHook0() { g_idleCount0++; return true; }
-static bool _idleHook1() { g_idleCount1++; return true; }
+static bool _idleHook0() { g_idleCount0 = g_idleCount0 + 1; return true; }
+static bool _idleHook1() { g_idleCount1 = g_idleCount1 + 1; return true; }
 
 // ── Reboot reason helper ──
 // Stores a human-readable reason in NVS before esp_restart() so the next
