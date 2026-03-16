@@ -6,7 +6,7 @@
 #include <ESPmDNS.h>
 #include <esp_wifi.h>
 
-WiFiManager::WiFiManager() : connected(false), mdnsStarted(false) {}
+WiFiManager::WiFiManager() : connected(false), mdnsStarted(false), _pendingTxPower(0), _hasPendingTxPower(false) {}
 
 void WiFiManager::setupEventHandlers() {
     WiFi.onEvent(onWiFiEvent);
@@ -177,6 +177,15 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
 
     WiFi.mode(WIFI_STA);
     
+    // Apply deferred TX power AFTER WiFi.mode() where STA is guaranteed active.
+    // applyTxPowerEarly() stores the value; we apply it here to avoid the
+    // "Neither AP or STA has been started" warning from setTxPower().
+    if (_hasPendingTxPower) {
+        WiFi.setTxPower((wifi_power_t)_pendingTxPower);
+        LOG_DEBUGF("WiFi TX power applied: %d (deferred from applyTxPowerEarly)", (int)_pendingTxPower);
+        _hasPendingTxPower = false;
+    }
+    
     // ── Power optimization: disable 802.11b (DSSS) ──
     // 802.11b uses up to 370 mA peak TX. Restricting to 802.11g/n (OFDM)
     // caps peak TX current to ~205-250 mA. All modern routers support g/n.
@@ -331,8 +340,11 @@ void WiFiManager::setMaxPowerSave() {
     }
 }
 void WiFiManager::applyTxPowerEarly(WifiTxPower txPower) {
-    // Pre-initialize WiFi STA mode and set TX power before connectStation()
-    // to prevent full-power spikes during the initial scan and association.
+    // Store the desired TX power for deferred application inside connectStation().
+    // We cannot call WiFi.setTxPower() here because WiFi.mode(WIFI_STA) hasn't
+    // been called yet (or hasn't fully started), which causes the warning:
+    //   "Neither AP or STA has been started"
+    // connectStation() applies it right after WiFi.mode(WIFI_STA).
     wifi_power_t espTxPower;
     switch (txPower) {
         case WifiTxPower::POWER_MAX:    espTxPower = WIFI_POWER_11dBm;       break; // PHY caps at 10 dBm
@@ -342,11 +354,9 @@ void WiFiManager::applyTxPowerEarly(WifiTxPower txPower) {
         case WifiTxPower::POWER_LOWEST: espTxPower = WIFI_POWER_MINUS_1dBm;  break;
         default:                        espTxPower = WIFI_POWER_5dBm;        break;
     }
-    // Pre-init WiFi so TX power can be set before begin()
-    WiFi.mode(WIFI_STA);
-    WiFi.setTxPower(espTxPower);
-    WiFi.disconnect(true);  // Disconnect but keep STA mode active
-    LOG_DEBUGF("WiFi TX power pre-set to %d (before association)", (int)espTxPower);
+    _pendingTxPower = (int8_t)espTxPower;
+    _hasPendingTxPower = true;
+    LOG_DEBUGF("WiFi TX power deferred: %d (will apply in connectStation)", (int)espTxPower);
 }
 
 void WiFiManager::applyPowerSettings(WifiTxPower txPower, WifiPowerSaving powerSaving) {

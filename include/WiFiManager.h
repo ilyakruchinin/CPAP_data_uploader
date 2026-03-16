@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 // Forward declarations for power management enums
 enum class WifiTxPower;
@@ -12,6 +13,8 @@ class WiFiManager {
 private:
     bool connected;
     bool mdnsStarted;
+    int8_t _pendingTxPower;   // Deferred TX power (dBm×4), applied in connectStation()
+    bool _hasPendingTxPower;
     static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info);
 
 public:
