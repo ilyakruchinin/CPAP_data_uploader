@@ -872,16 +872,16 @@ void handleUploading() {
         uploadTaskComplete = false;
         uploadTaskRunning = true;
         
-        // Exclude IDLE0 from task watchdog — upload task will monopolize Core 0
-        // during TLS handshake (5-15s of CPU-intensive crypto), starving IDLE0.
-        // IDF 5.x: use esp_task_wdt_reconfigure() with idle_core_mask to toggle
-        // monitoring. The old esp_task_wdt_delete() causes "task not found" error
-        // spam because IDLE0's built-in WDT feeding still runs after unsubscribe.
+        // Relax task watchdog during upload — TLS handshake (5-15s of CPU-intensive
+        // crypto) starves IDLE0 on Core 0. Instead of removing IDLE0 from monitoring
+        // (which causes "task not found" error spam because IDLE0 still calls
+        // esp_task_wdt_reset internally), keep both cores monitored but increase
+        // timeout to 30s. IDLE0 feeds the WDT during socket I/O waits.
         {
             esp_task_wdt_config_t wdt_cfg = {
-                .timeout_ms = 5000,
-                .idle_core_mask = (1 << 1),  // Monitor IDLE1 only (exclude Core 0)
-                .trigger_panic = false
+                .timeout_ms = 30000,
+                .idle_core_mask = (1 << 0) | (1 << 1),  // Both cores
+                .trigger_panic = true
             };
             esp_task_wdt_reconfigure(&wdt_cfg);
         }
@@ -906,12 +906,12 @@ void handleUploading() {
                        ESP.getMaxAllocHeap());
             uploadTaskRunning = false;
             delete params;
-            // Restore IDLE0 watchdog monitoring (task creation failed)
+            // Restore normal watchdog timeout (task creation failed)
             {
                 esp_task_wdt_config_t wdt_cfg = {
                     .timeout_ms = 5000,
                     .idle_core_mask = (1 << 0) | (1 << 1),  // Both cores
-                    .trigger_panic = false
+                    .trigger_panic = true
                 };
                 esp_task_wdt_reconfigure(&wdt_cfg);
             }
@@ -928,12 +928,12 @@ void handleUploading() {
         uploadTaskHandle = nullptr;
         g_abortUploadFlag = false;  // Clear abort flag — task has stopped
         
-        // Restore IDLE0 watchdog monitoring now that Core 0 is free
+        // Restore normal watchdog timeout now that Core 0 is free
         {
             esp_task_wdt_config_t wdt_cfg = {
                 .timeout_ms = 5000,
                 .idle_core_mask = (1 << 0) | (1 << 1),  // Both cores
-                .trigger_panic = false
+                .trigger_panic = true
             };
             esp_task_wdt_reconfigure(&wdt_cfg);
         }
