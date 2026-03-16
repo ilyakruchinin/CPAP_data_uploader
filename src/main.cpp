@@ -792,11 +792,25 @@ void uploadTaskFunction(void* pvParameters) {
     
     g_uploadHeartbeat = millis();
     
-    // NOTE: TLS pre-warm was removed here.  With custom asymmetric mbedTLS
-    // (16 KB IN / 4 KB OUT), the largest single TLS allocation is ~16.7 KB
-    // which fits comfortably at ma≈38900 after SD mount.  The cloud phase's
-    // begin() handles on-demand TLS connection, saving ~11 s and ~28 KB of
-    // heap when pre-flight finds no cloud work.
+    // ── TLS pre-warm (BEFORE SD mount) ──────────────────────────────────
+    // Pre-flight folder scanning permanently fragments the heap (ma drops
+    // from ~69KB to ~55KB).  With symmetric mbedTLS buffers (16KB IN +
+    // 16KB OUT), the TLS handshake needs ~18KB contiguous — pushing ma
+    // below the 38KB safety threshold after scan fragmentation.
+    // By connecting TLS here (ma ≈ 98KB, before SD mount), the handshake
+    // succeeds reliably.  SD hold time is NOT increased — the CPAP keeps
+    // its SD card during the entire TLS handshake.
+    // If pre-flight later finds no cloud work, the connection is released
+    // harmlessly at the end of the cloud phase.
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (params->uploader->hasCloudBackend()) {
+        SleepHQUploader* cloud = params->uploader->getCloudUploader();
+        if (cloud) {
+            cloud->preWarmTLS();
+            esp_task_wdt_reset();
+        }
+    }
+#endif
 
     // Mount SD card
     if (!params->sdManager->takeControl()) {
