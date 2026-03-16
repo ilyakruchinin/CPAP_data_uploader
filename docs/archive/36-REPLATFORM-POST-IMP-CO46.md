@@ -9,7 +9,8 @@ This document assesses the power optimisation landscape **after** the pioarduino
 3. **Recovery plan** — how to safely reintroduce each removed optimisation
 4. **New opportunities** — power savings newly available on IDF 5.5.x / Arduino ESP32 3.3.x that were not in the original plan
 
-This is a research and planning document only. **No code changes.**
+Initial version was a research/planning document. Optimisations have now been **implemented** —
+see §9 for implementation status.
 
 ---
 
@@ -29,20 +30,26 @@ This is a research and planning document only. **No code changes.**
 
 ## 1. What Was Removed or Disabled During Migration
 
-### 1.1 Light-Sleep (DISABLED)
+### 1.1 Light-Sleep (was DISABLED — now RE-ENABLED ✓)
 
 **Original plan (doc 35 §1.2, §4.1):** `light_sleep_enable = true` + `CONFIG_FREERTOS_USE_TICKLESS_IDLE=y`
 
-**Current state:**
+**Previous state (now fixed):**
 - `light_sleep_enable = false` in `esp_pm_configure()` call
 - `CONFIG_FREERTOS_USE_TICKLESS_IDLE=n` in both `sdkconfig.defaults` and `custom_sdkconfig`
 - GPIO wakeup code commented out (`gpio_wakeup_enable` / `esp_sleep_enable_gpio_wakeup`)
+
+**Current state (implemented):**
+- `light_sleep_enable = true` in `esp_pm_configure()`
+- `CONFIG_FREERTOS_USE_TICKLESS_IDLE=y` + `CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3`
+- PCNT suspend/resume in `transitionTo()` releases APB lock in IDLE/COOLDOWN
+- FreeRTOS tickless idle handles timer-based wakeup (no GPIO wakeup needed)
 
 **Why removed:** GPIO wakeup on CS_SENSE (GPIO 33) conflicts with the new IDF 5.x PCNT driver that owns the same pin. The PCNT driver registers its own GPIO interrupt handler; calling `gpio_wakeup_enable()` with `GPIO_INTR_LOW_LEVEL` on the same pin causes continuous interrupt firing on the shared GPIO 32-39 interrupt handler, leading to a software panic ~2 minutes after boot.
 
 **Impact:** Light-sleep was the single largest expected power saving from the migration. Without it, the CPU stays awake between DTIM intervals in IDLE/COOLDOWN states, consuming ~15-20 mA more than it would with light-sleep enabled. The PM lock acquire/release infrastructure is still in place and functional — it just has no light-sleep to gate.
 
-### 1.2 mbedTLS Customisations (REMOVED — cannot recover)
+### 1.2 mbedTLS Customisations (PARTIALLY RECOVERED ✓)
 
 **Original plan (doc 35 §1.2):** All mbedTLS `sdkconfig.defaults` entries become effective:
 - `CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y` (16 KB in / 4 KB out)
@@ -53,18 +60,27 @@ This is a research and planning document only. **No code changes.**
 - `CONFIG_MBEDTLS_SSL_SESSION_TICKETS=n`
 - `CONFIG_MBEDTLS_SSL_RENEGOTIATION=n`
 
-**Current state:** All removed from both `platformio.ini` `custom_sdkconfig` and `sdkconfig.defaults`.
+**Key insight:** mbedTLS options fall into two categories:
 
-**Why removed:** The hybrid compile recompiles IDF libs (including mbedTLS) but does NOT recompile the Arduino framework layer (`WiFiClientSecure`). Since `WiFiClientSecure` embeds `mbedtls_ssl_context` and `mbedtls_ssl_config` structs directly, any config that changes struct sizes causes an ABI mismatch → memory corruption → deterministic `InstrFetchProhibited` crash during TLS handshake.
+1. **Struct-changing (FORBIDDEN):** `KEEP_PEER_CERTIFICATE`, `SESSION_TICKETS`,
+   `RENEGOTIATION`, `ASYMMETRIC_CONTENT_LEN`, `VARIABLE_BUFFER_LENGTH`, DTLS options.
+   These change struct sizes in `ssl_context`/`ssl_config` → ABI mismatch with
+   precompiled WiFiClientSecure → memory corruption → crash.
 
-**Impact:** TLS connections use default (larger) mbedTLS buffers. This costs ~12-16 KB more heap during TLS sessions compared to the asymmetric buffer plan, and leaves unnecessary cipher suites compiled in. However, TLS works reliably.
+2. **Struct-safe (SAFE — now implemented ✓):** Cipher algorithm removal only removes
+   code and ciphersuite table entries, not struct fields. WiFiClientSecure never
+   embeds cipher contexts directly.
 
-**Recovery:** **Not possible** with the current hybrid compile model. Recovery requires one of:
-- pioarduino adding support for recompiling the Arduino framework layer (not available)
-- Switching to pure ESP-IDF (no Arduino framework) — major rewrite
-- Upstream Arduino ESP32 adopting configurable mbedTLS struct sizes
+**Implemented:**
+- `CONFIG_MBEDTLS_CHACHA20_C=n` — removes ChaCha20 cipher code
+- `CONFIG_MBEDTLS_POLY1305_C=n` — removes Poly1305 MAC code
+- `CONFIG_MBEDTLS_CHACHAPOLY_C=n` — removes ChaCha20-Poly1305 AEAD
 
-This is a permanent constraint of the hybrid compile approach.
+**Effect:** Forces AES-GCM ciphersuite negotiation, which uses the ESP32's **hardware
+AES accelerator** (faster + lower power than software ChaCha20). Also saves ~10-15 KB flash.
+
+**Still not recoverable:** Asymmetric buffers, variable buffer length, peer certificate
+retention, session tickets, renegotiation — these remain permanently blocked.
 
 ### 1.3 `CONFIG_FREERTOS_HZ=100` (NOT ACHIEVABLE)
 
@@ -437,10 +453,45 @@ The migration successfully delivered:
 - **Modem-sleep** — **active**
 - **PCNT DFS awareness** — **active** (new driver benefit)
 
-The primary casualty was **light-sleep**, which was the largest expected power saving. Recovery is feasible via PCNT disable/enable cycling (§3.1 + §4.9) and should be the top implementation priority.
+Light-sleep has been **recovered** via PCNT suspend/resume cycling (§3.1 + §4.9).
 
-The mbedTLS and FREERTOS_HZ limitations are permanent constraints of the hybrid compile model and are accepted trade-offs for the stability gained.
+mbedTLS cipher removal (ChaCha20/Poly1305) has been **recovered** — struct-safe options
+that only remove code, not struct fields (§1.2). The remaining mbedTLS struct-changing
+options and FREERTOS_HZ=100 are permanent constraints of the hybrid compile model.
 
-New IDF 5.5 opportunities (flash leakage workaround, WiFi sleep IRAM opt, listen interval tuning) provide additional incremental savings that were not in the original plan.
+WiFi sleep optimisations (SLP_IRAM_OPT, reduced min active time) have been **implemented**.
 
-**Total estimated recovery: 15-25 mA in IDLE/COOLDOWN** — achievable with medium effort and medium risk.
+**Estimated savings: 15-25 mA in IDLE/COOLDOWN** from light-sleep alone.
+
+---
+
+## 9. Implementation Status
+
+All optimisations below were implemented and build-verified.
+
+| Item | Status | Files Changed |
+|---|---|---|
+| Light-sleep enabled | ✓ | `main.cpp` (`esp_pm_configure`) |
+| Tickless idle enabled | ✓ | `platformio.ini`, `sdkconfig.defaults` |
+| PCNT suspend/resume in IDLE/COOLDOWN | ✓ | `TrafficMonitor.h/cpp`, `main.cpp` (`transitionTo`) |
+| mbedTLS ChaCha20/Poly1305 removal | ✓ | `platformio.ini`, `sdkconfig.defaults` |
+| WiFi SLP IRAM optimisation | ✓ | `platformio.ini`, `sdkconfig.defaults` |
+| WiFi min active time 50→8ms | ✓ | `platformio.ini`, `sdkconfig.defaults` |
+| PM lock dump diagnostic | ✓ | `main.cpp` (`transitionTo`, DEBUG level) |
+
+### Build Results (post-optimisation)
+
+| Metric | Value |
+|---|---|
+| Flash | 1,559,480 B (95.2%) |
+| DRAM used | 63,148 B |
+| DRAM free | 117,591 B |
+| IRAM | 91,811 B (70.05%), 39,261 B free |
+
+### What Still Needs Testing
+
+- Verify light-sleep actually engages in IDLE/COOLDOWN (check `esp_pm_dump_locks` output)
+- Verify no panics from PCNT suspend/resume cycling
+- Verify upload cycle works correctly after PCNT resume
+- Verify TLS handshake succeeds with ChaCha20 removed (forces AES-GCM)
+- Measure actual current draw in IDLE/COOLDOWN states
