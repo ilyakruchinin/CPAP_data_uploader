@@ -363,10 +363,13 @@ void setup() {
         Preferences resetPrefs;
         resetPrefs.begin("cpap_flags", false);
         
-        // Display and clear stored reboot reason (set by setRebootReason() before esp_restart)
-        String rebootWhy = resetPrefs.getString("reboot_why", "");
-        if (rebootWhy.length() > 0) {
-            LOGF("[BOOT] Reboot reason: %s", rebootWhy.c_str());
+        // Display and clear stored reboot reason (set by setRebootReason() before esp_restart).
+        // Use isKey() first to avoid noisy NVS "NOT_FOUND" error from getString().
+        if (resetPrefs.isKey("reboot_why")) {
+            String rebootWhy = resetPrefs.getString("reboot_why", "");
+            if (rebootWhy.length() > 0) {
+                LOGF("[BOOT] Reboot reason: %s", rebootWhy.c_str());
+            }
             resetPrefs.remove("reboot_why");
         }
 
@@ -484,7 +487,8 @@ void setup() {
     // Setup WiFi event handlers for logging
     wifiManager.setupEventHandlers();
 
-    // Apply TX power BEFORE WiFi.begin() to prevent full-power spikes during association
+    // Defer TX power cap — applied inside connectStation() after WiFi.mode(WIFI_STA)
+    // to avoid "Neither AP or STA has been started" warning.
     wifiManager.applyTxPowerEarly(config.getWifiTxPower());
 
     // Initialize WiFi in station mode
@@ -540,17 +544,20 @@ void setup() {
     // The 40 MHz floor only applies in IDLE/COOLDOWN when all locks are released
     // and the CPU is awake between light-sleep intervals.
     //
-    // Auto light-sleep allows the CPU to sleep between WiFi DTIM intervals,
-    // reducing idle current from ~20 mA to ~2-3 mA. A PM lock held in active
-    // FSM states prevents sleep during PCNT counting, SD I/O, and uploads.
+    // Light-sleep is DISABLED for now.  GPIO wakeup on CS_SENSE (GPIO 33)
+    // conflicts with the PCNT driver that owns the same pin for bus-activity
+    // counting, causing a software panic ~2 min after boot.  DFS alone still
+    // scales the CPU from max down to 40 MHz XTAL when all PM locks are
+    // released, cutting idle current significantly.
+    // TODO: Re-enable light-sleep after isolating the GPIO wakeup conflict.
     esp_pm_config_t pm_config = {
         .max_freq_mhz = targetCpuMhz,  // Respects CPU_SPEED_MHZ config (default 80)
         .min_freq_mhz = 40,            // XTAL frequency — DFS floor when all PM locks released
-        .light_sleep_enable = true      // Auto light-sleep in IDLE/COOLDOWN states
+        .light_sleep_enable = false     // DISABLED — PCNT/GPIO wakeup conflict (see above)
     };
     esp_err_t pm_err = esp_pm_configure(&pm_config);
     if (pm_err == ESP_OK) {
-        LOGF("Power management: DFS enabled (40-%dMHz), auto light-sleep enabled", targetCpuMhz);
+        LOGF("Power management: DFS enabled (40-%dMHz), light-sleep disabled", targetCpuMhz);
     } else {
         LOGF("PM configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
     }
@@ -563,12 +570,16 @@ void setup() {
     }
     LOGF("CPU frequency: %dMHz", getCpuFrequencyMhz());
     
-    // ── POWER: Configure GPIO wakeup for auto light-sleep ──
-    // GPIO 33 (CS_SENSE) is an RTC GPIO that detects CPAP SD card bus activity.
-    // When the CPU is in light-sleep, a CS_SENSE edge wakes it immediately.
-    gpio_wakeup_enable((gpio_num_t)CS_SENSE, GPIO_INTR_LOW_LEVEL);
-    esp_sleep_enable_gpio_wakeup();
-    LOG_DEBUG("GPIO wakeup configured on CS_SENSE (GPIO 33)");
+    // ── POWER: GPIO wakeup for auto light-sleep — DISABLED ──
+    // GPIO 33 (CS_SENSE) is owned by the PCNT driver for bus-activity counting.
+    // Calling gpio_wakeup_enable() on a PCNT-managed GPIO causes an interrupt
+    // conflict (GPIO_INTR_LOW_LEVEL fires continuously while pin is low on the
+    // shared GPIO 32-39 interrupt handler), leading to a software panic.
+    // When light-sleep is re-enabled, wakeup must use a different mechanism
+    // (e.g., PCNT wake stub or RTC timer) that doesn't conflict with PCNT.
+    // gpio_wakeup_enable((gpio_num_t)CS_SENSE, GPIO_INTR_LOW_LEVEL);
+    // esp_sleep_enable_gpio_wakeup();
+    LOG_DEBUG("GPIO wakeup DISABLED (PCNT owns CS_SENSE GPIO)");
     
     // ── POWER: Create PM lock for active FSM states ──
     // Acquired in LISTENING/ACQUIRING/UPLOADING/RELEASING/MONITORING/COMPLETE
@@ -838,10 +849,19 @@ void handleUploading() {
         uploadTaskComplete = false;
         uploadTaskRunning = true;
         
-        // Unsubscribe IDLE0 from task watchdog — upload task will monopolize Core 0
+        // Exclude IDLE0 from task watchdog — upload task will monopolize Core 0
         // during TLS handshake (5-15s of CPU-intensive crypto), starving IDLE0.
-        // Without this, IDLE0 can't feed the WDT and the system reboots.
-        esp_task_wdt_delete(xTaskGetIdleTaskHandleForCore(0));
+        // IDF 5.x: use esp_task_wdt_reconfigure() with idle_core_mask to toggle
+        // monitoring. The old esp_task_wdt_delete() causes "task not found" error
+        // spam because IDLE0's built-in WDT feeding still runs after unsubscribe.
+        {
+            esp_task_wdt_config_t wdt_cfg = {
+                .timeout_ms = 5000,
+                .idle_core_mask = (1 << 1),  // Monitor IDLE1 only (exclude Core 0)
+                .trigger_panic = false
+            };
+            esp_task_wdt_reconfigure(&wdt_cfg);
+        }
         
         // Pin to Core 0 (protocol core) — keeps Core 1 free for main loop + web server
         // Stack: 12KB — TLS buffers are on heap, task only needs stack for locals.
@@ -863,7 +883,15 @@ void handleUploading() {
                        ESP.getMaxAllocHeap());
             uploadTaskRunning = false;
             delete params;
-            esp_task_wdt_add(xTaskGetIdleTaskHandleForCore(0));
+            // Restore IDLE0 watchdog monitoring (task creation failed)
+            {
+                esp_task_wdt_config_t wdt_cfg = {
+                    .timeout_ms = 5000,
+                    .idle_core_mask = (1 << 0) | (1 << 1),  // Both cores
+                    .trigger_panic = false
+                };
+                esp_task_wdt_reconfigure(&wdt_cfg);
+            }
 #ifdef ENABLE_WEBSERVER
             uploader->setWebServer(webServer);
 #endif
@@ -877,8 +905,15 @@ void handleUploading() {
         uploadTaskHandle = nullptr;
         g_abortUploadFlag = false;  // Clear abort flag — task has stopped
         
-        // Re-subscribe IDLE0 to task watchdog now that Core 0 is free
-        esp_task_wdt_add(xTaskGetIdleTaskHandleForCore(0));
+        // Restore IDLE0 watchdog monitoring now that Core 0 is free
+        {
+            esp_task_wdt_config_t wdt_cfg = {
+                .timeout_ms = 5000,
+                .idle_core_mask = (1 << 0) | (1 << 1),  // Both cores
+                .trigger_panic = false
+            };
+            esp_task_wdt_reconfigure(&wdt_cfg);
+        }
         
         // Restore web server handling in uploader
 #ifdef ENABLE_WEBSERVER

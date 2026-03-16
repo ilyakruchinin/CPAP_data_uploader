@@ -43,11 +43,20 @@ CONFIG_PM_ENABLE=y
 # Cannot be overridden in hybrid compile mode.
 # CONFIG_FREERTOS_HZ=1000
 
-# ── Tickless idle (required for auto light-sleep) ────────────────────────────
-# Suppresses tick ISRs during idle, allowing the CPU to sleep for longer periods
-# between WiFi DTIM intervals. The system wakes on the next scheduled event.
-CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
-CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
+# ── Core dump to flash ────────────────────────────────────────────────────────
+# Save panic backtraces to the coredump partition (64KB at 0x3F0000).
+# Read with: espcoredump.py info_corefile -t elf <firmware.elf>
+# ELF format gives the richest backtrace info including task stacks.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
+# ── Tickless idle ─────────────────────────────────────────────────────────────
+# DISABLED: tickless idle is only needed for auto light-sleep. Light-sleep is
+# currently disabled because GPIO wakeup on CS_SENSE (GPIO 33) conflicts with
+# the PCNT driver that owns the same pin, causing a software panic ~2 min
+# after boot. DFS (frequency scaling) still works without tickless idle.
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=n
 
 # ── Brownout detector threshold ─────────────────────────────────────────────
 # Use the default brownout level 0 (~2.43V). Level 7 (~2.74V) was tested but
