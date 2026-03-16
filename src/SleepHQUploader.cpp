@@ -665,6 +665,7 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
         // ── Wait for response ────────────────────────────────────────────
         unsigned long timeout = millis() + 15000;
         while (!tlsClient->available() && millis() < timeout) {
+            esp_task_wdt_reset();
             delay(10);
         }
         if (!tlsClient->available()) {
@@ -1044,7 +1045,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 break;
             }
             
-            // Feed software watchdog during large file streaming
+            // Feed both hardware and software watchdogs during large file streaming
+            esp_task_wdt_reset();
             extern volatile unsigned long g_uploadHeartbeat;
             g_uploadHeartbeat = millis();
             
@@ -1116,10 +1118,12 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             tlsClient->write((const uint8_t*)partBuf, n);
         }
         tlsClient->flush();
+        esp_task_wdt_reset();
         
         // Read response status line
         unsigned long timeout = millis() + 30000;
         while (!tlsClient->available() && millis() < timeout) {
+            esp_task_wdt_reset();
             delay(10);
         }
 
