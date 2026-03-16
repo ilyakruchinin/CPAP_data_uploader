@@ -210,8 +210,8 @@ void Logger::writeToBuffer(const char* data, size_t len) {
         // This ensures tail is advanced before head overwrites it
         if (headIndex - tailIndex >= bufferSize) {
             // Buffer is full - advance tail to make room
-            tailIndex++;
-            totalBytesLost++;
+            tailIndex = tailIndex + 1;
+            totalBytesLost = totalBytesLost + 1;
         }
         
         // Calculate physical position in buffer
@@ -221,20 +221,20 @@ void Logger::writeToBuffer(const char* data, size_t len) {
         buffer[physicalPos] = data[i];
         
         // Advance head index (monotonic counter)
-        headIndex++;
+        headIndex = headIndex + 1;
     }
 
     // Add newline if not already present
     if (len > 0 && data[len - 1] != '\n') {
         // Check if buffer is full BEFORE writing newline
         if (headIndex - tailIndex >= bufferSize) {
-            tailIndex++;
-            totalBytesLost++;
+            tailIndex = tailIndex + 1;
+            totalBytesLost = totalBytesLost + 1;
         }
         
         size_t physicalPos = headIndex % bufferSize;
         buffer[physicalPos] = '\n';
-        headIndex++;
+        headIndex = headIndex + 1;
     }
 
     // Release mutex
