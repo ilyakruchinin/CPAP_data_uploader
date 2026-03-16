@@ -38,10 +38,10 @@ CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10
 # Allows automatic CPU frequency scaling when tasks are idle.
 CONFIG_PM_ENABLE=y
 
-# FreeRTOS tick rate — 100 Hz is sufficient when CPU is locked at 80 MHz (no DFS).
-# No firmware operation requires sub-10 ms scheduling (PCNT is hardware, WiFi has
-# its own timers). Reduces ISR overhead by 90% compared to 1000 Hz.
-CONFIG_FREERTOS_HZ=100
+# FreeRTOS tick rate — Arduino ESP32 framework enforces CONFIG_FREERTOS_HZ=1000.
+# The check is in framework-arduinoespressif32/CMakeLists.txt line ~405.
+# Cannot be overridden in hybrid compile mode.
+# CONFIG_FREERTOS_HZ=1000
 
 # ── Tickless idle (required for auto light-sleep) ────────────────────────────
 # Suppresses tick ISRs during idle, allowing the CPU to sleep for longer periods

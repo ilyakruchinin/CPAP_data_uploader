@@ -2,6 +2,7 @@
 #define TRAFFIC_MONITOR_H
 
 #include <Arduino.h>
+#include <driver/pulse_cnt.h>
 
 /**
  * TrafficMonitor - PCNT-based SD bus activity detector
@@ -61,6 +62,8 @@ public:
 private:
     int _pin;
     bool _initialized;
+    pcnt_unit_handle_t _pcntUnit;
+    pcnt_channel_handle_t _pcntChannel;
     
     // 100ms sampling
     unsigned long _lastSampleTime;

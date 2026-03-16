@@ -6,7 +6,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "NetworkRecovery.h"
-#include <esp32/rom/md5_hash.h>
+#include <esp_rom_md5.h>
 #include <esp_task_wdt.h>
 
 // GTS Root R4 - Google Trust Services root CA certificate (expires June 22, 2036)
@@ -417,8 +417,8 @@ String SleepHQUploader::computeContentHash(fs::FS &sd, const String& localPath, 
     // Snapshot file size at open time - only hash this many bytes
     unsigned long snapshotSize = file.size();
     
-    struct MD5Context md5ctx;
-    MD5Init(&md5ctx);
+    md5_context_t md5ctx;
+    esp_rom_md5_init(&md5ctx);
     
     // Hash exactly snapshotSize bytes (not file.available() which can grow)
     uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE_MAX];
@@ -430,18 +430,18 @@ String SleepHQUploader::computeContentHash(fs::FS &sd, const String& localPath, 
         }
         size_t bytesRead = file.read(buffer, toRead);
         if (bytesRead == 0) break;  // EOF or read error
-        MD5Update(&md5ctx, buffer, bytesRead);
+        esp_rom_md5_update(&md5ctx, buffer, bytesRead);
         totalHashed += bytesRead;
     }
     file.close();
     hashedSize = totalHashed;
     
     // Append filename to hash
-    MD5Update(&md5ctx, (const uint8_t*)fileName.c_str(), fileName.length());
+    esp_rom_md5_update(&md5ctx, (const uint8_t*)fileName.c_str(), fileName.length());
     
     // Finalize
     uint8_t digest[16];
-    MD5Final(digest, &md5ctx);
+    esp_rom_md5_final(digest, &md5ctx);
     
     // Convert to hex string
     char hashStr[33];
@@ -971,8 +971,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             return false;
         }
         
-        struct MD5Context md5ctx;
-        MD5Init(&md5ctx);
+        md5_context_t md5ctx;
+        esp_rom_md5_init(&md5ctx);
         
         uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE_MAX];
         // Adaptive chunk size: smaller reads when heap is constrained
@@ -1003,7 +1003,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             readRetries = 0; // Reset retry counter on success
             
             // Update checksum with file data
-            MD5Update(&md5ctx, buffer, bytesRead);
+            esp_rom_md5_update(&md5ctx, buffer, bytesRead);
             
             // Write to TLS with retry and partial write handling
             size_t remainingToWrite = bytesRead;
@@ -1089,11 +1089,11 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         }
         
         // Append filename to hash: content_hash = MD5(file_content + filename)
-        MD5Update(&md5ctx, (const uint8_t*)fnStr, strlen(fnStr));
+        esp_rom_md5_update(&md5ctx, (const uint8_t*)fnStr, strlen(fnStr));
         
         // Finalize checksum — use stack buffer, no String allocation
         uint8_t digest[16];
-        MD5Final(digest, &md5ctx);
+        esp_rom_md5_final(digest, &md5ctx);
         char hashStr[33];
         for (int i = 0; i < 16; i++) {
             sprintf(hashStr + (i * 2), "%02x", digest[i]);

@@ -17,6 +17,8 @@ components/
 dependencies.lock
 sdkconfig
 sdkconfig.old
+sdkconfig.pico32-ota
+managed_components/
 !sdkconfig.defaults
 compile_commands.json
 

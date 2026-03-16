@@ -1,7 +1,9 @@
 #include <Arduino.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
+#if defined(CONFIG_BT_ENABLED) && CONFIG_BT_ENABLED
 #include <esp_bt.h>
+#endif
 #include <esp_pm.h>
 #include <esp_sleep.h>
 #include <driver/gpio.h>
@@ -227,13 +229,14 @@ void setup() {
     setCpuFrequencyMhz(80);
     
     // ── POWER: Release Bluetooth memory ──
-    // Firmware is WiFi-only. Release BT controller memory (~28 KB DRAM).
-    // Note: CONFIG_BT_ENABLED=n in sdkconfig does NOT strip BT from the Arduino
-    // framework's precompiled libraries. This runtime call is our only effective
-    // mechanism — it frees the BTDM controller's reserved DRAM regions.
+    // Firmware is WiFi-only. With pioarduino (source-compiled), CONFIG_BT_ENABLED=n
+    // strips BT at compile time — no runtime release needed and esp_bt.h is absent.
+    // With the old precompiled framework, runtime release was the only option.
     uint32_t btHeapBefore = ESP.getFreeHeap();
     uint32_t btMaxAllocBefore = ESP.getMaxAllocHeap();
+#if defined(CONFIG_BT_ENABLED) && CONFIG_BT_ENABLED
     esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+#endif
     uint32_t btHeapAfter = ESP.getFreeHeap();
     uint32_t btMaxAllocAfter = ESP.getMaxAllocHeap();
     
@@ -531,28 +534,23 @@ void setup() {
     
     // ── POWER: Configure Dynamic Frequency Scaling (DFS) + Auto Light-Sleep ──
     // With CONFIG_PM_ENABLE=y in sdkconfig, the CPU can automatically scale
-    // between min and max frequency when tasks are idle. The WiFi driver holds
-    // a PM lock during active operations, ensuring full speed when needed.
-    //
-    // When CPU_SPEED_MHZ=80 (default), max==min==80 → DFS is effectively
-    // disabled, eliminating PLL relock transients that stress the power supply.
-    // Users on non-constrained hardware can set CPU_SPEED_MHZ=160 to re-enable DFS.
+    // between min (40 MHz XTAL) and max frequency when tasks are idle.
+    // The WiFi driver holds its own PM lock at 80 MHz during active RF ops.
+    // The FSM PM lock (ESP_PM_CPU_FREQ_MAX) keeps CPU at max during uploads/TLS.
+    // The 40 MHz floor only applies in IDLE/COOLDOWN when all locks are released
+    // and the CPU is awake between light-sleep intervals.
     //
     // Auto light-sleep allows the CPU to sleep between WiFi DTIM intervals,
     // reducing idle current from ~20 mA to ~2-3 mA. A PM lock held in active
     // FSM states prevents sleep during PCNT counting, SD I/O, and uploads.
-    esp_pm_config_esp32_t pm_config = {
+    esp_pm_config_t pm_config = {
         .max_freq_mhz = targetCpuMhz,  // Respects CPU_SPEED_MHZ config (default 80)
-        .min_freq_mhz = 80,            // Floor at 80 MHz (WiFi PHY minimum)
+        .min_freq_mhz = 40,            // XTAL frequency — DFS floor when all PM locks released
         .light_sleep_enable = true      // Auto light-sleep in IDLE/COOLDOWN states
     };
     esp_err_t pm_err = esp_pm_configure(&pm_config);
     if (pm_err == ESP_OK) {
-        if (targetCpuMhz == 80) {
-            LOG("Power management: CPU locked at 80MHz (no DFS), auto light-sleep enabled");
-        } else {
-            LOGF("Power management: DFS enabled (80-%dMHz), auto light-sleep enabled", targetCpuMhz);
-        }
+        LOGF("Power management: DFS enabled (40-%dMHz), auto light-sleep enabled", targetCpuMhz);
     } else {
         LOGF("PM configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
     }
@@ -843,7 +841,7 @@ void handleUploading() {
         // Unsubscribe IDLE0 from task watchdog — upload task will monopolize Core 0
         // during TLS handshake (5-15s of CPU-intensive crypto), starving IDLE0.
         // Without this, IDLE0 can't feed the WDT and the system reboots.
-        esp_task_wdt_delete(xTaskGetIdleTaskHandleForCPU(0));
+        esp_task_wdt_delete(xTaskGetIdleTaskHandleForCore(0));
         
         // Pin to Core 0 (protocol core) — keeps Core 1 free for main loop + web server
         // Stack: 12KB — TLS buffers are on heap, task only needs stack for locals.
@@ -865,7 +863,7 @@ void handleUploading() {
                        ESP.getMaxAllocHeap());
             uploadTaskRunning = false;
             delete params;
-            esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
+            esp_task_wdt_add(xTaskGetIdleTaskHandleForCore(0));
 #ifdef ENABLE_WEBSERVER
             uploader->setWebServer(webServer);
 #endif
@@ -880,7 +878,7 @@ void handleUploading() {
         g_abortUploadFlag = false;  // Clear abort flag — task has stopped
         
         // Re-subscribe IDLE0 to task watchdog now that Core 0 is free
-        esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
+        esp_task_wdt_add(xTaskGetIdleTaskHandleForCore(0));
         
         // Restore web server handling in uploader
 #ifdef ENABLE_WEBSERVER
