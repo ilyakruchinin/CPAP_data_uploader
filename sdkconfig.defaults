@@ -66,45 +66,11 @@ CONFIG_FREERTOS_USE_TICKLESS_IDLE=n
 # to disable the detector entirely (at their own risk).
 CONFIG_ESP32_BROWNOUT_DET_LVL_SEL_0=y
 
-# ── TLS cipher optimization ──────────────────────────────────────────────────
-# Disable ChaCha20-Poly1305 — no hardware acceleration on ESP32.
-# ChaCha20 is 3-5x slower than HW AES on ESP32, generating unnecessary CPU load
-# and DFS transitions during TLS. Forces mbedtls to negotiate AES-GCM ciphers
-# which use the ESP32's dedicated AES and SHA hardware accelerators.
-CONFIG_MBEDTLS_CHACHA20_C=n
-CONFIG_MBEDTLS_CHACHAPOLY_C=n
-
-# Disable AES-256 — force AES-128 only (fewer rounds, less computation).
-# SleepHQ supports AES-128-GCM-SHA256 which provides adequate 128-bit security.
-# If SleepHQ ever drops AES-128 support, re-enable by changing to =y.
-CONFIG_MBEDTLS_AES_256_C=n
-
-# ── TLS heap fragmentation reduction ────────────────────────────────────────
-# NOTE: These mbedTLS buffer options only take effect if the Arduino-ESP32
-# framework recompiles mbedTLS from source.  Pre-compiled .a libraries in
-# the stock framework may ignore them.  Verify by checking max_alloc delta
-# before and after enabling these options.
-
-# Asymmetric record buffers: keep 16KB IN (server can send large TLS records)
-# but shrink OUT to 4KB (our HTTP requests/multipart headers are small).
-# Saves 12KB of persistent heap per TLS connection.
-CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
-CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
-CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
-
-# Allow mbedTLS to shrink I/O buffers after handshake to match the negotiated
-# maximum record size.  Can reclaim up to 12KB if the server negotiates a
-# smaller max_fragment_length.
-CONFIG_MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH=y
-
-# Don't keep the peer certificate chain in memory after verification.
-# Saves 2-4KB per connection — only needed during handshake.
-CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
-
-# ── Disable unused TLS features ─────────────────────────────────────────────
-# These reduce code size and attack surface. Session tickets and renegotiation
-# are server-initiated features we never use. DTLS is for UDP (we only use TCP).
-CONFIG_MBEDTLS_SSL_SESSION_TICKETS=n
-CONFIG_MBEDTLS_SSL_RENEGOTIATION=n
-CONFIG_MBEDTLS_SSL_DTLS_HELLO_VERIFY=n
-CONFIG_MBEDTLS_SSL_DTLS_CONNECTION_ID=n
+# ── mbedTLS ───────────────────────────────────────────────────────────────────
+# IMPORTANT: Do NOT customize mbedTLS settings here or in custom_sdkconfig.
+# The hybrid compile recompiles IDF libs (incl. mbedTLS) but NOT the Arduino
+# framework (WiFiClientSecure). Since WiFiClientSecure embeds mbedtls_ssl_context
+# and mbedtls_ssl_config structs directly, any config that changes struct sizes
+# (e.g. KEEP_PEER_CERTIFICATE, SESSION_TICKETS, RENEGOTIATION, DTLS options)
+# causes an ABI mismatch → memory corruption → InstrFetchProhibited crash
+# during TLS handshake. Use default mbedTLS settings only.
