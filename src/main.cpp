@@ -781,6 +781,10 @@ void handleAcquiring() {
 void uploadTaskFunction(void* pvParameters) {
     UploadTaskParams* params = (UploadTaskParams*)pvParameters;
     
+    // Subscribe this task to the task WDT so esp_task_wdt_reset() calls
+    // (from SleepHQUploader, NetworkRecovery) don't log "task not found".
+    esp_task_wdt_add(NULL);  // NULL = current task
+    
     g_uploadHeartbeat = millis();
     
     // NOTE: TLS pre-warm was removed here.  With custom asymmetric mbedTLS
@@ -794,6 +798,7 @@ void uploadTaskFunction(void* pvParameters) {
         LOG_ERROR("[Upload] Failed to acquire SD card control");
         uploadTaskResult = UploadResult::ERROR;
         uploadTaskComplete = true;
+        esp_task_wdt_delete(NULL);
         delete params;
         vTaskDelete(NULL);
         return;
@@ -812,6 +817,7 @@ void uploadTaskFunction(void* pvParameters) {
     uploadTaskResult = result;
     uploadTaskComplete = true;
     
+    esp_task_wdt_delete(NULL);  // Unsubscribe before self-delete
     delete params;
     vTaskDelete(NULL);  // Self-delete
 }
