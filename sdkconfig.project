@@ -71,7 +71,7 @@ CONFIG_LWIP_UDP_RECVMBOX_SIZE=6
 # the widest voltage headroom while still protecting against deep rail collapse.
 # Users with severe brownout issues can set BROWNOUT_DETECT=OFF in config.txt
 # to disable the detector entirely (at their own risk).
-CONFIG_ESP32_BROWNOUT_DET_LVL_SEL_0=y
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y
 
 # ── mbedTLS: struct-safe cipher removal ─────────────────────────────────────
 # The hybrid compile recompiles IDF libs (incl. mbedTLS) but NOT the Arduino
