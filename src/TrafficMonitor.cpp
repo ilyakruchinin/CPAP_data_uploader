@@ -19,6 +19,7 @@ TrafficMonitor::TrafficMonitor()
     , _longestIdleMs(0)
     , _totalActiveSamples(0)
     , _totalIdleSamples(0)
+    , _suspended(false)
 {
 }
 
@@ -82,7 +83,7 @@ void TrafficMonitor::begin(int pin) {
 }
 
 void TrafficMonitor::update() {
-    if (!_initialized) return;
+    if (!_initialized || _suspended) return;
     
     unsigned long now = millis();
     
@@ -151,17 +152,49 @@ uint32_t TrafficMonitor::getConsecutiveIdleMs() {
     return _consecutiveIdleMs;
 }
 
+void TrafficMonitor::suspend() {
+    if (!_initialized || _suspended) return;
+    
+    // Stop counting, then disable the unit.
+    // pcnt_unit_disable() releases the ESP_PM_APB_FREQ_MAX lock,
+    // allowing DFS to drop to 40 MHz and auto light-sleep to engage.
+    pcnt_unit_stop(_pcntUnit);
+    pcnt_unit_disable(_pcntUnit);
+    _suspended = true;
+    LOG_DEBUG("[POWER] PCNT suspended — APB lock released for light-sleep");
+}
+
+void TrafficMonitor::resume() {
+    if (!_initialized || !_suspended) return;
+    
+    // Re-enable the unit (reacquires ESP_PM_APB_FREQ_MAX lock),
+    // clear stale count accumulated while disabled, then restart.
+    pcnt_unit_enable(_pcntUnit);
+    pcnt_unit_clear_count(_pcntUnit);
+    pcnt_unit_start(_pcntUnit);
+    _suspended = false;
+    _lastSampleTime = millis();
+    _lastSecondTime = millis();
+    _secondPulseAccumulator = 0;
+    LOG_DEBUG("[POWER] PCNT resumed — APB lock reacquired");
+}
+
+bool TrafficMonitor::isSuspended() const {
+    return _suspended;
+}
+
 void TrafficMonitor::resetIdleTracking() {
     _consecutiveIdleMs = 0;
     _lastSampleTime = millis();          // Prevent stale elapsed after COOLDOWN
     _secondPulseAccumulator = 0;
     _lastSecondTime = millis();
-    // Drain any pulses accumulated during COOLDOWN/IDLE so the first
-    // update() sample starts clean.  Without this, a 16-bit PCNT overflow
-    // during a 10-minute COOLDOWN could read as 0 → false idle.
-    int drain = 0;
-    pcnt_unit_get_count(_pcntUnit, &drain);
-    pcnt_unit_clear_count(_pcntUnit);
+    // Drain any pulses accumulated so the first update() sample starts clean.
+    // Skip if suspended — resume() already clears the count.
+    if (!_suspended) {
+        int drain = 0;
+        pcnt_unit_get_count(_pcntUnit, &drain);
+        pcnt_unit_clear_count(_pcntUnit);
+    }
 }
 
 const ActivitySample* TrafficMonitor::getSampleBuffer() const {

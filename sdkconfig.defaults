@@ -52,11 +52,12 @@ CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 
 # ── Tickless idle ─────────────────────────────────────────────────────────────
-# DISABLED: tickless idle is only needed for auto light-sleep. Light-sleep is
-# currently disabled because GPIO wakeup on CS_SENSE (GPIO 33) conflicts with
-# the PCNT driver that owns the same pin, causing a software panic ~2 min
-# after boot. DFS (frequency scaling) still works without tickless idle.
-CONFIG_FREERTOS_USE_TICKLESS_IDLE=n
+# ENABLED: required for auto light-sleep. The original GPIO wakeup conflict
+# with PCNT on CS_SENSE (GPIO 33) is resolved by suspending the PCNT unit
+# in IDLE/COOLDOWN states (releasing its PM lock) and using FreeRTOS tickless
+# idle for periodic timer-based wakeup instead of GPIO wakeup.
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
 
 # ── Brownout detector threshold ─────────────────────────────────────────────
 # Use the default brownout level 0 (~2.43V). Level 7 (~2.74V) was tested but
@@ -66,11 +67,22 @@ CONFIG_FREERTOS_USE_TICKLESS_IDLE=n
 # to disable the detector entirely (at their own risk).
 CONFIG_ESP32_BROWNOUT_DET_LVL_SEL_0=y
 
-# ── mbedTLS ───────────────────────────────────────────────────────────────────
-# IMPORTANT: Do NOT customize mbedTLS settings here or in custom_sdkconfig.
+# ── mbedTLS: struct-safe cipher removal ───────────────────────────────────────
 # The hybrid compile recompiles IDF libs (incl. mbedTLS) but NOT the Arduino
-# framework (WiFiClientSecure). Since WiFiClientSecure embeds mbedtls_ssl_context
-# and mbedtls_ssl_config structs directly, any config that changes struct sizes
-# (e.g. KEEP_PEER_CERTIFICATE, SESSION_TICKETS, RENEGOTIATION, DTLS options)
-# causes an ABI mismatch → memory corruption → InstrFetchProhibited crash
-# during TLS handshake. Use default mbedTLS settings only.
+# framework (WiFiClientSecure). Options that change struct sizes are FORBIDDEN:
+#   KEEP_PEER_CERTIFICATE, SESSION_TICKETS, RENEGOTIATION, DTLS options,
+#   ASYMMETRIC_CONTENT_LEN, VARIABLE_BUFFER_LENGTH
+# However, cipher algorithm removal is SAFE — it only removes code/ciphersuites,
+# not struct fields. Removing ChaCha20/Poly1305 forces AES-GCM negotiation
+# which uses the ESP32's hardware AES accelerator (faster + lower power).
+CONFIG_MBEDTLS_CHACHA20_C=n
+CONFIG_MBEDTLS_POLY1305_C=n
+CONFIG_MBEDTLS_CHACHAPOLY_C=n
+
+# ── WiFi sleep optimizations ──────────────────────────────────────────────────
+# Place WiFi TBTT/beacon processing in IRAM for faster sleep/wake transitions.
+# Costs ~1.3KB IRAM but reduces average current during modem-sleep.
+CONFIG_ESP_WIFI_SLP_IRAM_OPT=y
+# Reduce minimum WiFi active time after wake (default 50ms → 8ms).
+# Allows faster return to modem-sleep after processing beacon/data.
+CONFIG_ESP_WIFI_SLP_DEFAULT_MIN_ACTIVE_TIME=8
