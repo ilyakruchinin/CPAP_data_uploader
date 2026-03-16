@@ -32,6 +32,13 @@ public:
     void begin(int pin);              // Initialize PCNT on given GPIO
     void update();                    // Call every loop() — non-blocking ~100ms sample
     
+    // Power management: suspend/resume PCNT for light-sleep
+    // suspend() stops and disables the PCNT unit, releasing its ESP_PM_APB_FREQ_MAX
+    // lock so auto light-sleep can engage. resume() re-enables and restarts counting.
+    void suspend();                   // Call when entering IDLE/COOLDOWN
+    void resume();                    // Call when leaving IDLE/COOLDOWN
+    bool isSuspended() const;         // True if PCNT is suspended
+    
     // Activity detection
     bool isBusy();                    // True if activity detected in last sample window
     bool isIdleFor(uint32_t ms);      // True if no activity for at least ms milliseconds
@@ -73,6 +80,7 @@ private:
     
     // Idle tracking
     uint32_t _consecutiveIdleMs;
+    bool _suspended;
     
     // 1-second aggregation for sample buffer
     unsigned long _lastSecondTime;

@@ -162,20 +162,28 @@ extern volatile bool g_abortUploadFlag;
 void transitionTo(UploadState newState) {
     LOGF("[FSM] %s -> %s", getStateName(currentState), getStateName(newState));
     
-    // ── POWER: Manage PM lock for auto light-sleep ──
+    // ── POWER: Manage PM lock + PCNT for auto light-sleep ──
     // Hold the lock in active states (CPU must stay awake for PCNT, SD I/O, network).
     // Release in IDLE and COOLDOWN so auto light-sleep can engage between DTIM intervals.
-    if (g_pmLock) {
-        bool newStateIsLowPower = (newState == UploadState::IDLE || newState == UploadState::COOLDOWN);
-        bool oldStateIsLowPower = (currentState == UploadState::IDLE || currentState == UploadState::COOLDOWN);
-        
-        if (newStateIsLowPower && !oldStateIsLowPower) {
+    // Also suspend/resume the PCNT unit — its ESP_PM_APB_FREQ_MAX lock blocks light-sleep.
+    bool newStateIsLowPower = (newState == UploadState::IDLE || newState == UploadState::COOLDOWN);
+    bool oldStateIsLowPower = (currentState == UploadState::IDLE || currentState == UploadState::COOLDOWN);
+    
+    if (newStateIsLowPower && !oldStateIsLowPower) {
+        trafficMonitor.suspend();
+        if (g_pmLock) {
             esp_pm_lock_release(g_pmLock);
-            LOG_DEBUG("[POWER] PM lock released — light-sleep enabled");
-        } else if (!newStateIsLowPower && oldStateIsLowPower) {
-            esp_pm_lock_acquire(g_pmLock);
-            LOG_DEBUG("[POWER] PM lock acquired — light-sleep inhibited");
         }
+        LOG_DEBUG("[POWER] Low-power state: PM lock released, PCNT suspended — light-sleep enabled");
+        #if CORE_DEBUG_LEVEL >= 3
+        esp_pm_dump_locks(stdout);
+        #endif
+    } else if (!newStateIsLowPower && oldStateIsLowPower) {
+        if (g_pmLock) {
+            esp_pm_lock_acquire(g_pmLock);
+        }
+        trafficMonitor.resume();
+        LOG_DEBUG("[POWER] Active state: PM lock acquired, PCNT resumed — light-sleep inhibited");
     }
     
     currentState = newState;
@@ -560,27 +568,26 @@ void setup() {
     }
     
     // ── POWER: Configure Dynamic Frequency Scaling (DFS) + Auto Light-Sleep ──
-    // With CONFIG_PM_ENABLE=y in sdkconfig, the CPU can automatically scale
-    // between min (40 MHz XTAL) and max frequency when tasks are idle.
+    // With CONFIG_PM_ENABLE=y and CONFIG_FREERTOS_USE_TICKLESS_IDLE=y, the CPU
+    // automatically scales between min (40 MHz XTAL) and max, and enters
+    // light-sleep when all PM locks are released during FreeRTOS idle periods.
+    //
     // The WiFi driver holds its own PM lock at 80 MHz during active RF ops.
     // The FSM PM lock (ESP_PM_CPU_FREQ_MAX) keeps CPU at max during uploads/TLS.
-    // The 40 MHz floor only applies in IDLE/COOLDOWN when all locks are released
-    // and the CPU is awake between light-sleep intervals.
+    // The PCNT driver holds ESP_PM_APB_FREQ_MAX while enabled (blocks light-sleep).
     //
-    // Light-sleep is DISABLED for now.  GPIO wakeup on CS_SENSE (GPIO 33)
-    // conflicts with the PCNT driver that owns the same pin for bus-activity
-    // counting, causing a software panic ~2 min after boot.  DFS alone still
-    // scales the CPU from max down to 40 MHz XTAL when all PM locks are
-    // released, cutting idle current significantly.
-    // TODO: Re-enable light-sleep after isolating the GPIO wakeup conflict.
+    // In IDLE/COOLDOWN states, transitionTo() suspends PCNT (releasing its lock)
+    // and releases the FSM lock, allowing both DFS down to 40 MHz and auto
+    // light-sleep. FreeRTOS tickless idle handles timer-based wakeup automatically.
+    // No GPIO wakeup needed — avoids the PCNT/GPIO interrupt conflict.
     esp_pm_config_t pm_config = {
         .max_freq_mhz = targetCpuMhz,  // Respects CPU_SPEED_MHZ config (default 80)
         .min_freq_mhz = 40,            // XTAL frequency — DFS floor when all PM locks released
-        .light_sleep_enable = false     // DISABLED — PCNT/GPIO wakeup conflict (see above)
+        .light_sleep_enable = true      // Auto light-sleep when all PM locks released
     };
     esp_err_t pm_err = esp_pm_configure(&pm_config);
     if (pm_err == ESP_OK) {
-        LOGF("Power management: DFS enabled (40-%dMHz), light-sleep disabled", targetCpuMhz);
+        LOGF("Power management: DFS (40-%dMHz) + auto light-sleep ENABLED", targetCpuMhz);
     } else {
         LOGF("PM configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
     }
@@ -593,16 +600,14 @@ void setup() {
     }
     LOGF("CPU frequency: %dMHz", getCpuFrequencyMhz());
     
-    // ── POWER: GPIO wakeup for auto light-sleep — DISABLED ──
-    // GPIO 33 (CS_SENSE) is owned by the PCNT driver for bus-activity counting.
-    // Calling gpio_wakeup_enable() on a PCNT-managed GPIO causes an interrupt
-    // conflict (GPIO_INTR_LOW_LEVEL fires continuously while pin is low on the
-    // shared GPIO 32-39 interrupt handler), leading to a software panic.
-    // When light-sleep is re-enabled, wakeup must use a different mechanism
-    // (e.g., PCNT wake stub or RTC timer) that doesn't conflict with PCNT.
-    // gpio_wakeup_enable((gpio_num_t)CS_SENSE, GPIO_INTR_LOW_LEVEL);
-    // esp_sleep_enable_gpio_wakeup();
-    LOG_DEBUG("GPIO wakeup DISABLED (PCNT owns CS_SENSE GPIO)");
+    // ── POWER: Light-sleep wakeup strategy ──
+    // No explicit GPIO wakeup is configured. Auto light-sleep wakeup is handled by:
+    //   1. FreeRTOS tickless idle timer (wakes at next scheduled tick/task unblock)
+    //   2. WiFi driver (wakes on DTIM beacon for modem-sleep)
+    // GPIO wakeup on CS_SENSE (GPIO 33) was removed because the PCNT driver owns
+    // that pin. Instead, PCNT is suspended in low-power states (releasing its PM
+    // lock), and FreeRTOS periodic wakes handle activity polling.
+    LOG_DEBUG("[POWER] Light-sleep wakeup: FreeRTOS tickless idle + WiFi DTIM");
     
     // ── POWER: Create PM lock for active FSM states ──
     // Acquired in LISTENING/ACQUIRING/UPLOADING/RELEASING/MONITORING/COMPLETE
