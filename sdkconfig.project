@@ -60,7 +60,7 @@ CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10
 # Reduced from defaults to save heap. These values were validated during the
 # replatform and handle our typical upload traffic (HTTP/TLS + SMB).
 CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=4
-CONFIG_LWIP_PBUF_POOL_SIZE=16
+CONFIG_LWIP_PBUF_POOL_SIZE=14
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=32
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=8
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=6
@@ -85,10 +85,10 @@ CONFIG_MBEDTLS_CHACHA20_C=n
 CONFIG_MBEDTLS_POLY1305_C=n
 CONFIG_MBEDTLS_CHACHAPOLY_C=n
 
-# ── WiFi sleep optimizations (REMOVED) ───────────────────────────────────────
-# CONFIG_ESP_WIFI_SLP_IRAM_OPT=y was removed to recover ~2-4KB DRAM.
-# Its sub-select PM_SLP_DEFAULT_PARAMS_OPT adds sleep parameter tables to DRAM,
-# reducing the initial heap pool. After TLS handshake fragmentation, this pushed
-# max_alloc below the ~38KB threshold needed for subsequent TLS connects.
-# The main power savings (light-sleep, tickless idle, PCNT suspend/resume) are
-# retained without this option. WiFi modem-sleep still works at default timing.
+# ── WiFi sleep optimizations ────────────────────────────────────────────────
+# Place WiFi TBTT/beacon processing in IRAM for faster sleep/wake transitions.
+# Costs ~1.3KB IRAM but reduces average current during modem-sleep.
+CONFIG_ESP_WIFI_SLP_IRAM_OPT=y
+# Reduce minimum WiFi active time after wake (default 50ms → 8ms).
+# Allows faster return to modem-sleep after processing beacon/data.
+CONFIG_ESP_WIFI_SLP_DEFAULT_MIN_ACTIVE_TIME=8
