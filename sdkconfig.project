@@ -59,7 +59,7 @@ CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10
 # ── LWIP / WiFi buffer tuning ───────────────────────────────────────────────
 # Reduced from defaults to save heap. These values were validated during the
 # replatform and handle our typical upload traffic (HTTP/TLS + SMB).
-CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
 CONFIG_LWIP_PBUF_POOL_SIZE=12
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=32
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=8
