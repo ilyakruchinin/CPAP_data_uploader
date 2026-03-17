@@ -1253,6 +1253,10 @@ void CpapWebServer::handleOTAUpload() {
 }
 
 // POST /ota-upload - Handle completion of firmware file upload
+// Called by WebServer after the upload handler finishes.  handleOTAUpload()
+// already sends a 200 on success (before ESP.restart()), so we must only
+// send a response here if one has NOT been sent yet — otherwise the client
+// sees duplicate Content-Length headers (ERR_RESPONSE_HEADERS_MULTIPLE_CONTENT_LENGTH).
 void CpapWebServer::handleOTAUploadComplete() {
     LOG_DEBUG("[OTA] handleOTAUploadComplete() called");
     
@@ -1262,21 +1266,15 @@ void CpapWebServer::handleOTAUploadComplete() {
         return;
     }
     
-    // This is called after the upload is complete
-    // The actual upload processing happens in handleOTAUpload()
-    // Here we just send the final response if one hasn't been sent already
-    
-    // Check if there was an error during upload
+    // handleOTAUpload() sets successResponseSent when it already sent a 200.
+    // In that path the device is about to restart — nothing more to send.
+    // We only need to respond for error cases that didn't send their own response.
     String error = otaManager->getLastError();
     if (!error.isEmpty()) {
         LOG_ERROR("[OTA] Upload completed with error");
         server->send(500, "application/json", "{\"success\":false,\"message\":\"Upload failed: " + error + "\"}");
-    } else {
-        // If we reach here and there's no error, it means the update was successful
-        // but the device hasn't restarted yet (which shouldn't normally happen)
-        LOG_DEBUG("[OTA] Upload completed successfully");
-        server->send(200, "application/json", "{\"success\":true,\"message\":\"Upload completed successfully! Device will restart shortly.\"}");
     }
+    // Success case: response already sent by handleOTAUpload() — do NOT send again.
 }
 
 // POST /ota-url - Handle firmware download from URL
