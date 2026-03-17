@@ -6,8 +6,9 @@ __pycache__/
 *.pyc
 backup_*.tar.gz
 
-# Components (downloaded by setup script)
+# Components (downloaded by setup script or ESP-IDF component manager)
 components/
+managed_components/
 
 # Build artifacts
 *.o
@@ -15,9 +16,9 @@ components/
 *.elf
 *.bin
 dependencies.lock
-sdkconfig
-sdkconfig.old
+sdkconfig*
 !sdkconfig.defaults
+!sdkconfig.project
 compile_commands.json
 
 # Auto-generated files
