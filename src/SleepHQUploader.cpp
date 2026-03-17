@@ -1025,6 +1025,10 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                     writePtr += written;
                     totalSent += written;
                     writeRetries = 0; // Reset retry counter on success
+                    // Feed WDT after each successful partial write — a single
+                    // tlsClient->write() can block for seconds when TCP flow
+                    // control stalls, and we must not starve the 30s task WDT.
+                    esp_task_wdt_reset();
                 } else {
                     // Write failed or returned 0 (buffer full / EAGAIN)
                     if (!tlsClient->connected()) {
@@ -1035,6 +1039,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                     
                     if (writeRetries < 10) {
                         LOG_WARNF("[SleepHQ] Write returned 0/fail at %lu/%lu, retrying (%d/10)...", totalSent, fileSize, writeRetries + 1);
+                        esp_task_wdt_reset();  // feed WDT during retry back-off
                         delay(500); // Wait longer for socket buffer to drain
                         writeRetries++;
                         yield();

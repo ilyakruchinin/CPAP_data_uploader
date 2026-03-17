@@ -423,7 +423,7 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 
 <script>
 var cfg={},monPoll=null,logPoll=null,curTab='dash',monActive=false;
-var heapHistory=[],MAX_HEAP_SAMPLES=60,currentFsmState='',prevHelpHtml='';
+var heapHistory=[],MAX_HEAP_HISTORY_MS=120000,HEAP_GAP_THRESHOLD_MS=6500,currentFsmState='',prevHelpHtml='';
 function tab(t){
   ['dash','logs','cfg','mon','mem','ota'].forEach(function(x){
     document.getElementById(x).classList.toggle('on',x===t);
@@ -572,10 +572,11 @@ function renderStatus(d){
   var ma=maV?Math.round(maV/1024)+' KB':'\u2014';
   set('d-fh',fh);set('d-ma',ma);
   set('hd-fh',fh);set('hd-ma',ma);
-  if(fhV){heapHistory.push({fh:fhV,ma:maV});if(heapHistory.length>MAX_HEAP_SAMPLES)heapHistory.shift();}
+  var now=Date.now(),cutoff=now-MAX_HEAP_HISTORY_MS;
+  if(fhV){heapHistory.push({fh:fhV,ma:maV,ts:now});while(heapHistory.length&&heapHistory[0].ts<cutoff)heapHistory.shift();}
   var c0=d.cpu0||0,c1=d.cpu1||0;
   set('hd-c0',c0+'%');set('hd-c1',c1+'%');
-  cpuHistory.push({c0:c0,c1:c1});if(cpuHistory.length>MAX_HEAP_SAMPLES)cpuHistory.shift();
+  cpuHistory.push({c0:c0,c1:c1,ts:now});while(cpuHistory.length&&cpuHistory[0].ts<cutoff)cpuHistory.shift();
   if(curTab==='mem'){updateHeapChart();updateCpuChart();}
   var bb=document.getElementById('brownout-banner');
   if(bb)bb.style.display=(cfg.brownout_detect_mode==='OFF')?'block':'none';
@@ -599,20 +600,23 @@ function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval
 document.addEventListener('visibilitychange',function(){if(!document.hidden){statusFailCount=0;}});
 
 var cpuHistory=[];
+function tsToX(ts,tMin,tMax,W){return tMin===tMax?W/2:((ts-tMin)/(tMax-tMin))*(W-2)+1;}
 function updateHeapChart(){
   var svg=document.getElementById('heap-svg');
   if(!svg||heapHistory.length<2)return;
-  var W=600,H=200,n=heapHistory.length;
+  var W=600,H=200,now=Date.now();
+  var tMin=now-MAX_HEAP_HISTORY_MS,tMax=now;
   var maxVal=0;
   heapHistory.forEach(function(s){if(s.fh>maxVal)maxVal=s.fh;});
   if(maxVal<65536)maxVal=65536;
   var ptsFh='',ptsMa='';
   heapHistory.forEach(function(s,i){
-    var x=((W-2)*i/(MAX_HEAP_SAMPLES-1)+1).toFixed(1);
+    var x=tsToX(s.ts,tMin,tMax,W).toFixed(1);
     var yFh=(H-(s.fh/maxVal)*(H-14)-6).toFixed(1);
     var yMa=(H-(s.ma/maxVal)*(H-14)-6).toFixed(1);
-    ptsFh+=(i===0?'M':'L')+x+' '+yFh;
-    ptsMa+=(i===0?'M':'L')+x+' '+yMa;
+    var gap=i>0&&(s.ts-heapHistory[i-1].ts)>HEAP_GAP_THRESHOLD_MS;
+    ptsFh+=(i===0||gap?'M':'L')+x+' '+yFh;
+    ptsMa+=(i===0||gap?'M':'L')+x+' '+yMa;
   });
   var grid='';
   [0.25,0.5,0.75].forEach(function(f){
@@ -634,14 +638,16 @@ function updateHeapChart(){
 function updateCpuChart(){
   var svg=document.getElementById('cpu-svg');
   if(!svg||cpuHistory.length<2)return;
-  var W=600,H=150,n=cpuHistory.length;
+  var W=600,H=150,now=Date.now();
+  var tMin=now-MAX_HEAP_HISTORY_MS,tMax=now;
   var ptsC0='',ptsC1='';
   cpuHistory.forEach(function(s,i){
-    var x=((W-2)*i/(MAX_HEAP_SAMPLES-1)+1).toFixed(1);
+    var x=tsToX(s.ts,tMin,tMax,W).toFixed(1);
     var y0=(H-(s.c0/100)*(H-14)-6).toFixed(1);
     var y1=(H-(s.c1/100)*(H-14)-6).toFixed(1);
-    ptsC0+=(i===0?'M':'L')+x+' '+y0;
-    ptsC1+=(i===0?'M':'L')+x+' '+y1;
+    var gap=i>0&&(s.ts-cpuHistory[i-1].ts)>HEAP_GAP_THRESHOLD_MS;
+    ptsC0+=(i===0||gap?'M':'L')+x+' '+y0;
+    ptsC1+=(i===0||gap?'M':'L')+x+' '+y1;
   });
   var grid='';
   [25,50,75].forEach(function(pct){
