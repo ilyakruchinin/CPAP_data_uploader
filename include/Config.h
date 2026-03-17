@@ -82,8 +82,8 @@ private:
     WifiPowerSaving wifiPowerSaving;
     BrownoutDetectMode brownoutDetectMode;
     
-    // Credential storage mode flags
-    bool storePlainText;
+    // Credential masking mode flags
+    bool maskCredentials;
     bool credentialsInFlash;
     
     // Preferences object for secure credential storage
@@ -165,8 +165,8 @@ public:
     WifiPowerSaving getWifiPowerSaving() const;
     BrownoutDetectMode getBrownoutDetectMode() const;
     
-    // Credential storage mode getters
-    bool isStoringPlainText() const;
+    // Credential masking mode getters
+    bool isMaskingCredentials() const;
     bool areCredentialsInFlash() const;
     
 private:

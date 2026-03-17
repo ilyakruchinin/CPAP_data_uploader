@@ -697,12 +697,12 @@ When secure mode is enabled (default), the system automatically migrates credent
 
 ```
 Boot → Load config.txt
- ├─ STORE_CREDENTIALS_PLAIN_TEXT = true?
- │  └─ YES → Use plain text (no migration)
+ ├─ MASK_CREDENTIALS = true?
+ │  └─ YES → Migrate to NVS + Censor config.txt
  │
- └─ NO/ABSENT → Check if censored
-    ├─ YES → Load from NVS
-    └─ NO → Migrate to NVS + Censor config.txt
+ └─ NO/ABSENT (default) → Use plain text (no migration)
+    ├─ Contains ***STORED_IN_FLASH***? → Log error, prompt re-entry
+    └─ Has plain text credentials → Use directly
 ```
 
 ### Error Handling
@@ -790,7 +790,7 @@ pio test -e native -f test_config
 1. **Test Secure Mode (Default):**
   ```bash
   # 1. Create config.txt with plain text credentials
-  # 2. Set STORE_CREDENTIALS_PLAIN_TEXT = false or omit
+  # 2. Leave MASK_CREDENTIALS = false or omit (default)
   # 3. Flash and boot device
   # 4. Check serial output for migration messages
   # 5. Verify config.txt shows ***STORED_IN_FLASH***
@@ -800,7 +800,7 @@ pio test -e native -f test_config
 
 2. **Test Plain Text Mode:**
   ```bash
-  # 1. Set STORE_CREDENTIALS_PLAIN_TEXT = true
+  # 1. Set MASK_CREDENTIALS = true
   # 2. Flash and boot device
   # 3. Verify credentials remain in config.txt
   # 4. Verify web interface shows actual values
@@ -809,7 +809,7 @@ pio test -e native -f test_config
 3. **Test Migration:**
   ```bash
   # 1. Start with plain text config
-  # 2. Change STORE_CREDENTIALS_PLAIN_TEXT to false
+  # 2. Remove MASK_CREDENTIALS (or set to false)
   # 3. Reboot device
   # 4. Verify migration occurs
   # 5. Verify system continues to work

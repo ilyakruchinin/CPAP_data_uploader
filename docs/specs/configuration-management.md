@@ -23,10 +23,10 @@ ENDPOINT = //192.168.1.100/cpap_backups
 - Automatic trimming of leading/trailing whitespace from key and value
 
 ### Credential Security
-- **Secure Mode (default)**: Stores passwords in ESP32 flash memory
-- **Plain Text Mode**: For debugging only (`STORE_CREDENTIALS_PLAIN_TEXT = true`)
-- **Censoring**: Replaces stored passwords with `***STORED_IN_FLASH***` in config file
+- **Plaintext Mode (default)**: Credentials stay in `config.txt` as plaintext — survives full firmware flashes
+- **Masked Mode**: Opt-in via `MASK_CREDENTIALS = true` — migrates passwords to ESP32 NVS flash and replaces with `***STORED_IN_FLASH***` in config file
 - **Automatic Detection**: Detects password changes and updates secure storage
+- **Safety**: If `***STORED_IN_FLASH***` found without `MASK_CREDENTIALS = true`, logs an error prompting re-entry
 
 ### Backend Support
 - **SMB**: Network shares (Windows, NAS, Samba)

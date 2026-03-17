@@ -382,21 +382,17 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
 
 ### Credential Security
 
-The system automatically secures your WiFi and endpoint passwords by moving them to the ESP32's internal flash memory.
+By default, credentials stay as plaintext in `config.txt`. This is the safest option — your passwords survive full firmware flashes without any extra steps.
 
-**How it works:**
-1. You put plain text passwords in `config.txt`
-2. On first boot, the device reads them and saves them to secure storage
-3. The device updates `config.txt` replacing passwords with `***STORED_IN_FLASH***`
-4. On subsequent boots, it uses the secure values
+**To update a password:** Edit `config.txt` directly.
 
-**To update a password:**
-- Just replace `***STORED_IN_FLASH***` with your new plain text password in `config.txt`
-- The device will detect the change, update the secure storage, and re-censor the file
+**Optional: credential masking**
+- Add `MASK_CREDENTIALS = true` to your `config.txt`
+- On next boot, passwords will be moved to encrypted ESP32 flash (NVS) and replaced with `***STORED_IN_FLASH***`
+- On subsequent boots, credentials are loaded from NVS instead of `config.txt`
+- To update a masked password, replace `***STORED_IN_FLASH***` with the new plaintext value — the device will re-migrate it
 
-**To disable security (for debugging):**
-- Add `STORE_CREDENTIALS_PLAIN_TEXT = true` to your `config.txt`
-- Passwords will remain visible in the file
+> **Warning:** A full (non-OTA) firmware flash erases NVS. After such a flash with masking enabled, you must re-enter all passwords in `config.txt`. OTA updates are not affected.
 
 ---
 

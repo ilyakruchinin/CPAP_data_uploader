@@ -35,7 +35,7 @@ Config::Config() :
     _hasCloudEndpoint(false),
     _hasWebdavEndpoint(false),
     
-    storePlainText(false),  // Default: secure mode
+    maskCredentials(false),  // Default: plaintext — credentials stay in config.txt
     credentialsInFlash(false),  // Will be set during loadFromSD
     
     // Power management defaults (optimized for AirSense 11 compatibility)
@@ -55,7 +55,7 @@ bool Config::initPreferences() {
         LOG_ERROR("Failed to initialize Preferences namespace");
         LOG("Falling back to plain text credential storage");
         // Fall back to plain text mode on failure
-        storePlainText = true;
+        maskCredentials = false;
         credentialsInFlash = false;
         return false;
     }
@@ -232,8 +232,8 @@ void Config::setConfigValue(String key, String value) {
         wifiTxPower = parseWifiTxPower(value);
     } else if (key == "WIFI_PWR_SAVING") {
         wifiPowerSaving = parseWifiPowerSaving(value);
-    } else if (key == "STORE_CREDENTIALS_PLAIN_TEXT") {
-        storePlainText = (value.equalsIgnoreCase("true") || value.toInt() == 1);
+    } else if (key == "MASK_CREDENTIALS") {
+        maskCredentials = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "MINIMIZE_REBOOTS") {
         minimizeReboots = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "BROWNOUT_DETECT") {
@@ -416,21 +416,49 @@ bool Config::loadFromSD(fs::FS &sd) {
     
     // Step 2: Handle secure storage logic
     
-    if (storePlainText) {
+    if (!maskCredentials) {
         LOG_DEBUG("========================================");
-        LOG_DEBUG("PLAIN TEXT MODE: Credentials will be stored in config.txt");
+        LOG_DEBUG("PLAIN TEXT MODE: Credentials stored in config.txt");
         LOG_DEBUG("========================================");
         credentialsInFlash = false;
+        
+        // Detect leftover censored placeholders from a previous MASK_CREDENTIALS=true session.
+        // This happens when a user upgrades firmware or disables masking after credentials
+        // were already migrated to NVS. Log a loud error so the user knows to re-enter them.
+        bool anyCensored = false;
+        if (isCensored(wifiPassword)) {
+            LOG_ERROR("WiFi password is '***STORED_IN_FLASH***' but MASK_CREDENTIALS is off.");
+            LOG_ERROR("NVS data may be lost after a full (non-OTA) flash. Please re-enter your WiFi password in config.txt.");
+            anyCensored = true;
+        }
+        if (isCensored(endpointPassword)) {
+            LOG_ERROR("Endpoint password is '***STORED_IN_FLASH***' but MASK_CREDENTIALS is off.");
+            LOG_ERROR("Please re-enter your endpoint password in config.txt.");
+            anyCensored = true;
+        }
+        if (isCensored(cloudClientSecret)) {
+            LOG_ERROR("Cloud client secret is '***STORED_IN_FLASH***' but MASK_CREDENTIALS is off.");
+            LOG_ERROR("Please re-enter your cloud client secret in config.txt.");
+            anyCensored = true;
+        }
+        if (anyCensored) {
+            LOG_ERROR("========================================");
+            LOG_ERROR("ACTION REQUIRED: One or more credentials contain the placeholder");
+            LOG_ERROR("'***STORED_IN_FLASH***'. These cannot be loaded because MASK_CREDENTIALS");
+            LOG_ERROR("is off (or was never set). Edit config.txt on the SD card and replace");
+            LOG_ERROR("the placeholder with your actual password/secret.");
+            LOG_ERROR("========================================");
+        }
     } else {
         LOG_DEBUG("========================================");
-        LOG_DEBUG("SECURE MODE: Credentials will be stored in flash memory");
+        LOG_DEBUG("MASK MODE: Credentials will be stored in flash memory (NVS)");
         LOG_DEBUG("========================================");
         
         // Initialize Preferences
         if (!initPreferences()) {
             LOG_ERROR("Failed to initialize Preferences");
             LOG("Falling back to plain text mode for this session");
-            storePlainText = true;
+            maskCredentials = false;
             credentialsInFlash = false;
         } else {
             // Check loaded credentials for censorship
@@ -454,14 +482,14 @@ bool Config::loadFromSD(fs::FS &sd) {
             
             credentialsInFlash = (wifiCensored || endpointCensored || cloudSecretCensored);
             
-            // Check for migration needed (plaintext credentials present in secure mode)
+            // Check for migration needed (plaintext credentials present in mask mode)
             bool needsMigration = false;
             if (!wifiPassword.isEmpty() && !wifiCensored) needsMigration = true;
             if (!endpointPassword.isEmpty() && !endpointCensored) needsMigration = true;
             if (!cloudClientSecret.isEmpty() && !cloudSecretCensored) needsMigration = true;
             
             if (needsMigration) {
-                LOG("New plain text credentials detected in secure mode - attempting migration");
+                LOG("New plain text credentials detected in mask mode - attempting migration");
                 if (migrateToSecureStorage(sd)) {
                     credentialsInFlash = true;
                 }
@@ -560,7 +588,7 @@ bool Config::loadFromSD(fs::FS &sd) {
              hasSmbEndpoint() ? "YES" : "NO",
              hasCloudEndpoint() ? "YES" : "NO",
              hasWebdavEndpoint() ? "YES" : "NO");
-        LOG_DEBUGF("Storage mode: %s", storePlainText ? "PLAIN TEXT" : "SECURE");
+        LOG_DEBUGF("Storage mode: %s", maskCredentials ? "MASKED (NVS)" : "PLAIN TEXT");
         LOG_DEBUGF("Credentials in flash: %s", credentialsInFlash ? "YES" : "NO");
         // ... (logging continues)
         LOG("========================================");
@@ -586,7 +614,7 @@ bool Config::getDebugMode() const { return debugMode; }
 bool Config::valid() const { return isValid; }
 
 // Credential storage mode getters
-bool Config::isStoringPlainText() const { return storePlainText; }
+bool Config::isMaskingCredentials() const { return maskCredentials; }
 bool Config::areCredentialsInFlash() const { return credentialsInFlash; }
 
 // Cloud upload getters

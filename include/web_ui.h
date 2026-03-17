@@ -793,17 +793,12 @@ function _appendLogs(text){
       while(startFrom<lines.length&&!lines[startFrom].trim())startFrom++;
       newLines=lines.slice(startFrom);
     } else {
-      // Genuinely new reboot — insert separator.
-      // Search backwards from boot banner for the === BOOT separator
-      // (written by enableLogSaving on boot) to capture pre-reboot context
-      // like "Rebooting for clean state reset..." that's only in NAND syslog.
+      // Genuinely new reboot detected. Signal newBootDetected so fetchLogs()
+      // clears the buffer and triggers a full /api/logs/full backfill.
+      // The server provides correctly-ordered multi-boot history including
+      // pre-reboot context from NAND syslog — no client-side stitching needed.
       newBootDetected=true;
-      var ctxStart=bootIdx;
-      for(var j=bootIdx-1;j>=Math.max(0,bootIdx-60);j--){
-        if(lines[j].indexOf('=== BOOT ')>=0){ctxStart=Math.max(0,j-10);break;}
-      }
-      clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
-      newLines=lines.slice(ctxStart);
+      return;
     }
   } else {
     // No boot banner in response. Two sub-cases:

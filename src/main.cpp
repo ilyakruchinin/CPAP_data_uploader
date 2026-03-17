@@ -774,14 +774,31 @@ void handleListening() {
 
 void handleAcquiring() {
     // The upload task now owns the full lifecycle:
-    //   SD mount → pre-flight scan → phased upload → SD release
-    // Task stack is allocated at high max_alloc (~73KB).  Cloud TLS connects
-    // on-demand only when pre-flight confirms cloud work.
+    //   TLS pre-warm → PCNT re-check → SD mount → pre-flight → upload → SD release
+    // TLS pre-warm runs BEFORE SD mount to give mbedTLS first pick of clean heap.
+    // PCNT re-check after TLS confirms CPAP hasn't started SD access during handshake.
     transitionTo(UploadState::UPLOADING);
 }
 
 // FreeRTOS task function — runs on Core 0 so main loop (Core 1) stays responsive
-// Owns the full session lifecycle: SD mount → pre-flight → upload → SD release
+// Owns the full session lifecycle:
+//   TLS pre-warm → PCNT re-check → SD mount → pre-flight → upload → SD release
+//
+// ── TLS Pre-Warm + PCNT Safety Re-Check ──────────────────────────────────────
+// TLS handshake allocates ~36KB contiguous heap (16KB IN + 16KB OUT mbedTLS
+// buffers + ~4KB SSL context).  By doing this BEFORE SD_MMC.begin(), we give
+// TLS first pick of the clean heap — no SD DMA buffers fragmenting memory yet.
+// This avoids the ma=38900 allocation failures seen in mixed-backend runs.
+//
+// After the handshake (~2-4s), we re-check the PCNT silence counter to verify
+// the CPAP hasn't started using the SD card during that window.  PCNT stays
+// active during UPLOADING (not a low-power state) and the main loop on Core 1
+// continues calling trafficMonitor.update(), so _consecutiveIdleMs is current.
+// 32-bit reads are atomic on ESP32, making this cross-core read safe.
+//
+// If the PCNT re-check fails (silence broken), we clean up the TLS connection
+// and return NOTHING_TO_DO, sending the FSM back to cooldown → listening.
+// ──────────────────────────────────────────────────────────────────────────────
 void uploadTaskFunction(void* pvParameters) {
     UploadTaskParams* params = (UploadTaskParams*)pvParameters;
     
@@ -791,9 +808,74 @@ void uploadTaskFunction(void* pvParameters) {
     
     g_uploadHeartbeat = millis();
 
-    // Mount SD card
+    // ── Step 1: TLS pre-warm (cloud-only, before SD mount for clean heap) ────
+    // Pre-warm gives TLS the largest contiguous block available.  Failure is
+    // non-fatal — TLS will fall back to on-demand connect during the upload.
+    bool tlsPreWarmed = false;
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (params->uploader->hasCloudBackend()) {
+        SleepHQUploader* cloud = params->uploader->getCloudUploader();
+        if (cloud) {
+            LOGF("[Upload] TLS pre-warm: heap before fh=%u ma=%u",
+                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+            tlsPreWarmed = cloud->preWarmTLS();
+            esp_task_wdt_reset();
+            g_uploadHeartbeat = millis();
+            if (tlsPreWarmed) {
+                LOGF("[Upload] TLS pre-warm succeeded (fh=%u ma=%u)",
+                     (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+            } else {
+                LOG_WARN("[Upload] TLS pre-warm failed (non-fatal, will retry on-demand)");
+            }
+        }
+    }
+#endif
+
+    // ── Step 2: PCNT re-check — confirm SD bus is still silent ───────────────
+    // The original silence detection happened in handleListening() (62s+ idle).
+    // During the TLS handshake (~2-4s), the CPAP might have started a new SD
+    // transaction.  Re-reading the PCNT idle counter catches this.
+    // NOTE: Once SD_MMC.begin() runs, ESP's own bus activity resets the counter,
+    // making any post-mount check meaningless.  This is the LAST valid check.
+    {
+        uint32_t inactivityMs = (uint32_t)config.getInactivitySeconds() * 1000UL;
+        uint32_t currentIdleMs = trafficMonitor.getConsecutiveIdleMs();
+
+        if (currentIdleMs < inactivityMs) {
+            LOGF("[Upload] PCNT re-check FAILED: idle=%lums < threshold=%lums — CPAP may have resumed",
+                 (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
+            LOG_WARN("[Upload] Aborting upload cycle to avoid SD card conflict");
+
+            // Clean up pre-warmed TLS if it was established
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+            if (tlsPreWarmed) {
+                SleepHQUploader* cloud = params->uploader->getCloudUploader();
+                if (cloud) cloud->resetConnection();
+                LOG("[Upload] Released pre-warmed TLS after PCNT abort");
+            }
+#endif
+            uploadTaskResult = UploadResult::NOTHING_TO_DO;
+            uploadTaskComplete = true;
+            esp_task_wdt_delete(NULL);
+            delete params;
+            vTaskDelete(NULL);
+            return;
+        }
+
+        LOGF("[Upload] PCNT re-check OK: idle=%lums >= threshold=%lums — safe to acquire SD",
+             (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
+    }
+
+    // ── Step 3: Mount SD card ────────────────────────────────────────────────
     if (!params->sdManager->takeControl()) {
         LOG_ERROR("[Upload] Failed to acquire SD card control");
+        // Clean up pre-warmed TLS on SD mount failure
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+        if (tlsPreWarmed) {
+            SleepHQUploader* cloud = params->uploader->getCloudUploader();
+            if (cloud) cloud->resetConnection();
+        }
+#endif
         uploadTaskResult = UploadResult::ERROR;
         uploadTaskComplete = true;
         esp_task_wdt_delete(NULL);
@@ -1003,8 +1085,19 @@ void handleReleasing() {
         unsigned fh = (unsigned)ESP.getFreeHeap();
         unsigned ma = (unsigned)ESP.getMaxAllocHeap();
         LOGF("[FSM] MINIMIZE_REBOOTS: skipping elective reboot after upload (fh=%u ma=%u)", fh, ma);
-        if (ma < 35000) {
-            LOG_WARN("[FSM] Heap fragmented — contiguous block below 35KB. Consider rebooting if uploads fail.");
+        // Heap safety valve: force reboot if contiguous heap is critically low.
+        // 32KB is below the ~36KB minimum needed for TLS handshake and leaves
+        // insufficient margin for SMB PDU allocations + lwIP buffers.
+        // The 38900-byte floor during active SMB transfers is normal and recovers
+        // after transfer completes — this valve only fires if heap stays fragmented.
+        if (ma < 32000) {
+            LOG_WARN("[FSM] Heap critically fragmented (ma < 32KB) — forcing reboot to restore heap");
+            setRebootReason("Heap safety valve (ma < 32KB)");
+            Logger::getInstance().flushBeforeReboot();
+            delay(200);
+            esp_restart();
+        } else if (ma < 35000) {
+            LOG_WARN("[FSM] Heap fragmented — contiguous block below 35KB. Will reboot if it drops below 32KB.");
         }
         uploadCycleHadTimeout = false;
         cooldownStartedAt = millis();

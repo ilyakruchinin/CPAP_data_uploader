@@ -93,8 +93,9 @@ void SleepHQUploader::configureTLS() {
         tlsClient->setCACert(GTS_ROOT_R4_CA);
     }
     
-    // Set reasonable timeout for ESP32 - increased to 60s for slow networks
-    tlsClient->setTimeout(60);  // 60 seconds
+    // Socket-level timeout for TLS operations. Must be below the 30s task-WDT
+    // to ensure a single blocking TLS call can't trigger a watchdog reset.
+    tlsClient->setTimeout(20);  // 20 seconds
 }
 
 void SleepHQUploader::resetConnection() {
@@ -593,6 +594,11 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
         // Connect if the keep-alive connection is dead
         if (!tlsClient->connected()) {
             uint32_t maxAlloc = ESP.getMaxAllocHeap();
+            // 36KB is the minimum contiguous heap for a TLS handshake (16KB IN +
+            // 16KB OUT mbedTLS buffers + ~4KB SSL context overhead).  During active
+            // SMB transfers the observed steady-state floor is ~38900 bytes, which
+            // recovers after the transfer completes.  Since SMB and TLS never run
+            // simultaneously, this guard only fires if heap is persistently fragmented.
             if (maxAlloc < 36000) {
                 LOG_ERRORF("[SleepHQ] Insufficient contiguous heap for SSL (%u bytes), skipping request", maxAlloc);
                 return false;
