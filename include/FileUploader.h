@@ -111,7 +111,10 @@ public:
 
     bool begin();
 
-    // Full session: TLS pre-warm → SD mount → phased upload → SD release
+    // Full session: phased upload (CLOUD → SMB) with SD card mounted.
+    // Caller (uploadTaskFunction) handles TLS pre-warm + PCNT re-check + SD mount.
+    // If TLS was pre-warmed, cloud phase uses existing connection; otherwise on-demand.
+    // Safety resetConnection() before SMB phase handles pre-warmed-but-unused TLS.
     UploadResult runFullSession(class SDCardManager* sdManager, int maxMinutes,
                                 DataFilter filter);
 

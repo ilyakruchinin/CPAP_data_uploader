@@ -131,8 +131,14 @@ bool FileUploader::begin() {
 // ============================================================================
 //
 // Runs both backends sequentially in a single session:
-//   Phase 1: CLOUD (pre-warmed TLS alive, highest heap for handshake)
+//   Phase 1: CLOUD (TLS pre-warmed by caller before SD mount — uses cleanest
+//            contiguous heap; falls back to on-demand connect if pre-warm failed)
 //   Phase 2: SMB   (TLS torn down, clean sockets, more heap for libsmb2)
+//
+// TLS pre-warm happens in uploadTaskFunction() BEFORE SD_MMC.begin() so mbedTLS
+// gets first pick of the unfragmented heap.  If the cloud pre-flight finds no
+// work, a safety resetConnection() before Phase 2 ensures the lingering TLS
+// socket doesn't conflict with libsmb2's TCP socket (errno:9).
 //
 // This eliminates backend cycling, prevents TLS/SMB socket conflicts, and
 // ensures both backends make progress every session without reboots.
@@ -408,6 +414,20 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
     // ═══════════════════════════════════════════════════════════════════════
     // PHASE 2: SMB (TLS torn down, clean sockets, more heap for libsmb2)
     // ═══════════════════════════════════════════════════════════════════════
+    // Safety: ensure TLS is released before SMB starts.  When TLS is
+    // pre-warmed (before SD mount for clean heap) but cloud pre-flight
+    // finds no work, the normal cloud-phase cleanup is skipped.  The
+    // lingering lwIP socket conflicts with libsmb2's TCP socket (errno:9).
+    // resetConnection() is safe to call when already disconnected.
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (smbWork && sleephqUploader) {
+        if (sleephqUploader->isConnected()) {
+            LOG("[FileUploader] Releasing pre-warmed TLS before SMB phase");
+            sleephqUploader->resetConnection();
+            delay(100);  // lwIP socket cleanup
+        }
+    }
+#endif
 #ifdef ENABLE_SMB_UPLOAD
     if (smbWork && smbUploader && smbStateManager) {
         currentPhase = UploadBackend::SMB;

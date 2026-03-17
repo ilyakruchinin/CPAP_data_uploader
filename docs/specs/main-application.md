@@ -19,6 +19,7 @@ The main application controller (`main.cpp`) orchestrates the entire CPAP AutoSy
 - Supports both "smart" and "scheduled" upload modes
 - Manages SD card exclusive access with timeout handling
 - Coordinates between SMB and Cloud upload passes
+- **TLS pre-warm + PCNT re-check** in `uploadTaskFunction` (Core 0) before SD mount — see `docs/specs/tls-prewarm-pcnt-recheck.md`
 
 ### Heap Management & Recovery
 - **Conditional-reboot strategy**: `handleReleasing()` calls `esp_restart()` only when real upload work was done
@@ -26,7 +27,7 @@ The main application controller (`main.cpp`) orchestrates the entire CPAP AutoSy
 - **`MINIMIZE_REBOOTS` config key**: When `true`, skips elective soft-reboots after upload sessions and reuses the existing runtime (COOLDOWN → LISTENING loop). Mandatory reboots (watchdog, user-triggered state reset / soft reboot, OTA) still occur. Logs a warning if `max_alloc` drops below 35 KB
 - **Pre-reboot log preservation**: Before every `esp_restart()`, NAND periodic flush + pre-reboot dump are called to ensure all final log lines (session summary, reboot reason) are persisted to `syslog.A.txt` and `/last_reboot_log.txt`
 - Fast-boot path (`ESP_RST_SW`) skips cold-boot stabilization delays and Smart Wait
-- Each session runs exactly one backend — single-backend cycling prevents concurrent SMB+TLS memory pressure
+- Each session runs both backends sequentially (CLOUD then SMB) — TLS pre-warmed before SD mount for clean heap, released before SMB phase to prevent socket conflicts
 
 ### Web Interface Integration
 - Progressive Web App (PWA) with pre-allocated buffers
@@ -93,7 +94,7 @@ const unsigned long CONFIG_EDIT_LOCK_TIMEOUT_MS = 30 * 60 * 1000;  // 30 min
 1. **Boot**: Immediate CPU throttle (80 MHz) + BT memory release, detect reset reason, initialize components
 2. **Setup**: Load config, apply TX power early, connect WiFi (802.11b disabled), enable DFS, start web server
 3. **Loop**: Run FSM with state-appropriate `vTaskDelay()` yields (enables DFS), handle web requests, monitor heap
-4. **Upload**: Pre-flight scan → if work found, upload active backend, reboot; if no work, go to cooldown
+4. **Upload**: TLS pre-warm (cloud-only) → PCNT re-check → SD mount → pre-flight scan → phased upload (CLOUD → SMB) → SD release → reboot; if no work or PCNT re-check fails, go to cooldown
 5. **Recovery**: Soft reboot after every real upload session restores contiguous heap
 
 ## Power Management

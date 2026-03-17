@@ -85,7 +85,7 @@ Power defaults are optimised for AirSense 11 compatibility (low peak current). M
 
 | Key | Default | Description |
 |---|---|---|
-| `STORE_CREDENTIALS_PLAIN_TEXT` | `false` | Set to `true` to store credentials in plain text in `config.txt` instead of encrypted NVS flash. **Only for debugging or boards without NVS support.** |
+| `MASK_CREDENTIALS` | `false` | When `true`, credentials are migrated from `config.txt` to ESP32 NVS flash and replaced with `***STORED_IN_FLASH***`. When `false` (default), credentials remain as plaintext in `config.txt` — the safest option for development and reflashing, since a full (non-OTA) flash erases NVS. **Note:** The old key `STORE_CREDENTIALS_PLAIN_TEXT` is no longer recognised. |
 
 ---
 
@@ -112,6 +112,7 @@ The following keys are **no longer used** by the firmware. They will generate a 
 
 | Key | Reason |
 |---|---|
+| `STORE_CREDENTIALS_PLAIN_TEXT` | **Renamed in v2.0i.** Use `MASK_CREDENTIALS` instead (note: inverted semantics — `MASK_CREDENTIALS = true` enables NVS masking, whereas the old key's `true` meant plaintext). |
 | `BOOT_DELAY_SECONDS` | **Removed in v0.9.2.** Cold-boot electrical stabilization is now hardcoded to 15 seconds (a chicken-and-egg problem: the delay happens before the SD card is read, so this value could never actually be applied). |
 | `SCHEDULE` | **Legacy.** Parsed and stored but not used by any firmware logic. Superseded by `UPLOAD_MODE`, `UPLOAD_START_HOUR`, and `UPLOAD_END_HOUR`. |
 | `GMT_OFFSET` | **Removed.** Use `GMT_OFFSET_HOURS`. |
@@ -123,8 +124,13 @@ The following keys are **no longer used** by the firmware. They will generate a 
 
 ## Credential Security
 
-On first boot with a valid config, the firmware automatically:
+By default (`MASK_CREDENTIALS = false`), credentials stay as plaintext in `config.txt`. This is the recommended mode — it survives full firmware flashes without losing WiFi passwords.
+
+If `MASK_CREDENTIALS = true`, the firmware:
 1. Migrates `WIFI_PASSWORD`, `ENDPOINT_PASSWORD`, and `CLOUD_CLIENT_SECRET` to encrypted ESP32 NVS (flash).
 2. Replaces those values in `config.txt` with `***STORED_IN_FLASH***`.
+3. On subsequent boots, loads credentials from NVS instead of `config.txt`.
 
-On subsequent boots, the censored values in `config.txt` are ignored and the real credentials are loaded from NVS. To reset credentials, delete the NVS partition or write new plain-text values back into `config.txt`.
+> **Warning:** A full (non-OTA) firmware flash erases NVS. After such a flash with `MASK_CREDENTIALS = true`, you must re-enter all passwords in `config.txt`. OTA updates are not affected.
+
+If `MASK_CREDENTIALS` is `false` (or absent) and `config.txt` contains `***STORED_IN_FLASH***` as a password, the firmware logs an error prompting you to re-enter the password. It does **not** attempt to recover from NVS.
