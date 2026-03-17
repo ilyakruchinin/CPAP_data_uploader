@@ -1095,6 +1095,7 @@ void CpapWebServer::handleOTAPage() {
     // Upload function
     html += "function uploadFirmware(file) {";
     html += "  updateInProgress = true;";
+    html += "  var uploadComplete = false;";
     html += "  setStatus('uploadStatus', 'info', 'Uploading firmware... 0%');";
     html += "  const formData = new FormData();";
     html += "  formData.append('firmware', file);";
@@ -1102,6 +1103,7 @@ void CpapWebServer::handleOTAPage() {
     html += "  xhr.upload.addEventListener('progress', function(e) {";
     html += "    if (e.lengthComputable) {";
     html += "      const percent = Math.round((e.loaded / e.total) * 100);";
+    html += "      if (percent >= 100) uploadComplete = true;";
     html += "      setStatus('uploadStatus', 'info', 'Uploading firmware... ' + percent + '%');";
     html += "    }";
     html += "  });";
@@ -1111,7 +1113,13 @@ void CpapWebServer::handleOTAPage() {
     html += "      handleResult(data, 'uploadStatus');";
     html += "    } catch(e) { handleResult({success:false, message:'Invalid response'}, 'uploadStatus'); }";
     html += "  });";
-    html += "  xhr.addEventListener('error', function() { handleResult({success:false, message:'Network error'}, 'uploadStatus'); });";
+    html += "  xhr.addEventListener('error', function() {";
+    html += "    if (uploadComplete) {";
+    html += "      handleResult({success:true, message:'Firmware uploaded. Device is restarting...'}, 'uploadStatus');";
+    html += "    } else {";
+    html += "      handleResult({success:false, message:'Network error'}, 'uploadStatus');";
+    html += "    }";
+    html += "  });";
     html += "  xhr.open('POST', '/ota-upload');";
     html += "  xhr.send(formData);";
     html += "}";
