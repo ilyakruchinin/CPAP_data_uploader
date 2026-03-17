@@ -1164,44 +1164,26 @@ void CpapWebServer::handleOTAPage() {
     server->sendContent("");
 }
 
-// POST /ota-upload - Handle firmware file upload
+// POST /ota-upload - Handle firmware file upload (chunk callback)
+// IMPORTANT: Do NOT call server->send() here — the WebServer framework
+// calls handleOTAUploadComplete() after all chunks are received and expects
+// that function to send the one-and-only HTTP response.  Sending a response
+// from both handlers produces duplicate Content-Length headers.
 void CpapWebServer::handleOTAUpload() {
     static bool uploadError = false;
-    static bool successResponseSent = false;
-    static unsigned long lastUploadAttempt = 0;
-    
-    LOG_DEBUG("[OTA] handleOTAUpload() called");
+    static bool updateFinished = false;
     
     if (!otaManager) {
-        LOG_ERROR("[OTA] OTA manager not initialized");
-        server->send(500, "application/json", "{\"success\":false,\"message\":\"OTA manager not initialized\"}");
+        uploadError = true;
         return;
     }
     
     HTTPUpload& upload = server->upload();
-    LOG_DEBUGF("[OTA] Upload status: %d", upload.status);
     
     if (upload.status == UPLOAD_FILE_START) {
         LOG_DEBUGF("[OTA] UPLOAD_FILE_START - filename: %s, totalSize: %u", upload.filename.c_str(), upload.totalSize);
-        
-        // Only check for "already in progress" during START phase
-        if (otaManager->isUpdateInProgress()) {
-            LOG_ERROR("[OTA] Update already in progress");
-            server->send(400, "application/json", "{\"success\":false,\"message\":\"Update already in progress\"}");
-            return;
-        }
-        
-        // Prevent rapid repeated calls (debounce)
-        unsigned long now = millis();
-        if (now - lastUploadAttempt < 1000) {  // 1 second debounce
-            LOG_WARN("[OTA] Upload attempt too soon, ignoring");
-            server->send(429, "application/json", "{\"success\":false,\"message\":\"Too many requests\"}");
-            return;
-        }
-        lastUploadAttempt = now;
-        
         uploadError = false;
-        successResponseSent = false;
+        updateFinished = false;
         
         if (upload.totalSize == 0) {
             LOG_WARN("[OTA] Total size is 0, using chunked upload mode");
@@ -1210,19 +1192,12 @@ void CpapWebServer::handleOTAUpload() {
         if (!otaManager->startUpdate(upload.totalSize)) {
             LOG_ERROR("[OTA] Failed to start update");
             uploadError = true;
-            return;
         }
         
-        LOG_DEBUG("[OTA] Update started successfully");
-        
     } else if (upload.status == UPLOAD_FILE_WRITE) {
-        LOG_DEBUGF("[OTA] UPLOAD_FILE_WRITE - currentSize: %u, uploadError: %s", 
-                   upload.currentSize, uploadError ? "true" : "false");
-        
         if (!uploadError && !otaManager->writeChunk(upload.buf, upload.currentSize)) {
             LOG_ERROR("[OTA] Failed to write chunk");
             uploadError = true;
-            return;
         }
         
     } else if (upload.status == UPLOAD_FILE_END) {
@@ -1230,59 +1205,40 @@ void CpapWebServer::handleOTAUpload() {
                    upload.totalSize, uploadError ? "true" : "false");
         
         if (uploadError) {
-            LOG_ERROR("[OTA] Upload failed due to previous errors");
             otaManager->abortUpdate();
-            // Don't send response here, handleOTAUploadComplete will handle it
-            return;
-        }
-        
-        if (otaManager->finishUpdate()) {
-            LOG("[OTA] Update completed successfully, restarting...");
-            // Send success response before restarting
-            server->send(200, "application/json", "{\"success\":true,\"message\":\"Update completed! Device will restart in 3 seconds.\"}");
-            successResponseSent = true;
-            
-            // Restart after a short delay
-            delay(3000);
-            ESP.restart();
+        } else if (otaManager->finishUpdate()) {
+            LOG("[OTA] Update completed successfully");
+            updateFinished = true;
         } else {
             LOG_ERROR("[OTA] Failed to finish update");
-            // Don't send response here, handleOTAUploadComplete will handle it
+            uploadError = true;
         }
         
     } else if (upload.status == UPLOAD_FILE_ABORTED) {
         LOG_WARN("[OTA] UPLOAD_FILE_ABORTED");
         otaManager->abortUpdate();
         uploadError = true;
-        // Don't send response here, handleOTAUploadComplete will handle it
-    } else {
-        LOG_DEBUGF("[OTA] Unknown upload status: %d", upload.status);
     }
 }
 
-// POST /ota-upload - Handle completion of firmware file upload
-// Called by WebServer after the upload handler finishes.  handleOTAUpload()
-// already sends a 200 on success (before ESP.restart()), so we must only
-// send a response here if one has NOT been sent yet — otherwise the client
-// sees duplicate Content-Length headers (ERR_RESPONSE_HEADERS_MULTIPLE_CONTENT_LENGTH).
+// POST /ota-upload - Completion handler (sends the sole HTTP response)
+// Called by WebServer after the last upload chunk callback returns.
 void CpapWebServer::handleOTAUploadComplete() {
-    LOG_DEBUG("[OTA] handleOTAUploadComplete() called");
-    
     if (!otaManager) {
-        LOG_ERROR("[OTA] OTA manager not initialized");
         server->send(500, "application/json", "{\"success\":false,\"message\":\"OTA manager not initialized\"}");
         return;
     }
     
-    // handleOTAUpload() sets successResponseSent when it already sent a 200.
-    // In that path the device is about to restart — nothing more to send.
-    // We only need to respond for error cases that didn't send their own response.
     String error = otaManager->getLastError();
     if (!error.isEmpty()) {
-        LOG_ERROR("[OTA] Upload completed with error");
         server->send(500, "application/json", "{\"success\":false,\"message\":\"Upload failed: " + error + "\"}");
+        return;
     }
-    // Success case: response already sent by handleOTAUpload() — do NOT send again.
+    
+    // Success — send response, then restart
+    server->send(200, "application/json", "{\"success\":true,\"message\":\"Update completed! Device will restart in 3 seconds.\"}");
+    delay(3000);
+    ESP.restart();
 }
 
 // POST /ota-url - Handle firmware download from URL
