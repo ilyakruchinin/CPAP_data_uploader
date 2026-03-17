@@ -151,6 +151,11 @@ extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_forceRecentOnlyFlag;
 extern volatile bool g_resetStateFlag;
 
+// Latched copy of g_triggerUploadFlag — set when the FSM transitions to
+// ACQUIRING due to a web-UI trigger, before g_triggerUploadFlag is cleared.
+// Read once in handleUploading() to propagate into UploadTaskParams.
+static bool g_uploadWasForceTriggered = false;
+
 // Monitoring trigger flags (defined in WebServer.cpp)
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
@@ -962,8 +967,9 @@ void handleUploading() {
 
         UploadTaskParams* params = new UploadTaskParams{
             uploader, &sdManager, config.getExclusiveAccessMinutes(), filter,
-            g_triggerUploadFlag  // propagate manual-trigger state to upload task
+            g_uploadWasForceTriggered  // propagate manual-trigger state to upload task
         };
+        g_uploadWasForceTriggered = false;  // consumed
         
         uploadTaskComplete = false;
         uploadTaskRunning = true;
@@ -1319,6 +1325,7 @@ void loop() {
     if (g_triggerUploadFlag && !uploadTaskRunning) {
         LOG("=== Upload Triggered via Web Interface ===");
         g_triggerUploadFlag = false;
+        g_uploadWasForceTriggered = true;  // latch for upload task
         uploadCycleHadTimeout = false;
         transitionTo(UploadState::ACQUIRING);
     }
