@@ -125,6 +125,7 @@ struct UploadTaskParams {
     SDCardManager* sdManager;
     int maxMinutes;
     DataFilter filter;
+    bool forceTriggered;  // true when upload was manually triggered via web UI
 };
 
 // ============================================================================
@@ -837,33 +838,41 @@ void uploadTaskFunction(void* pvParameters) {
     // transaction.  Re-reading the PCNT idle counter catches this.
     // NOTE: Once SD_MMC.begin() runs, ESP's own bus activity resets the counter,
     // making any post-mount check meaningless.  This is the LAST valid check.
+    // When the upload was force-triggered via web UI, the PCNT counter will
+    // almost certainly be below threshold (no silence detection preceded it).
+    // We still log the value for diagnostics but skip the abort.
     {
         uint32_t inactivityMs = (uint32_t)config.getInactivitySeconds() * 1000UL;
         uint32_t currentIdleMs = trafficMonitor.getConsecutiveIdleMs();
 
         if (currentIdleMs < inactivityMs) {
-            LOGF("[Upload] PCNT re-check FAILED: idle=%lums < threshold=%lums — CPAP may have resumed",
-                 (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
-            LOG_WARN("[Upload] Aborting upload cycle to avoid SD card conflict");
+            if (params->forceTriggered) {
+                LOGF("[Upload] PCNT re-check: idle=%lums < threshold=%lums — below threshold but force-triggered, proceeding",
+                     (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
+            } else {
+                LOGF("[Upload] PCNT re-check FAILED: idle=%lums < threshold=%lums — CPAP may have resumed",
+                     (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
+                LOG_WARN("[Upload] Aborting upload cycle to avoid SD card conflict");
 
-            // Clean up pre-warmed TLS if it was established
+                // Clean up pre-warmed TLS if it was established
 #ifdef ENABLE_SLEEPHQ_UPLOAD
-            if (tlsPreWarmed) {
-                SleepHQUploader* cloud = params->uploader->getCloudUploader();
-                if (cloud) cloud->resetConnection();
-                LOG("[Upload] Released pre-warmed TLS after PCNT abort");
-            }
+                if (tlsPreWarmed) {
+                    SleepHQUploader* cloud = params->uploader->getCloudUploader();
+                    if (cloud) cloud->resetConnection();
+                    LOG("[Upload] Released pre-warmed TLS after PCNT abort");
+                }
 #endif
-            uploadTaskResult = UploadResult::NOTHING_TO_DO;
-            uploadTaskComplete = true;
-            esp_task_wdt_delete(NULL);
-            delete params;
-            vTaskDelete(NULL);
-            return;
+                uploadTaskResult = UploadResult::NOTHING_TO_DO;
+                uploadTaskComplete = true;
+                esp_task_wdt_delete(NULL);
+                delete params;
+                vTaskDelete(NULL);
+                return;
+            }
+        } else {
+            LOGF("[Upload] PCNT re-check OK: idle=%lums >= threshold=%lums — safe to acquire SD",
+                 (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
         }
-
-        LOGF("[Upload] PCNT re-check OK: idle=%lums >= threshold=%lums — safe to acquire SD",
-             (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
     }
 
     // ── Step 3: Mount SD card ────────────────────────────────────────────────
@@ -952,7 +961,8 @@ void handleUploading() {
 #endif
 
         UploadTaskParams* params = new UploadTaskParams{
-            uploader, &sdManager, config.getExclusiveAccessMinutes(), filter
+            uploader, &sdManager, config.getExclusiveAccessMinutes(), filter,
+            g_triggerUploadFlag  // propagate manual-trigger state to upload task
         };
         
         uploadTaskComplete = false;
