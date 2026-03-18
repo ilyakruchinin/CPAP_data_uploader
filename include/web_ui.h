@@ -1184,6 +1184,9 @@ function _mtSetDup(v){
   } else if(!v&&_mtThrottled){
     _mtThrottled=false;
     if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,5000);}
+    // Resume SSE if user is viewing Logs tab
+    if(curTab==='logs'){stopLogPoll();startSse();}
+    toast('Other tabs/browsers closed \u2014 resuming normal operation','ok');
   }
 }
 // Layer 1: BroadcastChannel — same-browser, cross-tab
