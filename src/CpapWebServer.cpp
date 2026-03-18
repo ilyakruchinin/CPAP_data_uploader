@@ -48,6 +48,7 @@ static WiFiClient g_sseClient;
 static volatile bool g_sseActive = false;
 static volatile uint32_t g_sseLastPushedIndex = 0;
 static volatile uint16_t g_sseOwnerTid = 0;
+static volatile uint32_t g_sseOwnerIid = 0;
 static volatile uint32_t g_sseOwnerLastSeenMs = 0;
 
 enum UploadUiSlot : uint8_t {
@@ -118,6 +119,25 @@ bool getRequestTabId(WebServer* server, uint16_t* outTabId) {
     return false;
 }
 
+bool parseCompactInstanceId(const String& value, uint32_t* outInstanceId) {
+    if (!outInstanceId || value.length() < 8) return false;
+    uint32_t instanceId = 0;
+    for (int i = 0; i < 8; i++) {
+        int nibble = hexNibble(value[i]);
+        if (nibble < 0) return false;
+        instanceId = (instanceId << 4) | (uint32_t)nibble;
+    }
+    *outInstanceId = instanceId;
+    return instanceId != 0;
+}
+
+bool getRequestInstanceId(WebServer* server, uint32_t* outInstanceId) {
+    if (!server || !outInstanceId) return false;
+    if (server->hasArg("iid") && parseCompactInstanceId(server->arg("iid"), outInstanceId)) return true;
+    if (server->hasHeader("X-Tab-Instance") && parseCompactInstanceId(server->header("X-Tab-Instance"), outInstanceId)) return true;
+    return false;
+}
+
 void recordRecentTabSighting(WebServer* server) {
     uint16_t tabId = 0;
     if (!getRequestTabId(server, &tabId)) return;
@@ -143,13 +163,14 @@ void buildRecentTabsField(char* output, size_t outputSize, unsigned long nowMs) 
 }
 
 bool isSseOwnerAlive(unsigned long nowMs) {
-    if (!g_sseActive || g_sseOwnerTid == 0 || !g_sseClient.connected()) return false;
+    if (!g_sseActive || g_sseOwnerTid == 0 || g_sseOwnerIid == 0 || !g_sseClient.connected()) return false;
     return (nowMs - g_sseOwnerLastSeenMs) <= kSseOwnerLeaseMs;
 }
 
 void clearSseOwner() {
     g_sseActive = false;
     g_sseOwnerTid = 0;
+    g_sseOwnerIid = 0;
     g_sseOwnerLastSeenMs = 0;
 }
 }
@@ -187,8 +208,8 @@ bool CpapWebServer::begin() {
     server = new WebServer(80);
 
     // Collect Host header so requests to *.local can be redirected to the device IP.
-    const char* headerKeys[] = {"Host", "X-Tab-Id"};
-    server->collectHeaders(headerKeys, 2);
+    const char* headerKeys[] = {"Host", "X-Tab-Id", "X-Tab-Instance"};
+    server->collectHeaders(headerKeys, 3);
     
     // Register request handlers
     server->on("/", [this]() {
@@ -678,8 +699,15 @@ void CpapWebServer::handleApiLogsStream() {
         return;
     }
 
+    uint32_t requestInstanceId = 0;
+    if (!getRequestInstanceId(server, &requestInstanceId)) {
+        addCorsHeaders(server);
+        server->send(400, "text/plain; charset=utf-8", "Missing or invalid tab instance ID");
+        return;
+    }
+
     const unsigned long nowMs = millis();
-    if (isSseOwnerAlive(nowMs) && g_sseOwnerTid != requestTabId) {
+    if (isSseOwnerAlive(nowMs) && g_sseOwnerIid != requestInstanceId) {
         addCorsHeaders(server);
         server->send(409, "text/plain; charset=utf-8", "Another tab owns the live log stream");
         return;
@@ -701,6 +729,7 @@ void CpapWebServer::handleApiLogsStream() {
 
     g_sseLastPushedIndex = Logger::getInstance().getHeadIndex();
     g_sseOwnerTid = requestTabId;
+    g_sseOwnerIid = requestInstanceId;
     g_sseOwnerLastSeenMs = nowMs;
     g_sseActive = true;
 }
