@@ -112,7 +112,7 @@ void SleepHQUploader::setSendTimeout() {
     int fd = tlsClient->fd();
     if (fd >= 0) {
         struct timeval tv;
-        tv.tv_sec = 20;
+        tv.tv_sec = 10;
         tv.tv_usec = 0;
         lwip_setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     }
@@ -661,6 +661,7 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
 
             n = snprintf(hdrBuf, sizeof(hdrBuf), "%s %s HTTP/1.1\r\n", method.c_str(), path.c_str());
             tlsClient->write((const uint8_t*)hdrBuf, n);
+            esp_task_wdt_reset();
 
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Host: %s\r\n", host);
             tlsClient->write((const uint8_t*)hdrBuf, n);
@@ -670,6 +671,7 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
                 tlsClient->write((const uint8_t*)accessToken.c_str(), accessToken.length());
                 tlsClient->write((const uint8_t*)"\r\n", 2);
             }
+            esp_task_wdt_reset();
 
             tlsClient->write((const uint8_t*)"Accept: application/vnd.api+json\r\n", 34);
 
@@ -682,10 +684,12 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
             }
             tlsClient->write((const uint8_t*)hdrBuf, n);
             tlsClient->write((const uint8_t*)"Connection: keep-alive\r\n\r\n", 26);
+            esp_task_wdt_reset();
 
             if (bodyLen > 0) {
                 tlsClient->write((const uint8_t*)body.c_str(), bodyLen);
             }
+            esp_task_wdt_reset();
             tlsClient->flush();
         }
 
@@ -973,14 +977,17 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             int n;
             n = snprintf(hdrBuf, sizeof(hdrBuf), "POST %s HTTP/1.1\r\n", path.c_str());
             tlsClient->write((const uint8_t*)hdrBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Host: %s\r\n", host);
             tlsClient->write((const uint8_t*)hdrBuf, n);
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Authorization: Bearer %s\r\n", accessToken.c_str());
             tlsClient->write((const uint8_t*)hdrBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Accept: application/vnd.api+json\r\n");
             tlsClient->write((const uint8_t*)hdrBuf, n);
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Content-Type: multipart/form-data; boundary=%s\r\n", boundary);
             tlsClient->write((const uint8_t*)hdrBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Content-Length: %lu\r\n", totalLength);
             tlsClient->write((const uint8_t*)hdrBuf, n);
             if (useKeepAlive) {
@@ -998,9 +1005,11 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             n = snprintf(partBuf, sizeof(partBuf), "--%s\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n%s\r\n",
                          boundary, fnStr);
             tlsClient->write((const uint8_t*)partBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(partBuf, sizeof(partBuf), "--%s\r\nContent-Disposition: form-data; name=\"path\"\r\n\r\n%s\r\n",
                          boundary, dirPath);
             tlsClient->write((const uint8_t*)partBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(partBuf, sizeof(partBuf), "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
                          "Content-Type: application/octet-stream\r\n\r\n",
                          boundary, fnStr);
@@ -1162,10 +1171,12 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             n = snprintf(partBuf, sizeof(partBuf), "\r\n--%s\r\nContent-Disposition: form-data; name=\"content_hash\"\r\n\r\n",
                          boundary);
             tlsClient->write((const uint8_t*)partBuf, n);
+            esp_task_wdt_reset();
             tlsClient->write((const uint8_t*)hashStr, 32);
             n = snprintf(partBuf, sizeof(partBuf), "\r\n--%s--\r\n", boundary);
             tlsClient->write((const uint8_t*)partBuf, n);
         }
+        esp_task_wdt_reset();
         tlsClient->flush();
         esp_task_wdt_reset();
         
@@ -1260,6 +1271,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
                     extern volatile unsigned long g_uploadHeartbeat;
                     g_uploadHeartbeat = millis();
+                    esp_task_wdt_reset();
                     delay(100);
                 }
             }
