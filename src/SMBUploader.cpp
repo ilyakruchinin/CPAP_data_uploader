@@ -187,6 +187,7 @@ static struct smb2dir* smb2_opendir_ev(struct smb2_context* smb2,
 #define SMB_UPLOAD_MAX_ATTEMPTS 2
 #define SMB_WRITE_EAGAIN_RETRIES 6
 #define SMB_WRITE_EAGAIN_BASE_DELAY_MS 20
+#define SMB_WRITE_TCP_DRAIN_BYTES 16384  // Pause every 16KB to let lwIP drain TCP send buffer
 
 static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
     if (errorCode == ETIMEDOUT ||
@@ -222,9 +223,18 @@ static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
 }
 
 static bool isSmbPduAllocationError(const char* smbError) {
-    return smbError &&
-           (strstr(smbError, "Failed to allocate pdu") != nullptr ||
-            strstr(smbError, "allocate pdu") != nullptr);
+    if (!smbError) return false;
+    // pdu.c: "Failed to allocate pdu" when calloc(sizeof(smb2_pdu)) fails
+    if (strstr(smbError, "Failed to allocate pdu") != nullptr) return true;
+    // libsmb2.c higher-level callers overwrite the pdu.c error with e.g.
+    // "Failed to create query command", "Failed to create write command",
+    // "Failed to create create command", "Failed to create close command".
+    // These all indicate smb2_cmd_*_async() returned NULL due to memory pressure.
+    if (strstr(smbError, "Failed to create") != nullptr &&
+        strstr(smbError, "command") != nullptr) return true;
+    // Encode-level failures: "Failed to allocate create buffer/name/context"
+    if (strstr(smbError, "Failed to allocate") != nullptr) return true;
+    return false;
 }
 
 static bool isTransientSmbSocketBackpressure(int errorCode, const char* smbError) {
@@ -692,7 +702,8 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             }
 
             if (remoteFile == nullptr) {
-                if (isRecoverableSmbWriteError(errno, error)) {
+                if (isRecoverableSmbWriteError(errno, error) ||
+                    isSmbPduAllocationError(error)) {
                     LOG_WARN("[SMB] Open failed with transport/socket state error; disconnecting SMB context");
                     disconnect();
                 }
@@ -788,7 +799,8 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
                 LOG("[SMB]   - Remote server disk full");
                 LOG("[SMB]   - SMB command timeout");
 
-                bool recoverableTransportError = isRecoverableSmbWriteError(finalErrno, error);
+                bool recoverableTransportError = isRecoverableSmbWriteError(finalErrno, error) ||
+                                                 isSmbPduAllocationError(error);
                 if (recoverableTransportError) {
                     transportErrorDetected = true;
                     skipRemoteClose = true;
@@ -834,6 +846,16 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             
             // ── POWER: Yield between chunks to allow DFS frequency scaling ──
             taskYIELD();
+
+            // ── TCP drain: pause periodically to let lwIP process ACKs ──
+            // Without this, writes fill the TCP send buffer (~32KB) faster
+            // than the stack can drain it under low-heap conditions, causing
+            // EAGAIN followed by EBADF as the socket dies from backpressure.
+            if (attemptBytesTransferred >= SMB_WRITE_TCP_DRAIN_BYTES &&
+                (attemptBytesTransferred % SMB_WRITE_TCP_DRAIN_BYTES) < uploadBufferSize) {
+                delay(10);
+                yield();
+            }
 
             // Print progress for large files (every 1MB)
             if (attemptBytesTransferred % (1024 * 1024) == 0) {

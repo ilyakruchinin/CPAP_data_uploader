@@ -421,11 +421,15 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
     // resetConnection() is safe to call when already disconnected.
 #ifdef ENABLE_SLEEPHQ_UPLOAD
     if (smbWork && sleephqUploader) {
-        if (sleephqUploader->isConnected()) {
-            LOG("[FileUploader] Releasing pre-warmed TLS before SMB phase");
-            sleephqUploader->resetConnection();
-            delay(100);  // lwIP socket cleanup
-        }
+        // Always release TLS resources, even if the connection died silently
+        // during pre-flight scanning.  When the server closes an idle
+        // pre-warmed connection, isConnected() returns false but mbedTLS
+        // internal buffers (~32 KB) may still be allocated — fragmenting the
+        // heap and starving lwIP during the SMB phase.
+        // resetConnection() is safe to call when already disconnected.
+        LOG("[FileUploader] Releasing TLS resources before SMB phase");
+        sleephqUploader->resetConnection();
+        delay(100);  // lwIP socket cleanup
     }
 #endif
 #ifdef ENABLE_SMB_UPLOAD
