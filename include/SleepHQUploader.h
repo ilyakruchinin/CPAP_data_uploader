@@ -65,6 +65,7 @@ private:
     void resetTLS();
     void configureTLS();
     void parseHostPort(char* host, size_t hostLen, int& port);
+    void setSendTimeout();  // Set SO_SNDTIMEO on TLS socket after connect
 
 public:
     SleepHQUploader(Config* cfg);
