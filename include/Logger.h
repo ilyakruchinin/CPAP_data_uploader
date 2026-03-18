@@ -147,14 +147,17 @@ public:
     bool dumpSavedLogsPeriodic(class SDCardManager* sdManager, bool forceFlush = false);
 
     /**
-     * Stream all saved log files (oldest first) to a Print destination.
-     * Used by web endpoints to serve complete log history.
-     * Streams syslog.{N-1} → syslog.0 in chronological order.
+     * Stream saved log files (oldest first) to a Print destination.
+     * Used by web endpoints to serve log history.
+     * Streams syslog files in chronological order (oldest → newest).
      *
      * @param output The Print destination to write logs to
+     * @param maxFiles Maximum number of rotation files to include (0 = all).
+     *                 When limited, serves only the most recent file(s).
+     *                 e.g. maxFiles=1 → only syslog.0.txt (latest, ≤32KB).
      * @return Number of bytes written
      */
-    size_t streamSavedLogs(Print& output);
+    size_t streamSavedLogs(Print& output, int maxFiles = 0);
 
     /**
      * Legacy compatibility — flushes to syslog rotation.

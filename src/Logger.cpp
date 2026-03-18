@@ -664,7 +664,7 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager, bool forceFlush) {
 }
 
 // Stream all saved log files (oldest first) to a Print destination
-size_t Logger::streamSavedLogs(Print& output) {
+size_t Logger::streamSavedLogs(Print& output, int maxFiles) {
 #ifdef UNIT_TEST
     return 0;
 #else
@@ -672,8 +672,11 @@ size_t Logger::streamSavedLogs(Print& output) {
     size_t total = 0;
     char path[24];
     uint8_t buf[256];
+    // Determine range: maxFiles=0 means all, maxFiles=1 means only syslog.0, etc.
+    int startIdx = (maxFiles > 0 && maxFiles < SYSLOG_MAX_FILES)
+                   ? (maxFiles - 1) : (SYSLOG_MAX_FILES - 1);
     // Stream from oldest (highest index) to newest (0)
-    for (int i = SYSLOG_MAX_FILES - 1; i >= 0; i--) {
+    for (int i = startIdx; i >= 0; i--) {
         snprintf(path, sizeof(path), "/syslog.%d.txt", i);
         File f = logFileSystem->open(path, FILE_READ);
         if (!f) continue;

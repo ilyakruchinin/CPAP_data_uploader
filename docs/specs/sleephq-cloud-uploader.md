@@ -124,6 +124,14 @@ bool setupTLS() {
 - **Retry logic**: Automatic retry on network failures
 - **Graceful degradation**: Skip operations when memory insufficient
 
+### Watchdog & Socket Timeout Hardening
+The upload task runs on CPU 0 with a 30-second task watchdog timeout. TLS write operations can block for extended periods when TCP buffers are saturated (e.g. concurrent web server log downloads competing for lwIP resources). Hardening measures:
+- **SO_SNDTIMEO** (10s): Socket send timeout set after every TLS connect via `setSendTimeout()`. Caps any single blocking `write()` at 10 seconds, ensuring even two consecutive blocked writes (20s) stay under the 30s WDT.
+- **Per-write WDT feeds**: `esp_task_wdt_reset()` called between every `tlsClient->write()` in HTTP header, multipart preamble, and footer sections of both `httpRequest()` and `httpMultipartUpload()`.
+- **Pre/post handshake feeds**: WDT fed before and after `tlsClient->connect()` calls (handshakes can take 14+ seconds at low heap).
+- **Inner write loop feeds**: WDT fed after each successful partial write and during retry back-off delays in the streaming data loop.
+- **Pre-flush feeds**: WDT fed before `tlsClient->flush()` calls which can block until all pending data is sent.
+
 ## Configuration
 
 ### Authentication

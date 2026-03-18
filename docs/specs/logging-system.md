@@ -186,11 +186,11 @@ void logPerformance(const char* operation, uint32_t durationMs) {
 
 ## Persistent Log Saving
 
-When `PERSISTENT_LOGS=true`, the circular buffer is flushed to LittleFS every **30 seconds** using direct chunk-buffer writes (zero heap allocation). Files rotate at **64 KB**:
+When `PERSISTENT_LOGS=true`, the circular buffer is flushed to LittleFS every **30 seconds** using direct chunk-buffer writes (zero heap allocation). Files rotate at **32 KB**:
 
-- `/syslog.A.txt` — active log file (appended to)
-- `/syslog.B.txt` — rotated older log file
-- Total capacity: **128 KB** (~30–60 minutes of continuous logging)
+- `/syslog.0.txt` — active/latest log file (appended to)
+- `/syslog.1.txt` … `/syslog.3.txt` — older rotation files
+- Total capacity: **128 KB** (4 × 32 KB, ~30–60 minutes of continuous logging)
 
 ## Two-Tier Emergency Log Strategy
 
@@ -222,11 +222,11 @@ When the device cannot establish WiFi (config failure, wrong credentials, hardwa
 - **All uploaders**: Backend-specific logging
 
 ### Web Interface
-- **`/api/logs`**: Streams circular buffer contents (polling fallback)
-- **`/api/logs/full`**: Streams NAND saved logs + previous reboot log + circular buffer (initial backfill)
-- **`/api/logs/stream`**: SSE endpoint for real-time log push (single client)
-- **`/api/logs/saved`**: Downloads persisted LittleFS log files as attachment
-- **Log viewing**: `/logs` SPA tab — fetches backfill on first open, performs immediate RAM-buffer catch-up when revisited, then resumes SSE live stream with polling fallback
+- **`/api/logs`**: Streams circular buffer contents (polling fallback). During active upload: throttled to 2 KB tail, 3-second cooldown.
+- **`/api/logs/full`**: Backfill endpoint for Logs tab initial load. Serves only `syslog.0.txt` (latest rotation, ≤32 KB) + circular buffer (~48 KB total). During active upload: serves only circular buffer (~12–16 KB) to avoid saturating lwIP TCP buffers and triggering watchdog timeouts.
+- **`/api/logs/stream`**: SSE endpoint for real-time log push (single client). During upload: throttled to 250 ms interval, 512 bytes per push.
+- **`/api/logs/saved`**: Downloads **all** persisted LittleFS rotation files + circular buffer as attachment (up to ~140 KB). Always serves full history regardless of upload state — triggered only by explicit user action ("Download All Logs" button).
+- **Log viewing**: `/logs` SPA tab — fetches backfill on first open (gated: skipped during active upload or multi-tab contention), performs immediate RAM-buffer catch-up when revisited, then resumes SSE live stream with polling fallback. Deferred backfill auto-triggers when upload finishes or multi-tab contention clears.
 
 ### Configuration
 - **PERSISTENT_LOGS**: Optional persisted file-based logging (aliases: `SAVE_LOGS`, `LOG_TO_SD_CARD`)
@@ -299,7 +299,7 @@ DEBUG = true
 
 | File | Location | Purpose | When Written |
 |:-----|:---------|:--------|:-------------|
-| `/syslog.A.txt` | LittleFS | Active persisted log | Every 30s when `PERSISTENT_LOGS=true` |
-| `/syslog.B.txt` | LittleFS | Rotated older log | When A exceeds 64 KB |
+| `/syslog.0.txt` | LittleFS | Latest (active) persisted log | Every 30s when `PERSISTENT_LOGS=true` |
+| `/syslog.1-3.txt` | LittleFS | Older rotation files | When syslog.0 exceeds 32 KB |
 | `/last_reboot_log.txt` | LittleFS | Pre-reboot buffer dump | Before every `esp_restart()` |
 | `/uploader_error.txt` | SD Card | Boot-failure emergency log | Config or WiFi failure in `setup()` |
