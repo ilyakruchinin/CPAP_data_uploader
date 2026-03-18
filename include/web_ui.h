@@ -582,6 +582,8 @@ function renderStatus(d){
   if(curTab==='mem'){updateHeapChart();updateCpuChart();}
   var bb=document.getElementById('brownout-banner');
   if(bb)bb.style.display=(cfg.brownout_detect_mode==='OFF')?'block':'none';
+  // Layer 2: check SSE connection sequence from server
+  _mtCheckSseSeq(d.sse_seq);
 }
 
 var statusTimer=null;
@@ -914,6 +916,8 @@ function startSse(){
   sseSource.onopen=function(){
     sseConnected=true;
     sseReconnAttempts=0;
+    _mtSseConnectTs=Date.now();  // Layer 3: record connect time
+    _mtOwnSseConnects++;          // Layer 2: track this tab's SSE opens
     stopLogPoll();
     set('log-st','SSE Live \u2022 '+clientLogBuf.length+' lines');
   };
@@ -926,6 +930,13 @@ function startSse(){
   sseSource.onerror=function(){
     sseConnected=false;
     if(sseSource){sseSource.close();sseSource=null;}
+    // Layer 3: if SSE connected then dropped within 10s, and status polling works
+    // (statusFailCount===0), another client is likely stealing the SSE slot
+    if(_mtSseConnectTs>0&&(Date.now()-_mtSseConnectTs)<10000&&statusFailCount===0){
+      _mtSseContentionHits++;
+      if(_mtSseContentionHits>=2){_mtSetDup(true);}
+    }
+    _mtSseConnectTs=0;
     sseReconnAttempts++;
     if(sseReconnAttempts<=3){
       var delay=Math.min(2000*sseReconnAttempts,6000);
@@ -1151,70 +1162,89 @@ function handleOtaResult(d,sid){
   else setMsg(sid,'er','Failed: '+d.message);
 }
 
-// ── Multi-tab/browser detection (pure client-side, zero server cost) ──
-// Uses BroadcastChannel to detect other tabs on the same browser.
-// Uses localStorage heartbeat to detect tabs across browsers on the same device.
-// When a duplicate is detected: show warning banner, throttle polling, disable SSE.
+// ── Multi-tab/browser/device detection ──
+// Three complementary detection layers:
+//  1. BroadcastChannel — instant same-browser cross-tab (Chrome↔Chrome, FF↔FF)
+//  2. SSE sequence counter from /api/status — cross-browser AND cross-device
+//     (ESP32 has one SSE slot; each new SSE connect increments sse_seq)
+//  3. SSE rapid-disconnect heuristic — if SSE connects then drops quickly while
+//     status polling still works, another client is stealing the SSE slot
 var _mtDup=false,_mtTabId=Date.now()+'.'+Math.random().toString(36).slice(2,8);
 var _mtChan=null,_mtThrottled=false;
+var _mtSseSeq=-1,_mtOwnSseConnects=0;
+var _mtSseConnectTs=0,_mtSseContentionHits=0,_mtSseCleanPolls=0;
 function _mtSetDup(v){
   if(_mtDup===v)return;_mtDup=v;
   var b=document.getElementById('multitab-banner');if(b)b.style.display=v?'block':'none';
   if(v&&!_mtThrottled){
     _mtThrottled=true;
-    // Throttle status polling from 5s to 15s to reduce device load
     if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,15000);}
-    // Kill SSE — each SSE connection holds a persistent TCP socket + lwIP buffers
     stopSse();
-    toast('Multiple tabs detected \u2014 polling throttled to reduce device load','warn');
+    toast('Multiple tabs/browsers detected \u2014 polling throttled','warn');
   } else if(!v&&_mtThrottled){
     _mtThrottled=false;
     if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,5000);}
   }
 }
-// BroadcastChannel: same-browser, cross-tab (modern browsers)
+// Layer 1: BroadcastChannel — same-browser, cross-tab
+var _mtBcPongTimer=null;
 if(typeof BroadcastChannel!=='undefined'){
   _mtChan=new BroadcastChannel('cpap-uploader-tab');
   _mtChan.onmessage=function(e){
-    if(e.data&&e.data.type==='ping'&&e.data.id!==_mtTabId){
+    if(!e.data)return;
+    if(e.data.type==='ping'&&e.data.id!==_mtTabId){
       _mtSetDup(true);
       _mtChan.postMessage({type:'pong',id:_mtTabId});
     }
-    if(e.data&&e.data.type==='pong'&&e.data.id!==_mtTabId){_mtSetDup(true);}
-    if(e.data&&e.data.type==='close'&&e.data.id!==_mtTabId){
-      // Other tab closed — check if any remain after a brief delay
-      setTimeout(function(){
-        _mtChan.postMessage({type:'ping',id:_mtTabId});
-        // If no pong received within 500ms, clear duplicate state
-        setTimeout(function(){if(_mtDup){_mtChan.postMessage({type:'ping',id:_mtTabId});}},500);
-      },300);
+    if(e.data.type==='pong'&&e.data.id!==_mtTabId){
+      _mtSetDup(true);
+      if(_mtBcPongTimer){clearTimeout(_mtBcPongTimer);_mtBcPongTimer=null;}
+    }
+    if(e.data.type==='close'&&e.data.id!==_mtTabId){
+      // Other tab closed — probe if any others remain
+      _mtChan.postMessage({type:'ping',id:_mtTabId});
+      // If no pong within 1.5s, we are the only tab left → clear
+      if(_mtBcPongTimer)clearTimeout(_mtBcPongTimer);
+      _mtBcPongTimer=setTimeout(function(){
+        _mtBcPongTimer=null;
+        // Only clear if SSE-seq also looks clean (no cross-browser/device contention)
+        if(_mtSseContentionHits<2)_mtSetDup(false);
+      },1500);
     }
   };
   _mtChan.postMessage({type:'ping',id:_mtTabId});
   window.addEventListener('beforeunload',function(){
     if(_mtChan)try{_mtChan.postMessage({type:'close',id:_mtTabId});}catch(e){}
   });
-  // Re-check periodically — handles race conditions and late-opening tabs
   setInterval(function(){
     if(_mtChan&&!_mtDup)_mtChan.postMessage({type:'ping',id:_mtTabId});
   },10000);
 }
-// localStorage heartbeat: cross-browser detection (works across Chrome+Firefox etc.)
-try{
-  var _mtKey='cpap_tab_hb',_mtHbIv=setInterval(function(){
-    try{
-      var now=Date.now(),prev=localStorage.getItem(_mtKey);
-      if(prev){
-        var parts=prev.split('|'),ts=parseInt(parts[0]),id=parts[1]||'';
-        if(id!==_mtTabId&&(now-ts)<8000){_mtSetDup(true);}
-      }
-      localStorage.setItem(_mtKey,now+'|'+_mtTabId);
-    }catch(e){}
-  },3000);
-  window.addEventListener('beforeunload',function(){
-    try{var v=localStorage.getItem(_mtKey);if(v&&v.indexOf(_mtTabId)!==-1)localStorage.removeItem(_mtKey);}catch(e){}
-  });
-}catch(e){}
+// Layer 2: SSE sequence counter — checked inside renderStatus() on each /api/status poll.
+// ESP32 increments sse_seq every time ANY client opens /api/logs/stream.
+// If sse_seq advances more than this tab's own SSE opens, another client is present.
+function _mtCheckSseSeq(serverSeq){
+  if(typeof serverSeq!=='number')return;
+  if(_mtSseSeq<0){_mtSseSeq=serverSeq;_mtOwnSseConnects=0;return;}
+  var serverDelta=serverSeq-_mtSseSeq;
+  if(serverDelta>_mtOwnSseConnects){
+    _mtSetDup(true);
+    _mtSseContentionHits++;
+    _mtSseCleanPolls=0;
+  } else {
+    _mtSseCleanPolls++;
+    // After 6 consecutive clean polls (~30-90s depending on throttle state),
+    // the other client likely closed. Reset contention state and clear banner.
+    if(_mtDup&&_mtSseCleanPolls>=6){
+      _mtSseContentionHits=0;
+      _mtSetDup(false);
+    }
+  }
+  _mtSseSeq=serverSeq;
+  _mtOwnSseConnects=0;
+}
+// Layer 3: SSE rapid-disconnect heuristic — if SSE connects then drops within 10s
+// while /api/status still works, it's contention (another client stole the SSE slot).
 
 loadCfg();
 startStatusPoll();

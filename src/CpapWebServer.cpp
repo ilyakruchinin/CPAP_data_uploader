@@ -583,6 +583,7 @@ void CpapWebServer::handleApiLogsFull() {
 static WiFiClient g_sseClient;
 static volatile bool g_sseActive = false;
 static volatile uint32_t g_sseLastPushedIndex = 0;
+static volatile uint32_t g_sseConnectCount = 0;  // Incremented on each SSE connect — used by client for multi-tab detection
 
 void CpapWebServer::handleApiLogsStream() {
     // Take over the raw client socket from WebServer
@@ -599,6 +600,7 @@ void CpapWebServer::handleApiLogsStream() {
     // Snapshot current head so we only push NEW logs going forward
     g_sseLastPushedIndex = Logger::getInstance().getHeadIndex();
     g_sseActive = true;
+    g_sseConnectCount++;
 
     // Return without calling server->send() — we own the socket now
 }
@@ -706,6 +708,7 @@ void CpapWebServer::updateStatusSnapshot() {
         ",\"in_window\":%s"
         ",\"live_active\":%s,\"live_folder\":\"%s\",\"live_up\":%d,\"live_total\":%d"
         ",\"cpu0\":%u,\"cpu1\":%u"
+        ",\"sse_seq\":%u"
         ",\"firmware\":\"%s\"}",
         st, inStateSec, upSec,
         timeBuf, timeSynced ? "true" : "false",
@@ -719,6 +722,7 @@ void CpapWebServer::updateStatusSnapshot() {
         inWindow ? "true" : "false",
         liveActive ? "true" : "false", liveFolder, liveUp, liveTotal,
         (unsigned)g_cpuLoad0, (unsigned)g_cpuLoad1,
+        (unsigned)g_sseConnectCount,
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webStatusBuf, buf, n + 1);
