@@ -426,6 +426,8 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 <script>
 var cfg={},monPoll=null,logPoll=null,curTab='dash',monActive=false;
 var heapHistory=[],MAX_HEAP_HISTORY_MS=120000,HEAP_GAP_THRESHOLD_MS=6500,currentFsmState='',prevHelpHtml='';
+var _mtInstanceId=('00000000'+Math.floor(Math.random()*0x100000000).toString(16)).slice(-8).toUpperCase();
+var _mtBirthMs=Date.now();
 function _mkTabId(){
   try{
     var k='cpap-tab-id',v=sessionStorage.getItem(k);
@@ -437,11 +439,21 @@ function _mkTabId(){
     return ('0000'+Math.floor(Math.random()*65536).toString(16)).slice(-4).toUpperCase();
   }
 }
-function _apiUrl(path){return path+(path.indexOf('?')>=0?'&':'?')+'tid='+encodeURIComponent(_mtTabId);}
+function _setTabId(v){
+  _mtTabId=v;
+  try{sessionStorage.setItem('cpap-tab-id',v);}catch(e){}
+}
+function _newTabIdExcept(oldId){
+  var next=oldId;
+  while(next===oldId)next=('0000'+Math.floor(Math.random()*65536).toString(16)).slice(-4).toUpperCase();
+  return next;
+}
+function _apiUrl(path){return path+(path.indexOf('?')>=0?'&':'?')+'tid='+encodeURIComponent(_mtTabId)+'&iid='+encodeURIComponent(_mtInstanceId);}
 function _apiFetch(path,opts){
   opts=opts||{};
   var headers=opts.headers||{};
   headers['X-Tab-Id']=_mtTabId;
+  headers['X-Tab-Instance']=_mtInstanceId;
   opts.headers=headers;
   if(!opts.cache)opts.cache='no-store';
   return fetch(_apiUrl(path),opts);
@@ -1213,13 +1225,41 @@ function handleOtaResult(d,sid){
  // ── Multi-tab/browser/device detection ──
  var _mtDup=false,_mtTabId=_mkTabId();
  var _mtChan=null,_mtThrottled=false,_mtPeers={},_mtServerDup=false;
- function _mtAddPeer(id){if(id&&id!==_mtTabId)_mtPeers[id]=Date.now();}
- function _mtDropPeer(id){if(id&&_mtPeers[id])delete _mtPeers[id];}
+ function _mtAddPeer(msg){
+   if(!msg||!msg.iid||msg.iid===_mtInstanceId)return;
+   _mtPeers[msg.iid]={ts:Date.now(),tid:(msg.tid||'').toUpperCase(),born:msg.born||0};
+ }
+ function _mtDropPeer(iid){if(iid&&_mtPeers[iid])delete _mtPeers[iid];}
  function _mtHasPeer(){
    var now=Date.now();
-   for(var id in _mtPeers){if((now-_mtPeers[id])>20000)delete _mtPeers[id];}
+   for(var id in _mtPeers){if((now-_mtPeers[id].ts)>20000)delete _mtPeers[id];}
    for(var k in _mtPeers){return true;}
    return false;
+ }
+ function _mtBroadcast(type,extra){
+   if(!_mtChan)return;
+   var msg={type:type,iid:_mtInstanceId,tid:_mtTabId,born:_mtBirthMs};
+   if(extra)for(var k in extra)msg[k]=extra[k];
+   _mtChan.postMessage(msg);
+ }
+ function _mtMaybeRekey(msg){
+   if(!msg||!msg.iid||msg.iid===_mtInstanceId)return false;
+   var peerTid=(msg.tid||'').toUpperCase();
+   if(!peerTid||peerTid!==_mtTabId)return false;
+   var peerBorn=Number(msg.born)||0;
+   var shouldRekey=(peerBorn>0&&(_mtBirthMs>peerBorn||(_mtBirthMs===peerBorn&&_mtInstanceId>msg.iid)));
+   if(!shouldRekey)return false;
+   var oldTid=_mtTabId;
+   _setTabId(_newTabIdExcept(oldTid));
+   _mtServerDup=false;
+   if(curTab==='logs'){
+     stopSse();
+     stopLogPoll();
+     if(_mtThrottled)startLogPoll();
+     else if(backfillDone)startSse();
+   }
+   _mtBroadcast('rekey',{from:oldTid});
+   return true;
  }
  function _mtApplyDupState(){_mtSetDup(_mtHasPeer()||_mtServerDup);}
  function _mtSyncServerTabs(raw){
@@ -1266,19 +1306,25 @@ function handleOtaResult(d,sid){
     _mtChan=new BroadcastChannel('cpap-uploader-tab');
     _mtChan.onmessage=function(e){
       if(!e.data)return;
-      if(e.data.type==='ping'&&e.data.id!==_mtTabId){
-        _mtAddPeer(e.data.id);
+      if(e.data.type==='ping'&&e.data.iid!==_mtInstanceId){
+        _mtAddPeer(e.data);
+        _mtMaybeRekey(e.data);
         _mtApplyDupState();
-        _mtChan.postMessage({type:'pong',id:_mtTabId});
+        _mtBroadcast('pong');
       }
-      if(e.data.type==='pong'&&e.data.id!==_mtTabId){
-        _mtAddPeer(e.data.id);
+      if(e.data.type==='pong'&&e.data.iid!==_mtInstanceId){
+        _mtAddPeer(e.data);
+        _mtMaybeRekey(e.data);
         _mtApplyDupState();
         if(_mtBcPongTimer){clearTimeout(_mtBcPongTimer);_mtBcPongTimer=null;}
       }
-      if(e.data.type==='close'&&e.data.id!==_mtTabId){
-        _mtDropPeer(e.data.id);
-        _mtChan.postMessage({type:'ping',id:_mtTabId});
+      if(e.data.type==='rekey'&&e.data.iid!==_mtInstanceId){
+        _mtAddPeer(e.data);
+        _mtApplyDupState();
+      }
+      if(e.data.type==='close'&&e.data.iid!==_mtInstanceId){
+        _mtDropPeer(e.data.iid);
+        _mtBroadcast('ping');
         if(_mtBcPongTimer)clearTimeout(_mtBcPongTimer);
         _mtBcPongTimer=setTimeout(function(){
           _mtBcPongTimer=null;
@@ -1286,17 +1332,19 @@ function handleOtaResult(d,sid){
         },1500);
       }
     };
-    _mtChan.postMessage({type:'ping',id:_mtTabId});
+    _mtBroadcast('ping');
     window.addEventListener('beforeunload',function(){
-      if(_mtChan)try{_mtChan.postMessage({type:'close',id:_mtTabId});}catch(e){}
+      if(_mtChan)try{_mtBroadcast('close');}catch(e){}
     });
     setInterval(function(){
-      if(_mtChan)_mtChan.postMessage({type:'ping',id:_mtTabId});
+      if(_mtChan)_mtBroadcast('ping');
       _mtApplyDupState();
     },5000);
   }
 
- loadCfg();
- startStatusPoll();
+ setTimeout(function(){
+   loadCfg();
+   startStatusPoll();
+ },150);
 </script>
 </body></html>)HTMLEOF";
