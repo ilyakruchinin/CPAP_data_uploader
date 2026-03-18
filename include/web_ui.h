@@ -86,6 +86,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 #reboot-overlay p{color:#a0c0b0;font-size:.84em;line-height:1.5}
 @keyframes rbPulse{0%,100%{border-color:#2f8f57}50%{border-color:#44ff44}}
 @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+@keyframes mtPulse{0%,100%{border-color:#cc3333}50%{border-color:#ff6666}}
 .log-spinner{display:inline-block;width:14px;height:14px;border:2px solid #2a475e;border-top-color:#66c0f4;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:6px}
 #mon-active-banner{display:none;background:#2a1a2a;border:1px solid #8b4dbb;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center;animation:monPulse 2.5s ease-in-out infinite}
 #mon-active-banner h3{color:#bb88ff;font-size:1em;margin-bottom:6px}
@@ -166,6 +167,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <p class=sub id=sub>Connecting...</p>
 <div id=reboot-overlay><h3>&#8635; Device is unreachable or rebooting&hellip;</h3><p>If the device is rebooting, this is normal &mdash; it may reboot periodically by design to maintain stability and will be back online in a few seconds.<br>If it has been powered off or moved out of WiFi range, this page will reconnect automatically once the device is reachable again.</p></div>
 <div id=mon-active-banner><h3>&#128270; SD Access Monitoring is active</h3><p>All automatic uploads are <strong>paused</strong> while monitoring is running.<br>Go to the <strong>SD Access</strong> tab and click <strong>Stop</strong> to resume normal operation.</p></div>
+<div id=multitab-banner style="display:none;background:#3a1a1a;border:1px solid #cc3333;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center;animation:mtPulse 2.5s ease-in-out infinite"><h3 style="color:#ff6666;font-size:1em;margin-bottom:6px">&#9888; Multiple tabs/browsers detected</h3><p style="color:#c0a0a0;font-size:.84em;line-height:1.5">This device has very limited memory. Multiple connections cause <strong>heap fragmentation</strong>, network contention, and can trigger <strong>watchdog reboots</strong> during uploads.<br>Please <strong>close all other tabs/browsers</strong> connected to this device. This tab has throttled its polling to reduce impact.</p></div>
 <div id=brownout-banner style="display:none;background:#3a2a0a;border:1px solid #cc8800;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center"><h3 style="color:#ffaa00;font-size:1em;margin-bottom:6px">&#9888; Brownout Detection Disabled</h3><p style="color:#c0b090;font-size:.84em;line-height:1.5">BROWNOUT_DETECT is set to OFF in config.txt. The device will <strong>not</strong> reset on power drops &mdash; this may cause data corruption.</p></div>
 <nav>
 <button id=t-dash onclick="tab('dash')" class=act>Dashboard</button>
@@ -906,6 +908,7 @@ function fetchBackfill(){
 }
 function startSse(){
   if(sseSource)return;
+  if(_mtThrottled){startLogPoll();return;}
   if(typeof EventSource==='undefined'){startLogPoll();return;}
   sseSource=new EventSource('/api/logs/stream');
   sseSource.onopen=function(){
@@ -1147,6 +1150,71 @@ function handleOtaResult(d,sid){
   if(d.success){setMsg(sid,'ok','Success! '+d.message);var t=30;var iv=setInterval(function(){t--;setMsg(sid,'ok','Redirecting in '+t+'s...');if(t<=0){clearInterval(iv);location.href='/';}},1000);}
   else setMsg(sid,'er','Failed: '+d.message);
 }
+
+// ── Multi-tab/browser detection (pure client-side, zero server cost) ──
+// Uses BroadcastChannel to detect other tabs on the same browser.
+// Uses localStorage heartbeat to detect tabs across browsers on the same device.
+// When a duplicate is detected: show warning banner, throttle polling, disable SSE.
+var _mtDup=false,_mtTabId=Date.now()+'.'+Math.random().toString(36).slice(2,8);
+var _mtChan=null,_mtThrottled=false;
+function _mtSetDup(v){
+  if(_mtDup===v)return;_mtDup=v;
+  var b=document.getElementById('multitab-banner');if(b)b.style.display=v?'block':'none';
+  if(v&&!_mtThrottled){
+    _mtThrottled=true;
+    // Throttle status polling from 5s to 15s to reduce device load
+    if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,15000);}
+    // Kill SSE — each SSE connection holds a persistent TCP socket + lwIP buffers
+    stopSse();
+    toast('Multiple tabs detected \u2014 polling throttled to reduce device load','warn');
+  } else if(!v&&_mtThrottled){
+    _mtThrottled=false;
+    if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,5000);}
+  }
+}
+// BroadcastChannel: same-browser, cross-tab (modern browsers)
+if(typeof BroadcastChannel!=='undefined'){
+  _mtChan=new BroadcastChannel('cpap-uploader-tab');
+  _mtChan.onmessage=function(e){
+    if(e.data&&e.data.type==='ping'&&e.data.id!==_mtTabId){
+      _mtSetDup(true);
+      _mtChan.postMessage({type:'pong',id:_mtTabId});
+    }
+    if(e.data&&e.data.type==='pong'&&e.data.id!==_mtTabId){_mtSetDup(true);}
+    if(e.data&&e.data.type==='close'&&e.data.id!==_mtTabId){
+      // Other tab closed — check if any remain after a brief delay
+      setTimeout(function(){
+        _mtChan.postMessage({type:'ping',id:_mtTabId});
+        // If no pong received within 500ms, clear duplicate state
+        setTimeout(function(){if(_mtDup){_mtChan.postMessage({type:'ping',id:_mtTabId});}},500);
+      },300);
+    }
+  };
+  _mtChan.postMessage({type:'ping',id:_mtTabId});
+  window.addEventListener('beforeunload',function(){
+    if(_mtChan)try{_mtChan.postMessage({type:'close',id:_mtTabId});}catch(e){}
+  });
+  // Re-check periodically — handles race conditions and late-opening tabs
+  setInterval(function(){
+    if(_mtChan&&!_mtDup)_mtChan.postMessage({type:'ping',id:_mtTabId});
+  },10000);
+}
+// localStorage heartbeat: cross-browser detection (works across Chrome+Firefox etc.)
+try{
+  var _mtKey='cpap_tab_hb',_mtHbIv=setInterval(function(){
+    try{
+      var now=Date.now(),prev=localStorage.getItem(_mtKey);
+      if(prev){
+        var parts=prev.split('|'),ts=parseInt(parts[0]),id=parts[1]||'';
+        if(id!==_mtTabId&&(now-ts)<8000){_mtSetDup(true);}
+      }
+      localStorage.setItem(_mtKey,now+'|'+_mtTabId);
+    }catch(e){}
+  },3000);
+  window.addEventListener('beforeunload',function(){
+    try{var v=localStorage.getItem(_mtKey);if(v&&v.indexOf(_mtTabId)!==-1)localStorage.removeItem(_mtKey);}catch(e){}
+  });
+}catch(e){}
 
 loadCfg();
 startStatusPoll();

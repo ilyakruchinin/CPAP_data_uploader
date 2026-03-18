@@ -201,6 +201,62 @@ void transitionTo(UploadState newState) {
 // ============================================================================
 
 /**
+ * Extract panic details from the coredump partition after a WDT/panic reset.
+ * Scans for the ESP_PANIC_DETAILS ELF note in the raw coredump data and
+ * returns the human-readable panic reason (e.g. "Task watchdog got triggered.
+ * The following tasks/users did not reset the watchdog in time: - upload (CPU 0)").
+ * Returns empty string if no coredump or no panic details found.
+ */
+static String extractPanicDetailsFromCoredump() {
+    const esp_partition_t* part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x03, "coredump");
+    if (!part) return "";
+
+    // Quick check: erased flash is all 0xFF
+    uint8_t magic[4];
+    if (esp_partition_read(part, 0, magic, 4) != ESP_OK) return "";
+    if (magic[0] == 0xFF && magic[1] == 0xFF) return "";  // Empty/erased
+
+    // Scan for "ESP_PANIC_DETAILS" note name in the raw coredump ELF
+    static const char MARKER[] = "ESP_PANIC_DETAILS";
+    const size_t MLEN = sizeof(MARKER) - 1;  // 17 chars
+    const size_t CHUNK = 512;
+    uint8_t buf[CHUNK + 32];  // overlap for cross-chunk boundary matches
+
+    size_t limit = (part->size < 65536) ? part->size : 65536;
+    for (size_t off = 0; off < limit; off += CHUNK) {
+        size_t readSz = CHUNK + 32;
+        if (off + readSz > limit) readSz = limit - off;
+        if (readSz < MLEN) break;
+        if (esp_partition_read(part, off, buf, readSz) != ESP_OK) break;
+
+        for (size_t i = 0; i + MLEN <= readSz; i++) {
+            if (memcmp(buf + i, MARKER, MLEN) != 0) continue;
+
+            // Found marker. ELF NOTE layout:
+            //   namesz(4) + descsz(4) + type(4) + name(aligned to 4) + desc
+            // The header starts 12 bytes before the name.
+            size_t absPos = off + i;
+            if (absPos < 12) continue;
+
+            uint32_t descsz;
+            if (esp_partition_read(part, absPos - 8, &descsz, 4) != ESP_OK) continue;
+            if (descsz == 0 || descsz > 256) continue;
+
+            // "ESP_PANIC_DETAILS\0" = 18 bytes → aligned to 20
+            size_t descAbsOff = absPos + ((MLEN + 1 + 3) & ~3);
+
+            char text[257];
+            size_t toRead = (descsz < sizeof(text) - 1) ? descsz : sizeof(text) - 1;
+            if (esp_partition_read(part, descAbsOff, text, toRead) != ESP_OK) continue;
+            text[toRead] = '\0';
+            return String(text);
+        }
+    }
+    return "";
+}
+
+/**
  * Convert ESP32 reset reason to human-readable string
  * Useful for diagnosing power issues, crashes, and unexpected resets
  */
@@ -306,8 +362,16 @@ void setup() {
         LOG_WARN("[POWER] Brownout-recovery mode ACTIVE — degraded boot to reduce power draw");
     } else if (resetReason == ESP_RST_PANIC) {
         LOG_WARN("System reset due to software panic - check for stability issues");
+        String panicDetails = extractPanicDetailsFromCoredump();
+        if (!panicDetails.isEmpty()) {
+            LOGF("Previous crash: %s", panicDetails.c_str());
+        }
     } else if (resetReason == ESP_RST_WDT || resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT) {
         LOG_WARN("System reset due to watchdog timeout - possible hang or power issue");
+        String panicDetails = extractPanicDetailsFromCoredump();
+        if (!panicDetails.isEmpty()) {
+            LOGF("Previous crash: %s", panicDetails.c_str());
+        }
     }
 
     // ── Guard against LittleFS partition-shrink assertion ──

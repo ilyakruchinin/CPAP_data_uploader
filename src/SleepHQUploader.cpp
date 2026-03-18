@@ -8,6 +8,7 @@
 #include "NetworkRecovery.h"
 #include <esp_rom_md5.h>
 #include <esp_task_wdt.h>
+#include <lwip/sockets.h>
 
 // GTS Root R4 - Google Trust Services root CA certificate (expires June 22, 2036)
 // Used for TLS validation of sleephq.com (which uses Google Trust Services)
@@ -102,6 +103,21 @@ void SleepHQUploader::resetConnection() {
     resetTLS();
 }
 
+void SleepHQUploader::setSendTimeout() {
+    // Set SO_SNDTIMEO on the underlying TCP socket after TLS connect.
+    // WiFiClientSecure::setTimeout() only sets SO_RCVTIMEO (read timeout);
+    // without SO_SNDTIMEO, write() on a zombie connection blocks indefinitely,
+    // starving the 30s task WDT → watchdog reboot (confirmed by core dump).
+    if (!tlsClient) return;
+    int fd = tlsClient->fd();
+    if (fd >= 0) {
+        struct timeval tv;
+        tv.tv_sec = 20;
+        tv.tv_usec = 0;
+        lwip_setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+}
+
 void SleepHQUploader::parseHostPort(char* host, size_t hostLen, int& port) {
     port = 443;
     const char* rawUrl = config->getCloudBaseUrl().c_str();
@@ -141,11 +157,18 @@ bool SleepHQUploader::preWarmTLS() {
     uint32_t ma = ESP.getMaxAllocHeap();
     LOGF("[SleepHQ] Pre-warm: connecting to %s:%d (fh=%u, ma=%u)", host, port, fh, ma);
 
+    // Feed task WDT before TLS handshake — can take 14+ seconds at low heap.
+    // Gives the 30s WDT a full window for the handshake to complete.
+    esp_task_wdt_reset();
+
     if (!tlsClient->connect(host, port)) {
+        esp_task_wdt_reset();  // Feed after failed handshake attempt
         LOG_WARN("[SleepHQ] Pre-warm: TLS connect failed (non-fatal, will retry during upload)");
         return false;
     }
 
+    esp_task_wdt_reset();  // Feed after successful handshake
+    setSendTimeout();
     LOGF("[SleepHQ] Pre-warm: TLS connected (fh=%u, ma=%u)",
          ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     return true;
@@ -627,6 +650,8 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
             }
             LOGF("[SleepHQ] TLS connected (fh=%u, ma=%u)",
                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+            setSendTimeout();
+            esp_task_wdt_reset();  // Feed after handshake before header writes
         }
 
         // ── Send HTTP request via raw TLS (zero heap allocation) ─────────
@@ -890,7 +915,14 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         if (!tlsClient->connected()) {
             LOGF("[SleepHQ] Streaming: establishing TLS connection (attempt %d, free: %u, max_alloc: %u)",
                  attempt + 1, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+            // Feed watchdogs before TLS handshake — gives full 30s WDT window
+            esp_task_wdt_reset();
+            {
+                extern volatile unsigned long g_uploadHeartbeat;
+                g_uploadHeartbeat = millis();
+            }
             if (!tlsClient->connect(host, port)) {
+                esp_task_wdt_reset();  // Feed after failed handshake
                 LOG_ERROR("[SleepHQ] Failed to connect for streaming upload");
                 
                 if (attempt == 0) {
@@ -903,6 +935,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                         while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
                             extern volatile unsigned long g_uploadHeartbeat;
                             g_uploadHeartbeat = millis();  // Feed software watchdog
+                            esp_task_wdt_reset();          // Feed task WDT during WiFi wait
                             delay(100);
                         }
                         if (WiFi.status() == WL_CONNECTED) {
@@ -928,6 +961,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 }
                 return false;
             }
+            esp_task_wdt_reset();  // Feed after successful handshake
+            setSendTimeout();
         } else {
             LOG_DEBUG("[SleepHQ] Streaming: reusing existing TLS connection (keep-alive)");
         }
@@ -954,6 +989,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 tlsClient->write((const uint8_t*)"Connection: close\r\n\r\n", 21);
             }
         }
+        esp_task_wdt_reset();  // Feed WDT after HTTP header writes
         
         // Send multipart preamble — stack buffer to avoid heap churn
         {
@@ -970,6 +1006,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                          boundary, fnStr);
             tlsClient->write((const uint8_t*)partBuf, n);
         }
+        esp_task_wdt_reset();  // Feed WDT after multipart preamble writes
         
         // Re-open and stream file
         file = sd.open(filePath, FILE_READ);
@@ -1117,6 +1154,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             *calculatedChecksum = String(hashStr);
         }
         
+        esp_task_wdt_reset();  // Feed WDT before footer writes
         // Send footer with hash — stack buffer to avoid heap churn
         {
             char partBuf[384];
