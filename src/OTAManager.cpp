@@ -73,16 +73,23 @@ bool OTAManager::startUpdate(size_t firmwareSize) {
         return false;
     }
     
+    const esp_partition_t* target = esp_ota_get_next_update_partition(nullptr);
+    size_t maxUpdateSize = target ? target->size : ESP.getFreeSketchSpace();
+    if (target) {
+        LOG_DEBUGF("[OTA] Target partition: %s (%u bytes)", target->label, (unsigned)target->size);
+    }
+    
     // Allow size 0 for chunked uploads - we'll determine the actual size later
-    if (firmwareSize > 0x180000) {  // Max 1.5MB firmware (OTA partition size)
+    if (firmwareSize > maxUpdateSize) {
         LOG_ERROR("[OTA] Firmware size too large");
+        LOG_DEBUGF("[OTA] Firmware size %u exceeds partition size %u", (unsigned)firmwareSize, (unsigned)maxUpdateSize);
         return false;
     }
     
     LOG_DEBUGF("[OTA] Starting update, firmware size: %u bytes", firmwareSize);
     
     // For chunked uploads (size 0), use the OTA partition size as default
-    size_t updateSize = (firmwareSize == 0) ? 0x180000 : firmwareSize;  // 1.5MB default
+    size_t updateSize = (firmwareSize == 0) ? maxUpdateSize : firmwareSize;
     
     if (!Update.begin(updateSize)) {
         LOG_ERROR("[OTA] Failed to begin update");
