@@ -52,9 +52,10 @@ private:
     void handleConfigPage();      // HTML Config Page
     void handleApiConfig();       // JSON Config API
     void handleLogs();            // HTML Logs Viewer (AJAX)
-    void handleApiLogs();         // Raw Logs API (in-memory buffer)
-    void handleApiLogsSaved();    // Download all logs (NAND rotation + circular buffer)
-    void handleApiLogsFull();     // NAND + circular buffer backfill
+    void handleApiLogs();         // Legacy alias for circular-buffer logs
+    void handleApiLogsSaved();    // Legacy alias for full download
+    void handleApiLogsFull();     // Legacy alias for recent-history backfill
+    void handleApiLogsFile0();    // Latest persisted log file only
     void handleApiLogsStream();   // SSE live log stream setup
     void handleNotFound();
     void handleMonitorStart();

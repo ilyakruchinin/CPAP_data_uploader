@@ -426,6 +426,26 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 <script>
 var cfg={},monPoll=null,logPoll=null,curTab='dash',monActive=false;
 var heapHistory=[],MAX_HEAP_HISTORY_MS=120000,HEAP_GAP_THRESHOLD_MS=6500,currentFsmState='',prevHelpHtml='';
+function _mkTabId(){
+  try{
+    var k='cpap-tab-id',v=sessionStorage.getItem(k);
+    if(v&&/^[0-9a-fA-F]{4}$/.test(v))return v.toUpperCase();
+    v=('0000'+Math.floor(Math.random()*65536).toString(16)).slice(-4).toUpperCase();
+    sessionStorage.setItem(k,v);
+    return v;
+  }catch(e){
+    return ('0000'+Math.floor(Math.random()*65536).toString(16)).slice(-4).toUpperCase();
+  }
+}
+function _apiUrl(path){return path+(path.indexOf('?')>=0?'&':'?')+'tid='+encodeURIComponent(_mtTabId);}
+function _apiFetch(path,opts){
+  opts=opts||{};
+  var headers=opts.headers||{};
+  headers['X-Tab-Id']=_mtTabId;
+  opts.headers=headers;
+  if(!opts.cache)opts.cache='no-store';
+  return fetch(_apiUrl(path),opts);
+}
 function tab(t){
   ['dash','logs','cfg','mon','mem','ota'].forEach(function(x){
     document.getElementById(x).classList.toggle('on',x===t);
@@ -591,13 +611,12 @@ function renderStatus(d){
   if(curTab==='mem'){updateHeapChart();updateCpuChart();}
   var bb=document.getElementById('brownout-banner');
   if(bb)bb.style.display=(cfg.brownout_detect_mode==='OFF')?'block':'none';
-  // Layer 2: check SSE connection sequence from server
-  _mtCheckSseSeq(d.sse_seq);
+  _mtSyncServerTabs(d.recent_tabs);
 }
 
 var statusTimer=null;
 function pollStatus(){
-  fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+  _apiFetch('/api/status').then(function(r){return r.json();}).then(function(d){
     renderStatus(d);
   }).catch(function(){
     statusFailCount++;
@@ -609,7 +628,9 @@ function pollStatus(){
     }
   });
 }
-function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
+function _statusPollMs(){return _mtDup?15000:3000;}
+function _restartStatusPoll(){if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,_statusPollMs());}}
+function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,_statusPollMs());}}
 document.addEventListener('visibilitychange',function(){if(!document.hidden){statusFailCount=0;}});
 
 var cpuHistory=[];
@@ -867,12 +888,13 @@ function _tryBackfill(){
     set('log-st','Close other tabs to load full log history');
     _backfillDeferred=true;
     backfillDone=true; // mark done so tab() falls through to polling/SSE
+    fetchLogs();
     startLogPoll();
     return;
   }
   if(_isUploadBusy()){
     // Tier 2: upload active — skip NAND backfill, use circular buffer + SSE
-    set('log-st','Upload active \u2014 showing live logs only');
+    set('log-st','Upload active — showing live logs only');
     _backfillDeferred=true;
     backfillDone=true;
     fetchLogs();
@@ -884,7 +906,8 @@ function _tryBackfill(){
 }
 function fetchLogs(){
   if(curTab!=='logs')return;
-  fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+  if(_mtThrottled&&document.hidden)return;
+  _apiFetch('/api/logs/poll').then(function(r){return r.text();}).then(function(t){
     _appendLogs(t);
     _renderLogBuf();
     // If polling detected a new boot (boot banner found, or lastSeenLine vanished
@@ -902,8 +925,8 @@ function fetchLogs(){
   }).catch(function(){set('log-st','Disconnected');});
 }
 function fetchBackfill(){
-  seti('log-st','<span class="log-spinner"></span>Loading history\u2026');
-  fetch('/api/logs/full',{cache:'no-store'}).then(function(r){
+  seti('log-st','<span class="log-spinner"></span>Loading history…');
+  _apiFetch('/api/logs/recent').then(function(r){
     // Use streaming to show progressive loading feedback
     var reader=r.body?r.body.getReader():null;
     if(!reader) return r.text();
@@ -915,7 +938,7 @@ function fetchBackfill(){
         chunks.push(chunk);
         totalBytes+=result.value.length;
         var lines=0;for(var i=0;i<chunk.length;i++){if(chunk.charCodeAt(i)===10)lines++;}
-        seti('log-st','<span class="log-spinner"></span>Loading\u2026 '+(totalBytes/1024).toFixed(0)+' KB received');
+        seti('log-st','<span class="log-spinner"></span>Loading… '+(totalBytes/1024).toFixed(0)+' KB received');
         return pump();
       });
     }
@@ -925,14 +948,14 @@ function fetchBackfill(){
     _renderLogBuf();
     backfillDone=true;
     backfillRetries=0;
-    set('log-st','Loaded \u2022 '+clientLogBuf.length+' lines');
+    set('log-st','Loaded • '+clientLogBuf.length+' lines');
     startSse();
   }).catch(function(){
     // Device might still be rebooting — retry with exponential backoff
     backfillRetries++;
     if(backfillRetries<6){
       var delay=Math.min(3000*backfillRetries,15000);
-      set('log-st','Device offline \u2014 retry '+backfillRetries+'/5 in '+(delay/1000)+'s\u2026');
+      set('log-st','Device offline — retry '+backfillRetries+'/5 in '+(delay/1000)+'s…');
       setTimeout(function(){if(curTab==='logs'){fetchBackfill();}},delay);
     } else {
       backfillDone=true;
@@ -945,14 +968,12 @@ function startSse(){
   if(sseSource)return;
   if(_mtThrottled){startLogPoll();return;}
   if(typeof EventSource==='undefined'){startLogPoll();return;}
-  sseSource=new EventSource('/api/logs/stream');
+  sseSource=new EventSource(_apiUrl('/api/logs/stream'));
   sseSource.onopen=function(){
     sseConnected=true;
     sseReconnAttempts=0;
-    _mtSseConnectTs=Date.now();  // Layer 3: record connect time
-    _mtOwnSseConnects++;          // Layer 2: track this tab's SSE opens
     stopLogPoll();
-    set('log-st','SSE Live \u2022 '+clientLogBuf.length+' lines');
+    set('log-st','SSE Live • '+clientLogBuf.length+' lines');
   };
   sseSource.onmessage=function(e){
     if(!e.data)return;
@@ -963,21 +984,14 @@ function startSse(){
   sseSource.onerror=function(){
     sseConnected=false;
     if(sseSource){sseSource.close();sseSource=null;}
-    // Layer 3: if SSE connected then dropped within 10s, and status polling works
-    // (statusFailCount===0), another client is likely stealing the SSE slot
-    if(_mtSseConnectTs>0&&(Date.now()-_mtSseConnectTs)<10000&&statusFailCount===0){
-      _mtSseContentionHits++;
-      if(_mtSseContentionHits>=2){_mtSetDup(true);}
-    }
-    _mtSseConnectTs=0;
     sseReconnAttempts++;
     if(sseReconnAttempts<=3){
       var delay=Math.min(2000*sseReconnAttempts,6000);
-      set('log-st','SSE lost \u2014 retry '+sseReconnAttempts+'/3 in '+(delay/1000)+'s\u2026');
+      set('log-st','SSE lost — retry '+sseReconnAttempts+'/3 in '+(delay/1000)+'s…');
       setTimeout(function(){if(curTab==='logs'){startSse();}},delay);
     } else {
       sseReconnAttempts=0;
-      set('log-st','SSE unavailable \u2014 falling back to polling');
+      set('log-st','SSE unavailable — falling back to polling');
       startLogPoll();
     }
   };
@@ -988,7 +1002,7 @@ function stopSse(){
 function clearLogBuf(){clientLogBuf=[];lastSeenLine='';document.getElementById('log-box').textContent='';}
 function downloadSavedLogs(){
   var a=document.createElement('a');
-  a.href='/api/logs/saved';
+  a.href=_apiUrl('/api/logs/download-all');
   a.download='cpap_logs.txt';
   document.body.appendChild(a);a.click();document.body.removeChild(a);
 }
@@ -1006,7 +1020,8 @@ function copyLogBuf(){
 document.getElementById('log-box').addEventListener('scroll',function(){
   var b=this;logAtBottom=(b.scrollHeight-b.scrollTop-b.clientHeight)<60;
 });
-function startLogPoll(){if(!logPoll){fetchLogs();logPoll=setInterval(fetchLogs,4000);}}
+function _logPollMs(){return _mtDup?15000:3000;}
+function startLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}if(curTab!=='logs')return;fetchLogs();logPoll=setInterval(fetchLogs,_logPollMs());}
 function stopLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}}
 
 function startMon(){
@@ -1193,106 +1208,95 @@ function handleOtaResult(d,sid){
   otaBusy=false;
   if(d.success){setMsg(sid,'ok','Success! '+d.message);var t=30;var iv=setInterval(function(){t--;setMsg(sid,'ok','Redirecting in '+t+'s...');if(t<=0){clearInterval(iv);location.href='/';}},1000);}
   else setMsg(sid,'er','Failed: '+d.message);
-}
-
-// ── Multi-tab/browser/device detection ──
-// Three complementary detection layers:
-//  1. BroadcastChannel — instant same-browser cross-tab (Chrome↔Chrome, FF↔FF)
-//  2. SSE sequence counter from /api/status — cross-browser AND cross-device
-//     (ESP32 has one SSE slot; each new SSE connect increments sse_seq)
-//  3. SSE rapid-disconnect heuristic — if SSE connects then drops quickly while
-//     status polling still works, another client is stealing the SSE slot
-var _mtDup=false,_mtTabId=Date.now()+'.'+Math.random().toString(36).slice(2,8);
-var _mtChan=null,_mtThrottled=false;
-var _mtSseSeq=-1,_mtOwnSseConnects=0;
-var _mtSseConnectTs=0,_mtSseContentionHits=0,_mtSseCleanPolls=0;
-function _mtSetDup(v){
-  if(_mtDup===v)return;_mtDup=v;
-  var b=document.getElementById('multitab-banner');if(b)b.style.display=v?'block':'none';
-  if(v&&!_mtThrottled){
-    _mtThrottled=true;
-    if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,15000);}
-    stopSse();
-    toast('Multiple tabs/browsers detected \u2014 polling throttled','warn');
-  } else if(!v&&_mtThrottled){
-    _mtThrottled=false;
-    if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,5000);}
-    // Resume SSE if user is viewing Logs tab
-    if(curTab==='logs'){
-      stopLogPoll();
-      // If backfill was deferred due to multi-tab, trigger it now
-      if(_backfillDeferred){
-        _backfillDeferred=false;backfillDone=false;
-        clientLogBuf=[];lastSeenLine='';
-        _tryBackfill();
-      } else {
-        startSse();
+ }
+ 
+ // ── Multi-tab/browser/device detection ──
+ var _mtDup=false,_mtTabId=_mkTabId();
+ var _mtChan=null,_mtThrottled=false,_mtPeers={},_mtServerDup=false;
+ function _mtAddPeer(id){if(id&&id!==_mtTabId)_mtPeers[id]=Date.now();}
+ function _mtDropPeer(id){if(id&&_mtPeers[id])delete _mtPeers[id];}
+ function _mtHasPeer(){
+   var now=Date.now();
+   for(var id in _mtPeers){if((now-_mtPeers[id])>20000)delete _mtPeers[id];}
+   for(var k in _mtPeers){return true;}
+   return false;
+ }
+ function _mtApplyDupState(){_mtSetDup(_mtHasPeer()||_mtServerDup);}
+ function _mtSyncServerTabs(raw){
+   _mtServerDup=false;
+   if(typeof raw==='string'&&raw){
+     raw.split(',').forEach(function(entry){
+       var parts=entry.split(':');
+       if(parts.length<2)return;
+       var id=(parts[0]||'').toUpperCase();
+       var age=parseInt(parts[1],10);
+       if(id&&id!==_mtTabId&&!isNaN(age)&&age<=20)_mtServerDup=true;
+     });
+   }
+   _mtApplyDupState();
+ }
+ function _mtSetDup(v){
+   if(_mtDup===v)return;_mtDup=v;
+   var b=document.getElementById('multitab-banner');if(b)b.style.display=v?'block':'none';
+   if(v&&!_mtThrottled){
+     _mtThrottled=true;
+     _restartStatusPoll();
+     stopSse();
+     if(curTab==='logs')startLogPoll();
+     toast('Multiple tabs/browsers detected — polling throttled','warn');
+   } else if(!v&&_mtThrottled){
+     _mtThrottled=false;
+     _restartStatusPoll();
+     if(curTab==='logs'){
+       stopLogPoll();
+       if(_backfillDeferred){
+         _backfillDeferred=false;backfillDone=false;
+         clientLogBuf=[];lastSeenLine='';
+         _tryBackfill();
+        } else {
+          startSse();
+        }
       }
-    }
-    toast('Other tabs/browsers closed \u2014 resuming normal operation','ok');
-  }
-}
-// Layer 1: BroadcastChannel — same-browser, cross-tab
-var _mtBcPongTimer=null;
-if(typeof BroadcastChannel!=='undefined'){
-  _mtChan=new BroadcastChannel('cpap-uploader-tab');
-  _mtChan.onmessage=function(e){
-    if(!e.data)return;
-    if(e.data.type==='ping'&&e.data.id!==_mtTabId){
-      _mtSetDup(true);
-      _mtChan.postMessage({type:'pong',id:_mtTabId});
-    }
-    if(e.data.type==='pong'&&e.data.id!==_mtTabId){
-      _mtSetDup(true);
-      if(_mtBcPongTimer){clearTimeout(_mtBcPongTimer);_mtBcPongTimer=null;}
-    }
-    if(e.data.type==='close'&&e.data.id!==_mtTabId){
-      // Other tab closed — probe if any others remain
-      _mtChan.postMessage({type:'ping',id:_mtTabId});
-      // If no pong within 1.5s, we are the only tab left → clear
-      if(_mtBcPongTimer)clearTimeout(_mtBcPongTimer);
-      _mtBcPongTimer=setTimeout(function(){
-        _mtBcPongTimer=null;
-        // Only clear if SSE-seq also looks clean (no cross-browser/device contention)
-        if(_mtSseContentionHits<2)_mtSetDup(false);
-      },1500);
-    }
-  };
-  _mtChan.postMessage({type:'ping',id:_mtTabId});
-  window.addEventListener('beforeunload',function(){
-    if(_mtChan)try{_mtChan.postMessage({type:'close',id:_mtTabId});}catch(e){}
-  });
-  setInterval(function(){
-    if(_mtChan&&!_mtDup)_mtChan.postMessage({type:'ping',id:_mtTabId});
-  },10000);
-}
-// Layer 2: SSE sequence counter — checked inside renderStatus() on each /api/status poll.
-// ESP32 increments sse_seq every time ANY client opens /api/logs/stream.
-// If sse_seq advances more than this tab's own SSE opens, another client is present.
-function _mtCheckSseSeq(serverSeq){
-  if(typeof serverSeq!=='number')return;
-  if(_mtSseSeq<0){_mtSseSeq=serverSeq;_mtOwnSseConnects=0;return;}
-  var serverDelta=serverSeq-_mtSseSeq;
-  if(serverDelta>_mtOwnSseConnects){
-    _mtSetDup(true);
-    _mtSseContentionHits++;
-    _mtSseCleanPolls=0;
-  } else {
-    _mtSseCleanPolls++;
-    // After 3 consecutive clean polls (~15-30s depending on throttle state),
-    // the other client likely closed. Reset contention state and clear banner.
-    if(_mtDup&&_mtSseCleanPolls>=3){
-      _mtSseContentionHits=0;
-      _mtSetDup(false);
+      toast('Other tabs/browsers closed — resuming normal operation','ok');
     }
   }
-  _mtSseSeq=serverSeq;
-  _mtOwnSseConnects=0;
-}
-// Layer 3: SSE rapid-disconnect heuristic — if SSE connects then drops within 10s
-// while /api/status still works, it's contention (another client stole the SSE slot).
+  // Layer 1: BroadcastChannel — same-browser, cross-tab
+  var _mtBcPongTimer=null;
+  if(typeof BroadcastChannel!=='undefined'){
+    _mtChan=new BroadcastChannel('cpap-uploader-tab');
+    _mtChan.onmessage=function(e){
+      if(!e.data)return;
+      if(e.data.type==='ping'&&e.data.id!==_mtTabId){
+        _mtAddPeer(e.data.id);
+        _mtApplyDupState();
+        _mtChan.postMessage({type:'pong',id:_mtTabId});
+      }
+      if(e.data.type==='pong'&&e.data.id!==_mtTabId){
+        _mtAddPeer(e.data.id);
+        _mtApplyDupState();
+        if(_mtBcPongTimer){clearTimeout(_mtBcPongTimer);_mtBcPongTimer=null;}
+      }
+      if(e.data.type==='close'&&e.data.id!==_mtTabId){
+        _mtDropPeer(e.data.id);
+        _mtChan.postMessage({type:'ping',id:_mtTabId});
+        if(_mtBcPongTimer)clearTimeout(_mtBcPongTimer);
+        _mtBcPongTimer=setTimeout(function(){
+          _mtBcPongTimer=null;
+          _mtApplyDupState();
+        },1500);
+      }
+    };
+    _mtChan.postMessage({type:'ping',id:_mtTabId});
+    window.addEventListener('beforeunload',function(){
+      if(_mtChan)try{_mtChan.postMessage({type:'close',id:_mtTabId});}catch(e){}
+    });
+    setInterval(function(){
+      if(_mtChan)_mtChan.postMessage({type:'ping',id:_mtTabId});
+      _mtApplyDupState();
+    },5000);
+  }
 
-loadCfg();
-startStatusPoll();
+ loadCfg();
+ startStatusPoll();
 </script>
 </body></html>)HTMLEOF";

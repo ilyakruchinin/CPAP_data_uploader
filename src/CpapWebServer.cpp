@@ -32,10 +32,23 @@ extern volatile uint32_t g_idleCount0, g_idleCount1;
 extern uint32_t g_cpuLoad0, g_cpuLoad1;
 
 namespace {
-static constexpr unsigned long kUploadLogsMinRefreshMs = 3000;
-static constexpr size_t kUploadLogsTailBytes = 2048;
 static constexpr unsigned long kUploadUiMinIntervalMs = 400;
 static constexpr unsigned long kUploadNotFoundMinIntervalMs = 250;
+static constexpr size_t kRecentTabSightingsCount = 12;
+static constexpr unsigned long kSseOwnerLeaseMs = 30000;
+
+struct RecentTabSighting {
+    uint16_t tabId;
+    uint32_t seenAtMs;
+};
+
+static RecentTabSighting g_recentTabSightings[kRecentTabSightingsCount] = {};
+static uint8_t g_recentTabWriteIndex = 0;
+static WiFiClient g_sseClient;
+static volatile bool g_sseActive = false;
+static volatile uint32_t g_sseLastPushedIndex = 0;
+static volatile uint16_t g_sseOwnerTid = 0;
+static volatile uint32_t g_sseOwnerLastSeenMs = 0;
 
 enum UploadUiSlot : uint8_t {
     kUploadUiSlotRoot = 0,
@@ -78,6 +91,67 @@ void sendUploadRateLimitResponse(WebServer* server,
     // Proactively release socket resources under upload-time pressure.
     server->client().stop();
 }
+
+int hexNibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+bool parseCompactTabId(const String& value, uint16_t* outTabId) {
+    if (!outTabId || value.length() < 4) return false;
+    uint16_t tabId = 0;
+    for (int i = 0; i < 4; i++) {
+        int nibble = hexNibble(value[i]);
+        if (nibble < 0) return false;
+        tabId = (tabId << 4) | (uint16_t)nibble;
+    }
+    *outTabId = tabId;
+    return true;
+}
+
+bool getRequestTabId(WebServer* server, uint16_t* outTabId) {
+    if (!server || !outTabId) return false;
+    if (server->hasArg("tid") && parseCompactTabId(server->arg("tid"), outTabId)) return true;
+    if (server->hasHeader("X-Tab-Id") && parseCompactTabId(server->header("X-Tab-Id"), outTabId)) return true;
+    return false;
+}
+
+void recordRecentTabSighting(WebServer* server) {
+    uint16_t tabId = 0;
+    if (!getRequestTabId(server, &tabId)) return;
+    g_recentTabSightings[g_recentTabWriteIndex].tabId = tabId;
+    g_recentTabSightings[g_recentTabWriteIndex].seenAtMs = millis();
+    g_recentTabWriteIndex = (uint8_t)((g_recentTabWriteIndex + 1) % kRecentTabSightingsCount);
+}
+
+void buildRecentTabsField(char* output, size_t outputSize, unsigned long nowMs) {
+    if (!output || outputSize == 0) return;
+    output[0] = '\0';
+    size_t used = 0;
+    for (size_t n = 0; n < kRecentTabSightingsCount; n++) {
+        int idx = (int)((g_recentTabWriteIndex + kRecentTabSightingsCount - 1 - n) % kRecentTabSightingsCount);
+        const RecentTabSighting& sighting = g_recentTabSightings[idx];
+        if (sighting.seenAtMs == 0) continue;
+        unsigned long secondsAgo = (nowMs >= sighting.seenAtMs) ? ((nowMs - sighting.seenAtMs) / 1000UL) : 0UL;
+        int wrote = snprintf(output + used, outputSize - used, "%s%04X:%lu",
+                             used ? "," : "", (unsigned)sighting.tabId, secondsAgo);
+        if (wrote <= 0 || (size_t)wrote >= (outputSize - used)) break;
+        used += (size_t)wrote;
+    }
+}
+
+bool isSseOwnerAlive(unsigned long nowMs) {
+    if (!g_sseActive || g_sseOwnerTid == 0 || !g_sseClient.connected()) return false;
+    return (nowMs - g_sseOwnerLastSeenMs) <= kSseOwnerLeaseMs;
+}
+
+void clearSseOwner() {
+    g_sseActive = false;
+    g_sseOwnerTid = 0;
+    g_sseOwnerLastSeenMs = 0;
+}
 }
 
 // Constructor
@@ -113,8 +187,8 @@ bool CpapWebServer::begin() {
     server = new WebServer(80);
 
     // Collect Host header so requests to *.local can be redirected to the device IP.
-    const char* headerKeys[] = {"Host"};
-    server->collectHeaders(headerKeys, 1);
+    const char* headerKeys[] = {"Host", "X-Tab-Id"};
+    server->collectHeaders(headerKeys, 2);
     
     // Register request handlers
     server->on("/", [this]() {
@@ -157,6 +231,14 @@ bool CpapWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleApiLogs();
     });
+    server->on("/api/logs/buffer", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogs();
+    });
+    server->on("/api/logs/poll", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogs();
+    });
     server->on("/api/monitor-start", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleMonitorStart();
@@ -184,9 +266,21 @@ bool CpapWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleApiLogsSaved();
     });
+    server->on("/api/logs/download-all", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsSaved();
+    });
     server->on("/api/logs/full", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleApiLogsFull();
+    });
+    server->on("/api/logs/recent", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsFull();
+    });
+    server->on("/api/logs/file0", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsFile0();
     });
     server->on("/api/logs/stream", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
@@ -505,35 +599,21 @@ void CpapWebServer::handleLogs() {
     server->sendHeader("Connection", "close");
     server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }
-// GET /api/logs - Raw logs for AJAX
+
+// GET /api/logs - Legacy alias for circular-buffer logs
 void CpapWebServer::handleApiLogs() {
-    // Add CORS headers
+    recordRecentTabSighting(server);
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    // Send headers with correct content type
     server->send(200, "text/plain; charset=utf-8", " ");
-    // Stream logs directly
     ChunkedPrint chunkedOutput(server);
-
-    if (isUploadInProgress()) {
-        static unsigned long lastLogDumpMs = 0;
-        const unsigned long now = millis();
-        if (lastLogDumpMs == 0 || now - lastLogDumpMs >= kUploadLogsMinRefreshMs) {
-            Logger::getInstance().printLogsTail(chunkedOutput, kUploadLogsTailBytes);
-            lastLogDumpMs = now;
-        } else {
-            chunkedOutput.print("[INFO] Log stream throttled during active upload. Retry shortly.\n");
-        }
-    } else {
-        Logger::getInstance().printLogs(chunkedOutput);
-    }
-
+    Logger::getInstance().printLogs(chunkedOutput);
     server->sendContent("");
 }
 
-// GET /api/logs/saved — flush, then download ALL logs (NAND + circular buffer)
+// GET /api/logs/saved — legacy alias for full log download
 void CpapWebServer::handleApiLogsSaved() {
-    // Flush circular buffer to NAND so the download includes everything
+    recordRecentTabSighting(server);
     Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
 
     addCorsHeaders(server);
@@ -554,49 +634,64 @@ void CpapWebServer::handleApiLogsSaved() {
     server->sendContent("");
 }
 
-// GET /api/logs/full — stream NAND logs + circular buffer (inline, not download)
-// Used by the Web GUI on initial Logs tab open for recent historical context.
-// During active upload: serves only the circular buffer (~12-16KB) to avoid
-// saturating lwIP TCP buffers — heavy NAND reads compete with TLS upload writes
-// and can trigger watchdog timeouts.
-// Otherwise: serves only syslog.0.txt (latest rotation, ≤32KB) + circular buffer.
-// Full history (all 4 rotation files) is available via /api/logs/saved (download).
+// GET /api/logs/full — legacy alias for recent-history backfill
 void CpapWebServer::handleApiLogsFull() {
+    recordRecentTabSighting(server);
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/plain; charset=utf-8", " ");
     ChunkedPrint chunked(server);
 
-    if (isUploadInProgress()) {
-        // Upload active — circular buffer only (~12-16KB), no NAND reads
-        Logger::getInstance().printLogs(chunked);
-    } else {
-        // Flush circular buffer to NAND so content is current
-        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
-        // Stream only the latest rotation file (syslog.0.txt, ≤32KB)
-        Logger::getInstance().streamSavedLogs(chunked, 1);
-        // Append current circular buffer (captures content since last flush)
-        Logger::getInstance().printLogs(chunked);
-    }
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+    Logger::getInstance().streamSavedLogs(chunked, 1);
+    Logger::getInstance().printLogs(chunked);
 
+    server->sendContent("");
+}
+
+// GET /api/logs/file0 — stream latest persisted file only (no circular buffer)
+void CpapWebServer::handleApiLogsFile0() {
+    recordRecentTabSighting(server);
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+
+    addCorsHeaders(server);
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/plain; charset=utf-8", " ");
+    ChunkedPrint chunked(server);
+    size_t nandBytes = Logger::getInstance().streamSavedLogs(chunked, 1);
+    if (nandBytes == 0) {
+        chunked.print("[No saved log files found on internal flash]\n");
+    }
     server->sendContent("");
 }
 
 // GET /api/logs/stream — SSE endpoint for live log push.
 // Takes over the client socket and stores it globally for main-loop push.
 // Declared in CpapWebServer.h; the actual push happens via pushSseLogs() called from loop().
-//
-// Global SSE client state — single client limit is acceptable (one browser tab).
-static WiFiClient g_sseClient;
-static volatile bool g_sseActive = false;
-static volatile uint32_t g_sseLastPushedIndex = 0;
-static volatile uint32_t g_sseConnectCount = 0;  // Incremented on each SSE connect — used by client for multi-tab detection
-
 void CpapWebServer::handleApiLogsStream() {
-    // Take over the raw client socket from WebServer
+    recordRecentTabSighting(server);
+
+    uint16_t requestTabId = 0;
+    if (!getRequestTabId(server, &requestTabId)) {
+        addCorsHeaders(server);
+        server->send(400, "text/plain; charset=utf-8", "Missing or invalid tab ID");
+        return;
+    }
+
+    const unsigned long nowMs = millis();
+    if (isSseOwnerAlive(nowMs) && g_sseOwnerTid != requestTabId) {
+        addCorsHeaders(server);
+        server->send(409, "text/plain; charset=utf-8", "Another tab owns the live log stream");
+        return;
+    }
+
+    if (g_sseActive && g_sseClient.connected()) {
+        g_sseClient.stop();
+    }
+    clearSseOwner();
+
     g_sseClient = server->client();
 
-    // Send SSE headers manually — do NOT call server->send() after this
     g_sseClient.print("HTTP/1.1 200 OK\r\n"
                        "Content-Type: text/event-stream\r\n"
                        "Cache-Control: no-cache\r\n"
@@ -604,12 +699,10 @@ void CpapWebServer::handleApiLogsStream() {
                        "Access-Control-Allow-Origin: *\r\n"
                        "\r\n");
 
-    // Snapshot current head so we only push NEW logs going forward
     g_sseLastPushedIndex = Logger::getInstance().getHeadIndex();
+    g_sseOwnerTid = requestTabId;
+    g_sseOwnerLastSeenMs = nowMs;
     g_sseActive = true;
-    g_sseConnectCount++;
-
-    // Return without calling server->send() — we own the socket now
 }
 
 // GET /config - serve SPA
@@ -629,6 +722,7 @@ void CpapWebServer::handleStatusPage() {
 // the main loop is frozen, so g_webStatusBuf would be permanently stale.
 // updateStatusSnapshot() is stack-only (no heap) and safe to call here.
 void CpapWebServer::handleApiStatus() {
+    recordRecentTabSighting(server);
     updateStatusSnapshot();
     addCorsHeaders(server);
     server->send(200, "application/json", g_webStatusBuf);
@@ -703,6 +797,9 @@ void CpapWebServer::updateStatusSnapshot() {
         liveActive = true;
     }
 
+    char recentTabs[128];
+    buildRecentTabsField(recentTabs, sizeof(recentTabs), nowMs);
+
     char buf[WEB_STATUS_BUF_SIZE];
     int n = snprintf(buf, sizeof(buf),
         "{\"state\":\"%s\",\"in_state_sec\":%lu,\"uptime\":%lu"
@@ -715,7 +812,7 @@ void CpapWebServer::updateStatusSnapshot() {
         ",\"in_window\":%s"
         ",\"live_active\":%s,\"live_folder\":\"%s\",\"live_up\":%d,\"live_total\":%d"
         ",\"cpu0\":%u,\"cpu1\":%u"
-        ",\"sse_seq\":%u"
+        ",\"recent_tabs\":\"%s\""
         ",\"firmware\":\"%s\"}",
         st, inStateSec, upSec,
         timeBuf, timeSynced ? "true" : "false",
@@ -729,7 +826,7 @@ void CpapWebServer::updateStatusSnapshot() {
         inWindow ? "true" : "false",
         liveActive ? "true" : "false", liveFolder, liveUp, liveTotal,
         (unsigned)g_cpuLoad0, (unsigned)g_cpuLoad1,
-        (unsigned)g_sseConnectCount,
+        recentTabs,
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webStatusBuf, buf, n + 1);
@@ -1389,7 +1486,7 @@ void pushSseLogs() {
     if (!g_sseActive) return;
 
     if (!g_sseClient.connected()) {
-        g_sseActive = false;
+        clearSseOwner();
         return;
     }
 
@@ -1407,8 +1504,9 @@ void pushSseLogs() {
             lastKeepalive = now;
             if (g_sseClient.connected()) {
                 g_sseClient.print(": keepalive\n\n");
+                g_sseOwnerLastSeenMs = now;
             } else {
-                g_sseActive = false;
+                clearSseOwner();
             }
         }
         return;
@@ -1453,8 +1551,9 @@ void pushSseLogs() {
             // Flush chunk
             if (g_sseClient.connected()) {
                 g_sseClient.write((const uint8_t*)chunk, chunkPos);
+                g_sseOwnerLastSeenMs = now;
             } else {
-                g_sseActive = false;
+                clearSseOwner();
                 break;
             }
             // Start next "data: " prefix
@@ -1468,8 +1567,9 @@ void pushSseLogs() {
                 chunk[chunkPos++] = '\n';
                 if (g_sseClient.connected()) {
                     g_sseClient.write((const uint8_t*)chunk, chunkPos);
+                    g_sseOwnerLastSeenMs = now;
                 } else {
-                    g_sseActive = false;
+                    clearSseOwner();
                     break;
                 }
                 memcpy(chunk, "data: ", 6);
@@ -1484,6 +1584,9 @@ void pushSseLogs() {
         chunk[chunkPos++] = '\n';
         if (g_sseClient.connected()) {
             g_sseClient.write((const uint8_t*)chunk, chunkPos);
+            g_sseOwnerLastSeenMs = now;
+        } else {
+            clearSseOwner();
         }
     }
 
