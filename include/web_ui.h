@@ -434,7 +434,7 @@ function tab(t){
   curTab=t;
   if(t==='logs'){
     if(!backfillDone){
-      fetchBackfill();
+      _tryBackfill();
     }else{
       fetchLogs();
       if(!sseConnected){startSse();}
@@ -472,8 +472,17 @@ function renderStatus(d){
   statusFailCount=0;
   document.getElementById('reboot-overlay').style.display='none';
   rebootExpected=false;
+  var _prevSt=currentFsmState;
   var _newSt=d.state||'';
   currentFsmState=_newSt;
+  // Auto-trigger deferred backfill when upload finishes
+  var _wasBusy=(_prevSt==='UPLOADING'||_prevSt==='ACQUIRING');
+  var _nowBusy=(_newSt==='UPLOADING'||_newSt==='ACQUIRING');
+  if(_wasBusy&&!_nowBusy&&_backfillDeferred&&curTab==='logs'){
+    _backfillDeferred=false;backfillDone=false;
+    clientLogBuf=[];lastSeenLine='';
+    _tryBackfill();
+  }
   seti('d-st',badgeHtml(currentFsmState||'?'));
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
   var mode=(cfg.upload_mode||'—').toUpperCase();
@@ -849,6 +858,30 @@ function _renderLogBuf(){
   if(logAtBottom)b.scrollTop=b.scrollHeight;
 }
 var sseSource=null,sseConnected=false,backfillDone=false,backfillRetries=0,sseReconnAttempts=0;
+var _backfillDeferred=false; // true when backfill was skipped due to upload/multi-tab
+function _isUploadBusy(){return currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';}
+// Tier 2+3 gating: skip heavy /api/logs/full during upload or multi-tab contention
+function _tryBackfill(){
+  if(_mtThrottled){
+    // Tier 3: multi-tab detected — refuse backfill entirely
+    set('log-st','Close other tabs to load full log history');
+    _backfillDeferred=true;
+    backfillDone=true; // mark done so tab() falls through to polling/SSE
+    startLogPoll();
+    return;
+  }
+  if(_isUploadBusy()){
+    // Tier 2: upload active — skip NAND backfill, use circular buffer + SSE
+    set('log-st','Upload active \u2014 showing live logs only');
+    _backfillDeferred=true;
+    backfillDone=true;
+    fetchLogs();
+    startSse();
+    return;
+  }
+  _backfillDeferred=false;
+  fetchBackfill();
+}
 function fetchLogs(){
   if(curTab!=='logs')return;
   fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
@@ -862,7 +895,7 @@ function fetchLogs(){
       stopLogPoll();
       // Clear buffer so backfill rebuilds from scratch with full NAND context
       clientLogBuf=[];lastSeenLine='';
-      fetchBackfill();
+      _tryBackfill();
       return;
     }
     set('log-st',(sseConnected?'SSE Live':'Polling')+' \u2022 '+clientLogBuf.length+' lines');
@@ -1185,7 +1218,17 @@ function _mtSetDup(v){
     _mtThrottled=false;
     if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,5000);}
     // Resume SSE if user is viewing Logs tab
-    if(curTab==='logs'){stopLogPoll();startSse();}
+    if(curTab==='logs'){
+      stopLogPoll();
+      // If backfill was deferred due to multi-tab, trigger it now
+      if(_backfillDeferred){
+        _backfillDeferred=false;backfillDone=false;
+        clientLogBuf=[];lastSeenLine='';
+        _tryBackfill();
+      } else {
+        startSse();
+      }
+    }
     toast('Other tabs/browsers closed \u2014 resuming normal operation','ok');
   }
 }
@@ -1236,9 +1279,9 @@ function _mtCheckSseSeq(serverSeq){
     _mtSseCleanPolls=0;
   } else {
     _mtSseCleanPolls++;
-    // After 6 consecutive clean polls (~30-90s depending on throttle state),
+    // After 3 consecutive clean polls (~15-30s depending on throttle state),
     // the other client likely closed. Reset contention state and clear banner.
-    if(_mtDup&&_mtSseCleanPolls>=6){
+    if(_mtDup&&_mtSseCleanPolls>=3){
       _mtSseContentionHits=0;
       _mtSetDup(false);
     }

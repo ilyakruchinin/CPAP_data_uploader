@@ -555,22 +555,29 @@ void CpapWebServer::handleApiLogsSaved() {
 }
 
 // GET /api/logs/full — stream NAND logs + circular buffer (inline, not download)
-// Used by the Web GUI on initial Logs tab open for full historical context.
-// All content is strictly chronological — no out-of-order reboot log insertion.
+// Used by the Web GUI on initial Logs tab open for recent historical context.
+// During active upload: serves only the circular buffer (~12-16KB) to avoid
+// saturating lwIP TCP buffers — heavy NAND reads compete with TLS upload writes
+// and can trigger watchdog timeouts.
+// Otherwise: serves only syslog.0.txt (latest rotation, ≤32KB) + circular buffer.
+// Full history (all 4 rotation files) is available via /api/logs/saved (download).
 void CpapWebServer::handleApiLogsFull() {
-    // Flush circular buffer to NAND so content is current
-    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
-
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/plain; charset=utf-8", " ");
     ChunkedPrint chunked(server);
 
-    // Stream all syslog rotation files (oldest → newest)
-    Logger::getInstance().streamSavedLogs(chunked);
-
-    // Append current circular buffer (captures any content since last flush)
-    Logger::getInstance().printLogs(chunked);
+    if (isUploadInProgress()) {
+        // Upload active — circular buffer only (~12-16KB), no NAND reads
+        Logger::getInstance().printLogs(chunked);
+    } else {
+        // Flush circular buffer to NAND so content is current
+        Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+        // Stream only the latest rotation file (syslog.0.txt, ≤32KB)
+        Logger::getInstance().streamSavedLogs(chunked, 1);
+        // Append current circular buffer (captures content since last flush)
+        Logger::getInstance().printLogs(chunked);
+    }
 
     server->sendContent("");
 }
