@@ -606,7 +606,7 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager, bool forceFlush) {
     }
 
     if (gapBytes > 0) {
-        char gapMessage[320];
+        char gapMessage[448];
         int gapLen = snprintf(
             gapMessage,
             sizeof(gapMessage),
@@ -614,7 +614,8 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager, bool forceFlush) {
             "Some detailed log lines were skipped before they could be saved to internal storage.\n"
             "Approximate bytes skipped: %lu\n"
             "This can happen during very busy upload periods because log saving is temporarily delayed until the upload finishes.\n"
-            "The uploader can still continue working normally when this appears.\n"
+            "To keep logs flowing during uploads, set FLUSH_LOGS_DURING_UPLOAD=true in config.txt (may slightly increase power draw).\n"
+            "The uploader continues working normally when this appears.\n"
             "=== END LOG NOTICE ===\n",
             (unsigned long)gapBytes
         );

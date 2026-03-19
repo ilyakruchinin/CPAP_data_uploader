@@ -70,6 +70,7 @@ private:
     int cooldownMinutes;           // Y: minutes to release SD between upload cycles
     bool enable1BitSdMode;         // Whether to use 1-bit SDIO mode instead of 4-bit
     bool minimizeReboots;           // Skip elective reboots between upload sessions
+    bool flushLogsDuringUpload;      // Continue periodic log flushes during uploads (default: false)
     
     // Cached endpoint type flags (computed once during loadFromSD)
     bool _hasSmbEndpoint;
@@ -157,6 +158,7 @@ public:
     int getCooldownMinutes() const;
     bool getEnable1BitSdMode() const;
     bool getMinimizeReboots() const;
+    bool getFlushLogsDuringUpload() const;
     bool isSmartMode() const;
     
     // Power management getters
