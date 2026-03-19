@@ -1275,10 +1275,11 @@ void loop() {
     
     // Periodic persisted-log flush (every 10 seconds)
     // Uses multi-file rotation on LittleFS — independent of SD_MMC / upload task.
-    // ── POWER: Skip during active uploads to avoid internal SPI flash writes
-    // overlapping with SD reads, TLS encryption, and WiFi TX bursts.
+    // ── POWER: By default, skip during active uploads to avoid internal SPI flash
+    // writes overlapping with SD reads, TLS encryption, and WiFi TX bursts.
+    // Set FLUSH_LOGS_DURING_UPLOAD=true in config.txt to flush during uploads too.
     // flushBeforeReboot() ensures no logs are lost on post-upload reboot.
-    if (!uploadTaskRunning) {
+    if (!uploadTaskRunning || config.getFlushLogsDuringUpload()) {
         unsigned long currentTime = millis();
         if (currentTime - lastLogFlushTime >= LOG_FLUSH_INTERVAL_MS) {
             Logger::getInstance().dumpSavedLogsPeriodic(nullptr);

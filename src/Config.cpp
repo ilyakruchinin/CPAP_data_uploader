@@ -30,6 +30,7 @@ Config::Config() :
     cooldownMinutes(10),
     enable1BitSdMode(false),  // Default to safer 4-bit mode
     minimizeReboots(true),
+    flushLogsDuringUpload(false),  // Default: defer log flushes during uploads
     
     _hasSmbEndpoint(false),
     _hasCloudEndpoint(false),
@@ -236,6 +237,8 @@ void Config::setConfigValue(String key, String value) {
         maskCredentials = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "MINIMIZE_REBOOTS") {
         minimizeReboots = (value.equalsIgnoreCase("true") || value.toInt() == 1);
+    } else if (key == "FLUSH_LOGS_DURING_UPLOAD") {
+        flushLogsDuringUpload = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "BROWNOUT_DETECT") {
         if (value.equalsIgnoreCase("off")) {
             brownoutDetectMode = BrownoutDetectMode::OFF;
@@ -646,6 +649,7 @@ int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
 int Config::getCooldownMinutes() const { return cooldownMinutes; }
 bool Config::getEnable1BitSdMode() const { return enable1BitSdMode; }
 bool Config::getMinimizeReboots() const { return minimizeReboots; }
+bool Config::getFlushLogsDuringUpload() const { return flushLogsDuringUpload; }
 bool Config::isSmartMode() const { return uploadMode == "smart"; }
 
 // Helper methods for enum conversion
