@@ -610,11 +610,12 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager, bool forceFlush) {
         int gapLen = snprintf(
             gapMessage,
             sizeof(gapMessage),
-            "=== LOG GAP ===\n"
-            "Some log lines were not persisted because the RAM log buffer overflowed before the next LittleFS flush.\n"
-            "Bytes lost: %lu\n"
-            "High log volume during active uploads can trigger this because periodic flash flushing is deferred while uploads are running.\n"
-            "=== END LOG GAP ===\n",
+            "=== LOG NOTICE ===\n"
+            "Some detailed log lines were skipped before they could be saved to internal storage.\n"
+            "Approximate bytes skipped: %lu\n"
+            "This can happen during very busy upload periods because log saving is temporarily delayed until the upload finishes.\n"
+            "The uploader can still continue working normally when this appears.\n"
+            "=== END LOG NOTICE ===\n",
             (unsigned long)gapBytes
         );
         if (gapLen > 0) {

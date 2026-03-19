@@ -165,7 +165,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 </svg>
 </div>
 <p class=sub id=sub>Connecting...</p>
-<div id=reboot-overlay><h3>&#8635; Device is unreachable or rebooting&hellip;</h3><p>If the device is rebooting, this is normal &mdash; it may reboot periodically by design to maintain stability and will be back online in a few seconds.<br>If it has been powered off or moved out of WiFi range, this page will reconnect automatically once the device is reachable again.</p></div>
+<div id=reboot-overlay><h3>&#8635; Connection lost &mdash; reconnecting&hellip;</h3><p>Trying to reconnect to the device now.<br>This can happen if your phone or browser paused this page in the background, if the device is temporarily busy, or if it is restarting or briefly unavailable.<br>If everything is normal, this page should recover automatically within a few seconds.</p></div>
 <div id=mon-active-banner><h3>&#128270; SD Access Monitoring is active</h3><p>All automatic uploads are <strong>paused</strong> while monitoring is running.<br>Go to the <strong>SD Access</strong> tab and click <strong>Stop</strong> to resume normal operation.</p></div>
 <div id=multitab-banner style="display:none;background:#3a1a1a;border:1px solid #cc3333;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center;animation:mtPulse 2.5s ease-in-out infinite"><h3 style="color:#ff6666;font-size:1em;margin-bottom:6px">&#9888; Multiple tabs/browsers detected</h3><p style="color:#c0a0a0;font-size:.84em;line-height:1.5">This device has very limited memory. Multiple connections cause <strong>heap fragmentation</strong>, network contention, and can trigger <strong>watchdog reboots</strong> during uploads.<br>Please <strong>close all other tabs/browsers</strong> connected to this device. This tab has throttled its polling to reduce impact.</p></div>
 <div id=brownout-banner style="display:none;background:#3a2a0a;border:1px solid #cc8800;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center"><h3 style="color:#ffaa00;font-size:1em;margin-bottom:6px">&#9888; Brownout Detection Disabled</h3><p style="color:#c0b090;font-size:.84em;line-height:1.5">BROWNOUT_DETECT is set to OFF in config.txt. The device will <strong>not</strong> reset on power drops &mdash; this may cause data corruption.</p></div>
@@ -499,8 +499,9 @@ function badgeHtml(st){var s=st.toLowerCase(),c='bi';
 function set(id,html,inner){var el=document.getElementById(id);if(el){if(inner===false)el.innerHTML=html;else el.textContent=html;}}
 function seti(id,html){set(id,html,false);}
 
-var statusFailCount=0,rebootExpected=false;
+var statusFailCount=0,rebootExpected=false,lastStatusOkMs=0,statusWakeUntilMs=0;
 function renderStatus(d){
+  lastStatusOkMs=Date.now();
   statusFailCount=0;
   document.getElementById('reboot-overlay').style.display='none';
   rebootExpected=false;
@@ -632,9 +633,14 @@ function pollStatus(){
     renderStatus(d);
   }).catch(function(){
     statusFailCount++;
+    if(!document.hidden&&!rebootExpected&&Date.now()<statusWakeUntilMs){
+      document.getElementById('reboot-overlay').style.display='none';
+      seti('d-st','<span class="badge bc">RECONNECTING</span>');
+      return;
+    }
     if(statusFailCount>=5||rebootExpected){
       document.getElementById('reboot-overlay').style.display='block';
-      seti('d-st','<span class="badge bc">REBOOTING</span>');
+      seti('d-st','<span class="badge bc">RECONNECTING</span>');
     } else {
       seti('d-st','<span class="badge bc">OFFLINE</span>');
     }
@@ -643,7 +649,15 @@ function pollStatus(){
 function _statusPollMs(){return _mtDup?15000:3000;}
 function _restartStatusPoll(){if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,_statusPollMs());}}
 function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,_statusPollMs());}}
-document.addEventListener('visibilitychange',function(){if(!document.hidden){statusFailCount=0;}});
+document.addEventListener('visibilitychange',function(){
+  if(!document.hidden){
+    var now=Date.now();
+    statusFailCount=0;
+    statusWakeUntilMs=(lastStatusOkMs&&((now-lastStatusOkMs)>10000))?(now+8000):0;
+    document.getElementById('reboot-overlay').style.display='none';
+    pollStatus();
+  }
+});
 
 var cpuHistory=[];
 function tsToX(ts,tMin,tMax,W){return tMin===tMax?W/2:((ts-tMin)/(tMax-tMin))*(W-2)+1;}
