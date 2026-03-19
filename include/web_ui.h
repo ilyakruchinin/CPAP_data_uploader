@@ -456,6 +456,11 @@ function _apiFetch(path,opts){
   headers['X-Tab-Instance']=_mtInstanceId;
   opts.headers=headers;
   if(!opts.cache)opts.cache='no-store';
+  if(typeof AbortController!=='undefined'&&!opts.signal){
+    var ac=new AbortController();
+    opts.signal=ac.signal;
+    setTimeout(function(){ac.abort();},5000);
+  }
   return fetch(_apiUrl(path),opts);
 }
 function tab(t){
@@ -499,7 +504,7 @@ function badgeHtml(st){var s=st.toLowerCase(),c='bi';
 function set(id,html,inner){var el=document.getElementById(id);if(el){if(inner===false)el.innerHTML=html;else el.textContent=html;}}
 function seti(id,html){set(id,html,false);}
 
-var statusFailCount=0,rebootExpected=false,lastStatusOkMs=0,statusWakeUntilMs=0;
+var statusFailCount=0,rebootExpected=false,lastStatusOkMs=0;
 function renderStatus(d){
   lastStatusOkMs=Date.now();
   statusFailCount=0;
@@ -633,12 +638,7 @@ function pollStatus(){
     renderStatus(d);
   }).catch(function(){
     statusFailCount++;
-    if(!document.hidden&&!rebootExpected&&Date.now()<statusWakeUntilMs){
-      document.getElementById('reboot-overlay').style.display='none';
-      seti('d-st','<span class="badge bc">RECONNECTING</span>');
-      return;
-    }
-    if(statusFailCount>=5||rebootExpected){
+    if(statusFailCount>=3||rebootExpected){
       document.getElementById('reboot-overlay').style.display='block';
       seti('d-st','<span class="badge bc">RECONNECTING</span>');
     } else {
@@ -651,11 +651,10 @@ function _restartStatusPoll(){if(statusTimer){clearInterval(statusTimer);statusT
 function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,_statusPollMs());}}
 document.addEventListener('visibilitychange',function(){
   if(!document.hidden){
-    var now=Date.now();
     statusFailCount=0;
-    statusWakeUntilMs=(lastStatusOkMs&&((now-lastStatusOkMs)>10000))?(now+8000):0;
     document.getElementById('reboot-overlay').style.display='none';
     pollStatus();
+    _restartStatusPoll();
   }
 });
 
@@ -1241,6 +1240,7 @@ function handleOtaResult(d,sid){
  var _mtChan=null,_mtThrottled=false,_mtPeers={},_mtServerDup=false;
  function _mtAddPeer(msg){
    if(!msg||!msg.iid||msg.iid===_mtInstanceId)return;
+   if((msg.tid||'').toUpperCase()===_mtTabId)return;
    _mtPeers[msg.iid]={ts:Date.now(),tid:(msg.tid||'').toUpperCase(),born:msg.born||0};
  }
  function _mtDropPeer(iid){if(iid&&_mtPeers[iid])delete _mtPeers[iid];}
