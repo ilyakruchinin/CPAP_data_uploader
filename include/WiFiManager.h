@@ -15,6 +15,7 @@ private:
     bool mdnsStarted;
     int8_t _pendingTxPower;   // Deferred TX power (dBm×4), applied in connectStation()
     bool _hasPendingTxPower;
+    static volatile uint8_t _lastDisconnectReason;  // Captured in event handler for retry logic
     static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info);
 
 public:
