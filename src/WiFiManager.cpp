@@ -6,6 +6,8 @@
 #include <ESPmDNS.h>
 #include <esp_wifi.h>
 
+volatile uint8_t WiFiManager::_lastDisconnectReason = 0;
+
 WiFiManager::WiFiManager() : connected(false), mdnsStarted(false), _pendingTxPower(0), _hasPendingTxPower(false) {}
 
 void WiFiManager::setupEventHandlers() {
@@ -37,6 +39,7 @@ void WiFiManager::onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
             
         case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
             uint8_t reason = info.wifi_sta_disconnected.reason;
+            _lastDisconnectReason = reason;
             LOG_WARNF("WiFi Event: Disconnected from AP (reason: %d)", reason);
             
             // Log human-readable disconnect reasons
@@ -128,6 +131,18 @@ void WiFiManager::onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
                 case WIFI_REASON_CONNECTION_FAIL:
                     LOG_WARN("Disconnect reason: Connection failed");
                     break;
+                case WIFI_REASON_AP_TSF_RESET:
+                    LOG_WARN("Disconnect reason: AP TSF reset");
+                    break;
+                case WIFI_REASON_ROAMING:
+                    LOG_WARN("Disconnect reason: Roaming");
+                    break;
+                case WIFI_REASON_ASSOC_COMEBACK_TIME_TOO_LONG:
+                    LOG_WARN("Disconnect reason: Association comeback time too long (PMF/802.11w)");
+                    break;
+                case WIFI_REASON_SA_QUERY_TIMEOUT:
+                    LOG_WARN("Disconnect reason: SA query timeout (PMF/802.11w)");
+                    break;
                 default:
                     LOG_WARNF("Disconnect reason: Unknown (%d)", reason);
                     break;
@@ -195,11 +210,39 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
         _hasPendingTxPower = false;
     }
 
+    _lastDisconnectReason = 0;
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
         delay(500);
         LOG_DEBUG(".");
         attempts++;
+    }
+
+    // ── PMF fallback: reason 208 (ASSOC_COMEBACK_TIME_TOO_LONG) ──
+    // ESP-IDF 5.x sets PMF (Protected Management Frames / 802.11w) capable=true
+    // by default. Some WiFi 6 / WPA3-transitional routers send an association
+    // comeback time that exceeds the ESP-IDF threshold, causing reason 208.
+    // This didn't exist in ESP-IDF 4.x. Retry with PMF disabled.
+    if (WiFi.status() != WL_CONNECTED &&
+        _lastDisconnectReason == WIFI_REASON_ASSOC_COMEBACK_TIME_TOO_LONG) {
+        LOG_WARN("PMF association comeback timeout (reason 208) — retrying with PMF disabled");
+        wifi_config_t wifi_conf;
+        if (esp_wifi_get_config(WIFI_IF_STA, &wifi_conf) == ESP_OK) {
+            wifi_conf.sta.pmf_cfg.capable = false;
+            wifi_conf.sta.pmf_cfg.required = false;
+            esp_wifi_set_config(WIFI_IF_STA, &wifi_conf);
+            esp_wifi_disconnect();
+            esp_wifi_connect();
+            attempts = 0;
+            while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+                delay(500);
+                LOG_DEBUG(".");
+                attempts++;
+            }
+            if (WiFi.status() == WL_CONNECTED) {
+                LOG_WARN("Connected after disabling PMF — router may not fully support 802.11w");
+            }
+        }
     }
 
     if (WiFi.status() == WL_CONNECTED) {
