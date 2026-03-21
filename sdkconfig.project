@@ -73,14 +73,25 @@ CONFIG_LWIP_UDP_RECVMBOX_SIZE=6
 # to disable the detector entirely (at their own risk).
 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y
 
-# ── mbedTLS: struct-safe cipher removal ─────────────────────────────────────
-# The hybrid compile recompiles IDF libs (incl. mbedTLS) but NOT the Arduino
-# framework (WiFiClientSecure). Options that change struct sizes are FORBIDDEN:
-#   KEEP_PEER_CERTIFICATE, SESSION_TICKETS, RENEGOTIATION, DTLS options,
-#   ASYMMETRIC_CONTENT_LEN, VARIABLE_BUFFER_LENGTH
-# However, cipher algorithm removal is SAFE — it only removes code/ciphersuites,
-# not struct fields. Removing ChaCha20/Poly1305 forces AES-GCM negotiation
-# which uses the ESP32's hardware AES accelerator (faster + lower power).
+# ── mbedTLS configuration ───────────────────────────────────────────────────
+# The pioarduino hybrid compile recompiles BOTH IDF libs AND the Arduino
+# NetworkClientSecure wrapper against the same generated sdkconfig.h.
+# This means struct-size-changing options are NOW SAFE (ABI-consistent).
+# Evidence: .pio/build/*/lib243/NetworkClientSecure/ssl_client.cpp.d shows
+# compilation against the package sdkconfig.h with our custom values.
+#
+# Asymmetric buffers: 16KB IN (required by TLS spec for full records) but
+# only 4KB OUT (our uploads chunk at 4096 bytes). Saves ~12KB per connection.
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+#
+# Disable peer certificate storage after handshake — we never call
+# mbedtls_ssl_get_peer_cert() post-handshake. Saves ~1-2KB per connection.
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
+#
+# Cipher algorithm removal: forces AES-GCM negotiation which uses the ESP32's
+# hardware AES accelerator (faster + lower power).
 CONFIG_MBEDTLS_CHACHA20_C=n
 CONFIG_MBEDTLS_POLY1305_C=n
 CONFIG_MBEDTLS_CHACHAPOLY_C=n

@@ -111,10 +111,18 @@ public:
 
     bool begin();
 
+    // Lightweight work probe — streaming directory check with no vector/String heap churn.
+    // Returns which backends have pending work. Used before creating the upload task
+    // so the no-work path avoids TLS allocation entirely.
+    struct WorkProbeResult {
+        bool hasCloudWork;
+        bool hasSmbWork;
+    };
+    WorkProbeResult hasWorkToUpload(fs::FS &sd);
+
     // Full session: phased upload (CLOUD → SMB) with SD card mounted.
-    // Caller (uploadTaskFunction) handles TLS pre-warm + PCNT re-check + SD mount.
-    // If TLS was pre-warmed, cloud phase uses existing connection; otherwise on-demand.
-    // Safety resetConnection() before SMB phase handles pre-warmed-but-unused TLS.
+    // TLS connects on-demand in cloud phase — no pre-warm needed (arena protects heap).
+    // Safety resetConnection() before SMB phase handles any lingering TLS.
     UploadResult runFullSession(class SDCardManager* sdManager, int maxMinutes,
                                 DataFilter filter);
 
