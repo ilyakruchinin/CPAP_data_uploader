@@ -9,6 +9,7 @@
 #include <driver/gpio.h>
 #include <driver/rtc_io.h>
 #include <soc/rtc_cntl_reg.h>
+#include <esp32/rom/rtc.h>
 #include <esp_freertos_hooks.h>
 #include <esp_partition.h>
 #include <Preferences.h>
@@ -344,6 +345,44 @@ void setup() {
     esp_reset_reason_t resetReason = esp_reset_reason();
     LOG_INFOF("Reset reason: %s", getResetReasonString(resetReason));
     
+    // ── 2C: Raw per-core reset reasons for finer-grained diagnostics ──
+    // rtc_get_reset_reason() gives the low-level RTC reset cause per CPU core,
+    // which is more granular than esp_reset_reason() (e.g. distinguishes
+    // POWERON_RESET=1 vs RTCWDT_BROWN_OUT_RESET=15 vs SW_CPU_RESET=12).
+    {
+        int rawCore0 = (int)rtc_get_reset_reason(0);
+        int rawCore1 = (int)rtc_get_reset_reason(1);
+        LOG_INFOF("Reset reason (raw): Core0=%d Core1=%d", rawCore0, rawCore1);
+    }
+
+    // ── 2B: NVS boot counter + consecutive power-on reset detection ──
+    // Tracks total boots and consecutive power-on resets (ESP_RST_POWERON).
+    // A high consecutive count indicates external power cycling (e.g. CPAP
+    // periodically cutting SD slot VCC during therapy).  Any non-POWERON
+    // reset (software reboot, watchdog, brownout) breaks the chain.
+    {
+        Preferences bootStats;
+        bootStats.begin("boot_stats", false);
+        uint32_t totalBoots = bootStats.getUInt("total", 0) + 1;
+        bootStats.putUInt("total", totalBoots);
+
+        uint16_t consecutivePOR = bootStats.getUShort("consec_por", 0);
+        if (resetReason == ESP_RST_POWERON) {
+            consecutivePOR++;
+        } else {
+            consecutivePOR = 0;
+        }
+        bootStats.putUShort("consec_por", consecutivePOR);
+        bootStats.end();
+
+        if (resetReason == ESP_RST_POWERON && consecutivePOR > 1) {
+            LOG_WARNF("[BOOT] Boot #%u — consecutive power-on resets: %u (possible external power cycling)",
+                      totalBoots, consecutivePOR);
+        } else {
+            LOG_INFOF("[BOOT] Boot #%u (consecutive power-on resets: %u)", totalBoots, consecutivePOR);
+        }
+    }
+
     // Register CPU idle hooks for load measurement (before any blocking waits)
     esp_register_freertos_idle_hook_for_cpu(_idleHook0, 0);
     esp_register_freertos_idle_hook_for_cpu(_idleHook1, 1);
