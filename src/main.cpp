@@ -25,6 +25,7 @@
 
 #include "TrafficMonitor.h"
 #include "UploadFSM.h"
+#include "TlsArena.h"
 #include <ESPmDNS.h>
 
 // True when esp_restart() was the reset cause (ESP_RST_SW).
@@ -81,6 +82,13 @@ unsigned long cooldownStartedAt = 0;
 bool uploadCycleHadTimeout = false;
 bool g_nothingToUpload = false;  // Set when pre-flight finds no work — skip reboot, go to cooldown
 
+// ── No-work suppression ──
+// When the last upload cycle found NOTHING_TO_DO, suppress further attempts
+// until new PCNT bus activity is detected (CPAP wrote new data to SD card).
+// This prevents pointless SD mount + scan cycles every 2 minutes when the
+// CPAP hasn't produced any new data — a significant power savings.
+bool g_noWorkSuppressed = false;
+
 // Monitoring mode flags
 bool monitoringRequested = false;
 bool stopMonitoringRequested = false;
@@ -94,6 +102,12 @@ volatile bool uploadTaskRunning = false;
 volatile bool uploadTaskComplete = false;
 volatile UploadResult uploadTaskResult = UploadResult::ERROR;
 TaskHandle_t uploadTaskHandle = nullptr;
+
+// ── Static task stack: allocated in .bss, never touches the dynamic heap ──
+// This eliminates the 12KB heap allocation that was fragmenting the largest
+// contiguous block (ma dropping from ~45KB to ~36KB, causing SD mount failures).
+static StackType_t uploadTaskStack[12288 / sizeof(StackType_t)];
+static StaticTask_t uploadTaskTCB;
 
 // Software watchdog: upload task updates this heartbeat; main loop kills task if stale
 volatile unsigned long g_uploadHeartbeat = 0;
@@ -314,6 +328,12 @@ void setup() {
     
     // Initialize serial port
     Serial.begin(115200);
+    
+    // ── Install TLS arena allocator before any TLS/WiFi activity ──
+    // This must happen before WiFi.begin() or any mbedTLS call.
+    // Routes large mbedTLS buffer allocations to a static arena in .bss,
+    // preventing TLS from fragmenting the general heap.
+    tlsArenaInit();
     
     // CRITICAL: Immediately release SD card control to CPAP machine
     // This must happen before any delays to prevent CPAP machine errors
@@ -853,6 +873,31 @@ void handleListening() {
     // TrafficMonitor.update() is called in main loop before FSM dispatch
     uint32_t inactivityMs = (uint32_t)config.getInactivitySeconds() * 1000UL;
 
+    // ── No-work suppression ──
+    // After a NOTHING_TO_DO result, we suppress further upload attempts until
+    // new PCNT bus activity is detected (CPAP wrote new data to SD card).
+    // Any non-idle PCNT activity clears the suppression flag, allowing the
+    // next idle detection to trigger a new upload cycle.
+    if (g_noWorkSuppressed) {
+        if (!trafficMonitor.isIdleFor(1000)) {
+            // Bus activity detected — CPAP is doing something. Clear suppression
+            // so the next idle detection triggers a fresh upload attempt.
+            g_noWorkSuppressed = false;
+            LOG("[FSM] No-work suppression cleared — new bus activity detected");
+        }
+        // While suppressed, don't transition to ACQUIRING even if idle
+        // (still allow scheduled mode to exit to IDLE if window closes)
+        ScheduleManager* sm = uploader->getScheduleManager();
+        if (!sm->isSmartMode()) {
+            if (!sm->isInUploadWindow() || sm->isDayCompleted()) {
+                LOG("[FSM] Scheduled mode — window closed or day completed while listening");
+                g_noWorkSuppressed = false;
+                transitionTo(UploadState::IDLE);
+            }
+        }
+        return;
+    }
+
     // Smart mode logic
     if (config.isSmartMode()) {
         if (trafficMonitor.isIdleFor(inactivityMs)) {
@@ -882,31 +927,26 @@ void handleListening() {
 }
 
 void handleAcquiring() {
-    // The upload task now owns the full lifecycle:
-    //   TLS pre-warm → PCNT re-check → SD mount → pre-flight → upload → SD release
-    // TLS pre-warm runs BEFORE SD mount to give mbedTLS first pick of clean heap.
-    // PCNT re-check after TLS confirms CPAP hasn't started SD access during handshake.
+    // The upload task owns the session lifecycle:
+    //   PCNT re-check → SD mount → minimal work probe → upload → SD release
+    // TLS connects on-demand during the cloud phase — the TLS Arena ensures
+    // mbedTLS buffers never fragment the general heap, making mount order irrelevant.
     transitionTo(UploadState::UPLOADING);
 }
 
 // FreeRTOS task function — runs on Core 0 so main loop (Core 1) stays responsive
 // Owns the full session lifecycle:
-//   TLS pre-warm → PCNT re-check → SD mount → pre-flight → upload → SD release
+//   PCNT re-check → SD mount → minimal work probe → upload → SD release
 //
-// ── TLS Pre-Warm + PCNT Safety Re-Check ──────────────────────────────────────
-// TLS handshake allocates ~36KB contiguous heap (16KB IN + 16KB OUT mbedTLS
-// buffers + ~4KB SSL context).  By doing this BEFORE SD_MMC.begin(), we give
-// TLS first pick of the clean heap — no SD DMA buffers fragmenting memory yet.
-// This avoids the ma=38900 allocation failures seen in mixed-backend runs.
+// ── On-Demand TLS (no pre-warm) ──────────────────────────────────────────────
+// The TLS Arena (TlsArena.cpp) routes large mbedTLS buffer allocations to a
+// static .bss arena, so TLS handshake no longer depends on general heap layout.
+// This means we can safely mount the SD card first, probe for work, and only
+// connect TLS if cloud work actually exists — eliminating the ~15s TLS+SD
+// overhead on no-work cycles.
 //
-// After the handshake (~2-4s), we re-check the PCNT silence counter to verify
-// the CPAP hasn't started using the SD card during that window.  PCNT stays
-// active during UPLOADING (not a low-power state) and the main loop on Core 1
-// continues calling trafficMonitor.update(), so _consecutiveIdleMs is current.
-// 32-bit reads are atomic on ESP32, making this cross-core read safe.
-//
-// If the PCNT re-check fails (silence broken), we clean up the TLS connection
-// and return NOTHING_TO_DO, sending the FSM back to cooldown → listening.
+// PCNT re-check runs before SD mount to catch CPAP activity that started
+// during the transition from LISTENING → ACQUIRING.
 // ──────────────────────────────────────────────────────────────────────────────
 void uploadTaskFunction(void* pvParameters) {
     UploadTaskParams* params = (UploadTaskParams*)pvParameters;
@@ -917,32 +957,9 @@ void uploadTaskFunction(void* pvParameters) {
     
     g_uploadHeartbeat = millis();
 
-    // ── Step 1: TLS pre-warm (cloud-only, before SD mount for clean heap) ────
-    // Pre-warm gives TLS the largest contiguous block available.  Failure is
-    // non-fatal — TLS will fall back to on-demand connect during the upload.
-    bool tlsPreWarmed = false;
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-    if (params->uploader->hasCloudBackend()) {
-        SleepHQUploader* cloud = params->uploader->getCloudUploader();
-        if (cloud) {
-            LOGF("[Upload] TLS pre-warm: heap before fh=%u ma=%u",
-                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-            tlsPreWarmed = cloud->preWarmTLS();
-            esp_task_wdt_reset();
-            g_uploadHeartbeat = millis();
-            if (tlsPreWarmed) {
-                LOGF("[Upload] TLS pre-warm succeeded (fh=%u ma=%u)",
-                     (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-            } else {
-                LOG_WARN("[Upload] TLS pre-warm failed (non-fatal, will retry on-demand)");
-            }
-        }
-    }
-#endif
-
-    // ── Step 2: PCNT re-check — confirm SD bus is still silent ───────────────
+    // ── Step 1: PCNT re-check — confirm SD bus is still silent ───────────────
     // The original silence detection happened in handleListening() (62s+ idle).
-    // During the TLS handshake (~2-4s), the CPAP might have started a new SD
+    // Between that detection and now, the CPAP might have started a new SD
     // transaction.  Re-reading the PCNT idle counter catches this.
     // NOTE: Once SD_MMC.begin() runs, ESP's own bus activity resets the counter,
     // making any post-mount check meaningless.  This is the LAST valid check.
@@ -962,14 +979,6 @@ void uploadTaskFunction(void* pvParameters) {
                      (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
                 LOG_WARN("[Upload] Aborting upload cycle to avoid SD card conflict");
 
-                // Clean up pre-warmed TLS if it was established
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-                if (tlsPreWarmed) {
-                    SleepHQUploader* cloud = params->uploader->getCloudUploader();
-                    if (cloud) cloud->resetConnection();
-                    LOG("[Upload] Released pre-warmed TLS after PCNT abort");
-                }
-#endif
                 uploadTaskResult = UploadResult::NOTHING_TO_DO;
                 uploadTaskComplete = true;
                 esp_task_wdt_delete(NULL);
@@ -983,16 +992,11 @@ void uploadTaskFunction(void* pvParameters) {
         }
     }
 
-    // ── Step 3: Mount SD card ────────────────────────────────────────────────
+    // ── Step 2: Mount SD card ────────────────────────────────────────────────
+    LOGF("[Upload] Mounting SD: heap fh=%u ma=%u",
+         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
     if (!params->sdManager->takeControl()) {
         LOG_ERROR("[Upload] Failed to acquire SD card control");
-        // Clean up pre-warmed TLS on SD mount failure
-#ifdef ENABLE_SLEEPHQ_UPLOAD
-        if (tlsPreWarmed) {
-            SleepHQUploader* cloud = params->uploader->getCloudUploader();
-            if (cloud) cloud->resetConnection();
-        }
-#endif
         uploadTaskResult = UploadResult::ERROR;
         uploadTaskComplete = true;
         esp_task_wdt_delete(NULL);
@@ -1001,12 +1005,44 @@ void uploadTaskFunction(void* pvParameters) {
         return;
     }
     LOG("[FSM] SD card control acquired");
+    esp_task_wdt_reset();
+    g_uploadHeartbeat = millis();
 
-    // Phase 1+2: Run phased upload (CLOUD first, then SMB)
+    // ── Step 3: Minimal work probe — check if any backend has pending work ───
+    // Streaming directory check with minimal heap churn. If no work exists,
+    // unmount SD immediately and return NOTHING_TO_DO — no TLS, no task overhead.
+    LOGF("[Upload] Work probe: heap fh=%u ma=%u",
+         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    {
+        auto workResult = params->uploader->hasWorkToUpload(params->sdManager->getFS());
+        esp_task_wdt_reset();
+        g_uploadHeartbeat = millis();
+
+        if (!workResult.hasCloudWork && !workResult.hasSmbWork) {
+            LOG("[Upload] Work probe: no work for any backend — releasing SD");
+            if (params->sdManager->hasControl()) {
+                params->sdManager->releaseControl();
+            }
+            uploadTaskResult = UploadResult::NOTHING_TO_DO;
+            uploadTaskComplete = true;
+            esp_task_wdt_delete(NULL);
+            delete params;
+            vTaskDelete(NULL);
+            return;
+        }
+        LOGF("[Upload] Work probe: cloud=%d smb=%d — proceeding with upload",
+             workResult.hasCloudWork, workResult.hasSmbWork);
+    }
+
+    // ── Step 4: Run phased upload (CLOUD first with on-demand TLS, then SMB) ─
+    // TLS connects on-demand in cloud phase's begin() — the TLS Arena ensures
+    // mbedTLS buffers come from static .bss, not the general heap.
+    LOGF("[Upload] Starting upload session: heap fh=%u ma=%u",
+         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
     UploadResult result = params->uploader->runFullSession(
         params->sdManager, params->maxMinutes, params->filter);
     
-    // Phase 3: Release SD card
+    // Step 5: Release SD card
     if (params->sdManager->hasControl()) {
         params->sdManager->releaseControl();
     }
@@ -1092,21 +1128,21 @@ void handleUploading() {
         }
         
         // Pin to Core 0 (protocol core) — keeps Core 1 free for main loop + web server
-        // Stack: 12KB — TLS buffers are on heap, task only needs stack for locals.
-        // Created BEFORE TLS pre-warm and SD mount so max_alloc is at its highest.
-        BaseType_t rc = xTaskCreatePinnedToCore(
+        // Stack: 12KB in static .bss — never touches the dynamic heap.
+        // This prevents the task stack from fragmenting the largest contiguous block.
+        uploadTaskHandle = xTaskCreateStaticPinnedToCore(
             uploadTaskFunction,  // Task function
             "upload",            // Name
-            12288,               // Stack size (12KB — verified via HWM logging)
+            sizeof(uploadTaskStack) / sizeof(StackType_t),  // Stack depth in words
             params,              // Parameters
             1,                   // Priority (same as loop task)
-            &uploadTaskHandle,   // Handle
+            uploadTaskStack,     // Static stack buffer
+            &uploadTaskTCB,      // Static task TCB
             0                    // Pin to Core 0
         );
         
-        if (rc != pdPASS) {
-            LOG_ERRORF("[FSM] Failed to create upload task (rc=%ld, free=%u, max_alloc=%u) \u2014 releasing",
-                       (long)rc,
+        if (uploadTaskHandle == nullptr) {
+            LOG_ERRORF("[FSM] Failed to create upload task (free=%u, max_alloc=%u) \u2014 releasing",
                        ESP.getFreeHeap(),
                        ESP.getMaxAllocHeap());
             uploadTaskRunning = false;
@@ -1125,7 +1161,8 @@ void handleUploading() {
 #endif
             transitionTo(UploadState::RELEASING);
         } else {
-            LOG("[FSM] Upload task started on Core 0 (non-blocking)");
+            LOGF("[FSM] Upload task started on Core 0 (static stack, non-blocking) — heap after: fh=%u ma=%u",
+                 ESP.getFreeHeap(), ESP.getMaxAllocHeap());
         }
     } else if (uploadTaskComplete) {
         // ── Task finished: read result and transition ──
@@ -1163,8 +1200,9 @@ void handleUploading() {
                 transitionTo(UploadState::RELEASING);
                 break;
             case UploadResult::NOTHING_TO_DO:
-                LOG("[FSM] Nothing to upload — releasing SD and entering cooldown (no reboot)");
+                LOG("[FSM] Nothing to upload — suppressing retries until new bus activity");
                 g_nothingToUpload = true;
+                g_noWorkSuppressed = true;  // Don't retry until PCNT detects new CPAP activity
                 transitionTo(UploadState::RELEASING);
                 break;
         }
@@ -1430,6 +1468,7 @@ void loop() {
         LOG("=== Upload Triggered via Web Interface ===");
         g_triggerUploadFlag = false;
         g_uploadWasForceTriggered = true;  // latch for upload task
+        g_noWorkSuppressed = false;  // Manual trigger always overrides suppression
         uploadCycleHadTimeout = false;
         transitionTo(UploadState::ACQUIRING);
     }

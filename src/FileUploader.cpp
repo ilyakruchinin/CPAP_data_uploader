@@ -49,6 +49,139 @@ FileUploader::~FileUploader() {
 #endif
 }
 
+// ============================================================================
+// Minimal work probe — streaming, no vectors, no String heap churn
+// ============================================================================
+// Checks /DATALOG for any folder with pending .edf files.
+// Returns immediately on first positive hit per backend.
+// Uses only stack-local buffers — zero heap allocation on the fast path.
+// This replaces the heavy preflightFolderHasWork() for the initial decision
+// of whether to create the upload task and connect TLS at all.
+
+FileUploader::WorkProbeResult FileUploader::hasWorkToUpload(fs::FS &sd) {
+    WorkProbeResult result = {false, false};
+    fs::FS &stateFs = LittleFS;
+
+    // Lambda: check if a folder has any .edf file (streaming, no vector)
+    auto folderHasEdf = [&](const String& folderPath) -> bool {
+        File folder = sd.open(folderPath);
+        if (!folder || !folder.isDirectory()) return false;
+        File f = folder.openNextFile();
+        while (f) {
+            if (!f.isDirectory()) {
+                const char* name = f.name();
+                size_t len = strlen(name);
+                if (len >= 4) {
+                    const char* ext = name + len - 4;
+                    if (strcasecmp(ext, ".edf") == 0) {
+                        f.close();
+                        folder.close();
+                        return true;
+                    }
+                }
+            }
+            f.close();
+            f = folder.openNextFile();
+        }
+        folder.close();
+        return false;
+    };
+
+    // Lambda: probe one backend's state manager for pending work
+    auto probeBackend = [&](UploadStateManager* sm) -> bool {
+        if (!sm) return false;
+
+        bool canUploadOld = !scheduleManager || scheduleManager->canUploadOldData();
+
+        File root = sd.open("/DATALOG");
+        if (!root || !root.isDirectory()) return false;
+
+        File entry = root.openNextFile();
+        while (entry) {
+            if (entry.isDirectory()) {
+                // Extract folder name from path (last component)
+                const char* rawName = entry.name();
+                const char* slash = strrchr(rawName, '/');
+                const char* folderName = slash ? slash + 1 : rawName;
+
+                bool completed = sm->isFolderCompleted(String(folderName));
+                bool recent = isRecentFolder(String(folderName));
+
+                // Skip old folders when outside upload window
+                if (!recent && !canUploadOld) {
+                    entry.close();
+                    entry = root.openNextFile();
+                    continue;
+                }
+
+                if (!completed) {
+                    // Incomplete folder — check for any .edf
+                    char path[64];
+                    snprintf(path, sizeof(path), "/DATALOG/%s", folderName);
+                    if (folderHasEdf(String(path))) {
+                        LOG_DEBUGF("[WorkProbe] WORK found: %s has .edf files", folderName);
+                        entry.close();
+                        root.close();
+                        return true;
+                    }
+                } else if (completed && recent) {
+                    // Completed+recent: could have changed files — worth checking
+                    char path[64];
+                    snprintf(path, sizeof(path), "/DATALOG/%s", folderName);
+                    // Quick check: any .edf exists (actual change detection happens in full scan)
+                    if (folderHasEdf(String(path))) {
+                        // Check if any file actually changed
+                        File folder = sd.open(String(path));
+                        if (folder && folder.isDirectory()) {
+                            File f = folder.openNextFile();
+                            while (f) {
+                                if (!f.isDirectory()) {
+                                    const char* fname = f.name();
+                                    size_t flen = strlen(fname);
+                                    if (flen >= 4 && strcasecmp(fname + flen - 4, ".edf") == 0) {
+                                        String fullPath = String(path) + "/" + (strrchr(fname, '/') ? strrchr(fname, '/') + 1 : fname);
+                                        if (sm->hasFileChanged(sd, fullPath)) {
+                                            LOG_DEBUGF("[WorkProbe] WORK found: changed file in completed+recent %s", folderName);
+                                            f.close();
+                                            folder.close();
+                                            entry.close();
+                                            root.close();
+                                            return true;
+                                        }
+                                    }
+                                }
+                                f.close();
+                                f = folder.openNextFile();
+                            }
+                            folder.close();
+                        }
+                    }
+                }
+            }
+            entry.close();
+            entry = root.openNextFile();
+        }
+        root.close();
+        return false;
+    };
+
+#ifdef ENABLE_SLEEPHQ_UPLOAD
+    if (config->hasCloudEndpoint()) {
+        result.hasCloudWork = probeBackend(cloudStateManager);
+    }
+#endif
+#ifdef ENABLE_SMB_UPLOAD
+    if (config->hasSmbEndpoint()) {
+        result.hasSmbWork = probeBackend(smbStateManager);
+    }
+#endif
+
+    LOGF("[WorkProbe] Result: cloud=%d smb=%d (fh=%u ma=%u)",
+         result.hasCloudWork, result.hasSmbWork,
+         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    return result;
+}
+
 // Initialize all components and load upload state
 bool FileUploader::begin() {
     LOG("[FileUploader] Initializing components...");
@@ -131,14 +264,14 @@ bool FileUploader::begin() {
 // ============================================================================
 //
 // Runs both backends sequentially in a single session:
-//   Phase 1: CLOUD (TLS pre-warmed by caller before SD mount — uses cleanest
-//            contiguous heap; falls back to on-demand connect if pre-warm failed)
+//   Phase 1: CLOUD (TLS connects on-demand in begin() — TLS Arena ensures
+//            mbedTLS buffers come from static .bss, not the general heap)
 //   Phase 2: SMB   (TLS torn down, clean sockets, more heap for libsmb2)
 //
-// TLS pre-warm happens in uploadTaskFunction() BEFORE SD_MMC.begin() so mbedTLS
-// gets first pick of the unfragmented heap.  If the cloud pre-flight finds no
-// work, a safety resetConnection() before Phase 2 ensures the lingering TLS
-// socket doesn't conflict with libsmb2's TCP socket (errno:9).
+// The minimal work probe in uploadTaskFunction() already confirmed work exists
+// before this function is called. The pre-flight here still runs to determine
+// per-backend work split and handle pending-folder promotion.
+// Safety resetConnection() before Phase 2 prevents TLS/SMB socket conflicts.
 //
 // This eliminates backend cycling, prevents TLS/SMB socket conflicts, and
 // ensures both backends make progress every session without reboots.

@@ -75,11 +75,10 @@ void SleepHQUploader::resetTLS() {
     if (tlsClient) {
         tlsClient->stop();
         delay(100);  // Let lwIP process the FIN/RST before freeing
-        delete tlsClient;
-        tlsClient = nullptr;
     }
     // Give lwIP TCP stack time to release socket FDs and clean up TIME_WAIT
     delay(500);
+    // Re-use existing wrapper instead of delete/new — avoids heap micro-fragmentation
     setupTLS();
 }
 
