@@ -66,7 +66,7 @@ bool SDCardManager::takeControl() {
     // 4-bit is default and safer for CPAP handoff.
     // 1-bit uses less ESP-side bus current but requires a compatibility remount on release.
     bool use1Bit = config.getEnable1BitSdMode();
-    if (!SD_MMC.begin("/sdcard", use1Bit ? SDIO_BIT_MODE_SLOW : SDIO_BIT_MODE_FAST, false, SDMMC_FREQ_DEFAULT)) {
+    if (!SD_MMC.begin("/sdcard", use1Bit ? SDIO_BIT_MODE_SLOW : SDIO_BIT_MODE_FAST, false, SDMMC_FREQ_DEFAULT, 2)) {
         LOG("SD card mount failed");
         releaseControl();
         return false;
@@ -106,7 +106,7 @@ void SDCardManager::releaseControl() {
     // If we mounted in 1-bit mode, do a brief 4-bit compatibility remount
     // so the card's negotiated bus width is restored to 4-bit before the CPAP takes over.
     if (config.getEnable1BitSdMode()) {
-        if (SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST)) {
+        if (SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST, false, SDMMC_FREQ_DEFAULT, 2)) {
             SD_MMC.end();
         } else {
             LOG_WARN("SD handoff compatibility remount failed");
