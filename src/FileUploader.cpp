@@ -93,6 +93,22 @@ FileUploader::WorkProbeResult FileUploader::hasWorkToUpload(fs::FS &sd) {
 
         bool canUploadOld = !scheduleManager || scheduleManager->canUploadOldData();
 
+        // Calculate MAX_DAYS cutoff — same logic as scanDatalogFolders()
+        String maxDaysCutoff = "";
+        int maxDays = config->getMaxDays();
+        if (maxDays > 0) {
+            time_t now = time(nullptr);
+            if (now > 24 * 3600) {
+                time_t cutoff = now - (maxDays * 86400L);
+                struct tm cutoffTm;
+                localtime_r(&cutoff, &cutoffTm);
+                char cutoffStr[9];
+                snprintf(cutoffStr, sizeof(cutoffStr), "%04d%02d%02d",
+                         cutoffTm.tm_year + 1900, cutoffTm.tm_mon + 1, cutoffTm.tm_mday);
+                maxDaysCutoff = String(cutoffStr);
+            }
+        }
+
         File root = sd.open("/DATALOG");
         if (!root || !root.isDirectory()) return false;
 
@@ -103,6 +119,13 @@ FileUploader::WorkProbeResult FileUploader::hasWorkToUpload(fs::FS &sd) {
                 const char* rawName = entry.name();
                 const char* slash = strrchr(rawName, '/');
                 const char* folderName = slash ? slash + 1 : rawName;
+
+                // Apply MAX_DAYS filter (folder names are YYYYMMDD)
+                if (!maxDaysCutoff.isEmpty() && String(folderName) < maxDaysCutoff) {
+                    entry.close();
+                    entry = root.openNextFile();
+                    continue;
+                }
 
                 bool completed = sm->isFolderCompleted(String(folderName));
                 bool recent = isRecentFolder(String(folderName));
@@ -314,6 +337,24 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
         // to avoid unnecessary SD card I/O scanning hundreds of DATALOG folders.
         bool canUploadOld = !scheduleManager || scheduleManager->canUploadOldData();
 
+        // Calculate MAX_DAYS cutoff once for pre-flight
+        String maxDaysCutoff = "";
+        {
+            int maxDays = config->getMaxDays();
+            if (maxDays > 0) {
+                time_t now = time(nullptr);
+                if (now > 24 * 3600) {
+                    time_t cutoff = now - (maxDays * 86400L);
+                    struct tm cutoffTm;
+                    localtime_r(&cutoff, &cutoffTm);
+                    char cutoffStr[9];
+                    snprintf(cutoffStr, sizeof(cutoffStr), "%04d%02d%02d",
+                             cutoffTm.tm_year + 1900, cutoffTm.tm_mon + 1, cutoffTm.tm_mday);
+                    maxDaysCutoff = String(cutoffStr);
+                }
+            }
+        }
+
         auto preflightFolderHasWork = [&](UploadStateManager* sm) -> bool {
             File root = sd.open("/DATALOG");
             if (!root || !root.isDirectory()) return false;
@@ -323,6 +364,13 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
                     String name = String(entry.name());
                     int sl = name.lastIndexOf('/');
                     if (sl >= 0) name = name.substring(sl + 1);
+
+                    // Apply MAX_DAYS filter (folder names are YYYYMMDD)
+                    if (!maxDaysCutoff.isEmpty() && name < maxDaysCutoff) {
+                        entry.close();
+                        entry = root.openNextFile();
+                        continue;
+                    }
 
                     bool completed = sm->isFolderCompleted(name);
                     bool pending   = sm->isPendingFolder(name);
@@ -432,6 +480,7 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
     cloudImportFailed  = false;
 
     bool timerExpired = false;
+    bool sessionHadFailure = false;  // Track if any folder upload failed this session
     auto isTimerExpired = [&]() -> bool {
         return (millis() - sessionStart) >= maxMs;
     };
@@ -499,7 +548,7 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
             if (!cloudImportFailed) {
                 auto runCloudFolder = [&](const String& folder) -> bool {
                     if (isTimerExpired() || isCloudTimeBudgetExpired()) { timerExpired = true; return false; }
-                    uploadDatalogFolderCloud(sdManager, folder);
+                    if (!uploadDatalogFolderCloud(sdManager, folder)) sessionHadFailure = true;
 #ifdef ENABLE_WEBSERVER
                     if (webServer) webServer->handleClient();
 #endif
@@ -626,7 +675,7 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
                     LOG("[FileUploader] SMB: Fresh DATALOG folders");
                     for (const String& folder : freshFolders) {
                         if (isTimerExpired()) { timerExpired = true; break; }
-                        uploadDatalogFolderSmb(sdManager, folder);
+                        if (!uploadDatalogFolderSmb(sdManager, folder)) sessionHadFailure = true;
 #ifdef ENABLE_WEBSERVER
                         if (webServer) webServer->handleClient();
 #endif
@@ -636,7 +685,7 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
                     LOG("[FileUploader] SMB: Old DATALOG folders");
                     for (const String& folder : oldFolders) {
                         if (isTimerExpired()) { timerExpired = true; break; }
-                        uploadDatalogFolderSmb(sdManager, folder);
+                        if (!uploadDatalogFolderSmb(sdManager, folder)) sessionHadFailure = true;
 #ifdef ENABLE_WEBSERVER
                         if (webServer) webServer->handleClient();
 #endif
@@ -675,13 +724,17 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
         return UploadResult::TIMEOUT;
     }
 
-    if (!hasIncompleteFolders()) {
+    if (!hasIncompleteFolders() && !sessionHadFailure) {
         time_t endNow; time(&endNow);
         UploadStateManager* sm = primaryStateManager();
         if (sm) sm->setLastUploadTimestamp((unsigned long)endNow);
         if (scheduleManager) scheduleManager->markDayCompleted();
         LOG("[FileUploader] All folders complete — session done");
         return UploadResult::COMPLETE;
+    }
+
+    if (sessionHadFailure) {
+        LOG("[FileUploader] Session had folder upload failure(s) — not marking day complete");
     }
 
     return UploadResult::TIMEOUT;
