@@ -19,6 +19,8 @@ OTA Partition Layout (1.5MB app space):
 ├─────────────────┤
 │   ota_1         │ ← Target for update
 ├─────────────────┤
+│   coredump      │ ← Crash diagnostics (panic details)
+├─────────────────┤
 │   bootloader    │
 ├─────────────────┤
 │   partition table│
