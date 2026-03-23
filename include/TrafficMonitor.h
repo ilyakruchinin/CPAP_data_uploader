@@ -44,6 +44,8 @@ public:
     bool isIdleFor(uint32_t ms);      // True if no activity for at least ms milliseconds
     uint32_t getConsecutiveIdleMs();  // How long has the bus been silent?
     void resetIdleTracking();         // Reset silence counter (e.g., on state transition)
+    bool hasActivityLatch() const;    // True if any activity occurred since the latch was last cleared
+    void clearActivityLatch();        // Clear the activity latch
     
     // Sample buffer for SD Activity Monitor web UI
     // Buffer is only allocated when monitoring mode is active (saves ~2.4KB RAM)
@@ -81,6 +83,7 @@ private:
     // Idle tracking
     uint32_t _consecutiveIdleMs;
     bool _suspended;
+    bool _activityLatch;
     
     // 1-second aggregation for sample buffer
     unsigned long _lastSecondTime;
