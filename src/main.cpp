@@ -879,7 +879,7 @@ void handleListening() {
     // Any non-idle PCNT activity clears the suppression flag, allowing the
     // next idle detection to trigger a new upload cycle.
     if (g_noWorkSuppressed) {
-        if (!trafficMonitor.isIdleFor(1000)) {
+        if (trafficMonitor.isBusy()) {
             // Bus activity detected — CPAP is doing something. Clear suppression
             // so the next idle detection triggers a fresh upload attempt.
             g_noWorkSuppressed = false;
