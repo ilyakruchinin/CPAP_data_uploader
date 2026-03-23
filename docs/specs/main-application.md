@@ -16,6 +16,10 @@ The main application controller (`main.cpp`) orchestrates the entire CPAP AutoSy
 
 ### Upload State Machine (FSM)
 - Implements the core upload logic with states: IDLE, LISTENING, ACQUIRING, UPLOADING, RELEASING, COOLDOWN
+- **LISTENING State Dynamics**: 
+  - Normally waits for `INACTIVITY_SECONDS` of bus silence (indicating the CPAP has ended therapy).
+  - If `g_noWorkSuppressed` is true, the behavior inverts: it waits indefinitely for **new bus activity** (the CPAP going *into* therapy) before it will even consider timing an idle period to go *out* of therapy. 
+  - Features an edge-trigger that instantly overrides suppression the moment a daily schedule window opens, ensuring old data is safely scanned even if no CPAP therapy occurred during the day.
 - Supports both "smart" and "scheduled" upload modes
 - Manages SD card exclusive access with timeout handling
 - Coordinates between SMB and Cloud upload passes
@@ -61,10 +65,10 @@ void handleReleasing() {
 }
 ```
 
-### UploadResult::NOTHING_TO_DO
-- Returned by `FileUploader::uploadWithExclusiveAccess()` when pre-flight scan finds no pending work for any configured backend
-- FSM sets `g_nothingToUpload = true` and transitions to `RELEASING`
-- `RELEASING` state then skips the reboot and enters `COOLDOWN` instead
+### Early Suppression (UploadResult::NOTHING_TO_DO & COMPLETE)
+- `NOTHING_TO_DO` is returned when pre-flight scan finds no pending work; `COMPLETE` is returned when an upload session successfully exhausts all pending folders.
+- In both cases, the FSM sets `g_nothingToUpload = true` (to skip the elective reboot) and `g_noWorkSuppressed = true` to prevent the FSM from redundantly probing the SD card until new work arrives.
+- `RELEASING` state skips the reboot and enters `COOLDOWN` instead.
 
 ### Config Edit Lock (`g_configEditLock`)
 ```cpp
@@ -78,7 +82,7 @@ const unsigned long CONFIG_EDIT_LOCK_TIMEOUT_MS = 30 * 60 * 1000;  // 30 min
 - Released automatically after a successful Save or Save & Reboot from the web UI
 
 ### Upload Modes
-- **Smart Mode**: Continuous loop, uploads recent data anytime, old data only in upload window
+- **Smart Mode**: Continuous loop, uploads recent data anytime, old data only in upload window. Includes a dynamic edge-trigger that instantly clears `g_noWorkSuppressed` the moment the daily schedule window opens, ensuring it never sleeps through old-data uploads.
 - **Scheduled Mode**: Only uploads within configured time window, enters IDLE between windows
 
 ## Global Objects

@@ -885,10 +885,25 @@ void handleListening() {
             g_noWorkSuppressed = false;
             LOG("[FSM] No-work suppression cleared — new bus activity detected");
         }
+
+        ScheduleManager* sm = uploader->getScheduleManager();
+
+        // Edge-Trigger: If suppressed but the schedule window JUST opened, wake up!
+        // This prevents Smart Mode from permanently sleeping through the 8AM-10PM 
+        // window if the CPAP wasn't physically used to generate PCNT activity.
+        static bool lastWindowOpen = false;
+        if (sm) {
+            bool currentWindowOpen = sm->canUploadOldData();
+            if (currentWindowOpen && !lastWindowOpen && g_noWorkSuppressed) {
+                g_noWorkSuppressed = false;
+                LOG("[FSM] Schedule window opened \u2014 clearing no-work suppression to scan for old data");
+            }
+            lastWindowOpen = currentWindowOpen;
+        }
+
         // While suppressed, don't transition to ACQUIRING even if idle
         // (still allow scheduled mode to exit to IDLE if window closes)
-        ScheduleManager* sm = uploader->getScheduleManager();
-        if (!sm->isSmartMode()) {
+        if (sm && !sm->isSmartMode()) {
             if (!sm->isInUploadWindow() || sm->isDayCompleted()) {
                 LOG("[FSM] Scheduled mode — window closed or day completed while listening");
                 g_noWorkSuppressed = false;
@@ -1189,6 +1204,9 @@ void handleUploading() {
         
         switch (result) {
             case UploadResult::COMPLETE:
+                LOG("[FSM] All folders complete \u2014 suppressing retries until new bus activity");
+                g_nothingToUpload = true;
+                g_noWorkSuppressed = true;
                 transitionTo(UploadState::COMPLETE);
                 break;
             case UploadResult::TIMEOUT:
