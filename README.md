@@ -155,7 +155,7 @@ See the [Full Setup Guide](release/README.md#️-sd-card-errors--use-scheduled-m
 - **Never uploads the same file twice** — tracks what's been sent, even across reboots
 - **Persistent log storage** — enable `PERSISTENT_LOGS=true` to flush logs to internal flash every 30 seconds; download past sessions from the browser. Emergency logs are always saved to SD card on boot failures and to internal flash before every reboot.
 - **Live system diagnostics** — System tab tracks free heap, max contiguous allocation (with rolling 2-minute minimums), and CPU load graphs for both cores
-- **Respects your CPAP machine** — only accesses the SD card when therapy is not running
+- **Intelligent SD polling** — suppresses retries when perfectly synced, waiting in deep sleep until it detects you physically turning on your CPAP machine before it begins counting down to your next upload. Respects your CPAP machine entirely.
 
 ---
 

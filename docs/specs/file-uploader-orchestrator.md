@@ -31,11 +31,13 @@ preflightFolderHasWork() rules (evaluated per folder):
 
 ```cpp
 if (!smbWork && !cloudWork) {
-    return UploadResult::NOTHING_TO_DO;  // → FSM enters COOLDOWN, no reboot
+    return UploadResult::NOTHING_TO_DO;  // → FSM applies Early Suppression & enters COOLDOWN, no reboot
 }
 ```
 - Returns `UploadResult::NOTHING_TO_DO` when every backend is fully synced (or only out-of-window old work remains)
-- The session-start summary is NOT written in this case — cycling pointer does not advance
+- Returns `UploadResult::COMPLETE` when an upload successfully exhausts all pending folders
+- The FSM translates both results into `g_noWorkSuppressed = true`, applying "Early Suppression" to halt further SD card probing until new CPAP activity occurs or the scheduled time window opens
+- The session-start summary is NOT written for NOTHING_TO_DO — cycling pointer does not advance
 - FSM responds by entering `COOLDOWN` directly without an `esp_restart()`, preventing endless reboot cycles
 
 ## Key Features
