@@ -1,32 +1,37 @@
-# Comprehensive Reassessment of SD Card Error and Contiguous Heap Issues (G31A)
+# Reassessment: The 18KB Heap Drop and ma=36852
 
-After carefully analyzing the logs from `3-4-1.txt.tmp`, `3-4-2.txt.tmp`, and `3-4-after-fix.txt.tmp`, the true root causes of the two highly disruptive issues—recurring CPAP "SD Card Error"s and max contiguous heap (`ma`) depletion—have been uncovered. 
+## Root Cause Chain (Fully Resolved)
 
-This document serves as the final, no-code-changed summary of the findings so that these fixes can be safely applied.
+The 18KB heap drop during SD mount was caused by a **three-layer configuration failure**:
 
-## 1. The "SD Card Error" Root Cause
-**Timeline from the logs:**
-1. The CPAP machine performs natural "silent" periods while actively delivering therapy because it buffers high-resolution (BRP) data into its internal RAM to reduce wear and tear on the SD card.
-2. The `UploadStateManager` and `FSM` in the ESP32 use a PCNT counter to track bus activity. The `INACTIVITY_SECONDS` limit was set to **62 seconds**. 
-3. At `21:09:17`, the ESP32 finished an operation and began listening to the bus.
-4. Exactly 62 seconds later, at `21:10:19`, the ESP32 triggered an upload because `idle=62070ms >= threshold=62000ms`. The ESP32 falsely assumed the CPAP machine was off or idle.
-5. Between `21:10:20` and `21:11:17`, the ESP32 mounted the SD card and took exclusive physical control over the SD bus for **56 seconds** to process a large file upload.
-6. **The Collision**: During that 56-second window, the CPAP machine's internal RAM buffer filled up. It woke up and attempted to flush the data to the SD card. Because the ESP32's hardware multiplexer (mux) had physically disconnected the CPAP from the SD card, the CPAP machine timed out and permanently logged/displayed a fatal "SD Card Error".
-7. Once the CPAP machine throws this error, it gives up on writing to the SD card for the entirety of the sleep session. As a result, the bus remains permanently silent, which causes the ESP32 to endlessly trigger `62s of bus silence confirmed` loops indefinitely (seen continuously from `21:13:20` to `23:05:44`).
+### Layer 1: PlatformIO INI Parser Strips `#` Comments
+PlatformIO's INI parser treats `#` as a comment character. Our inline `custom_sdkconfig` entries like `# CONFIG_WL_SECTOR_SIZE_4096 is not set` were **silently eaten** before the pioarduino builder ever saw them. Only the `CONFIG_WL_SECTOR_SIZE=512` value survived.
 
-**Required Fix:**
-- The inactivity timeout (`INACTIVITY_SECONDS`) must be dramatically increased (e.g., to 300 seconds / 5 minutes or 600 seconds / 10 minutes) to ensure the ESP32 does not steal the SD card while the CPAP is buffering data during active therapy. This can be configured in `config.txt` and the factory default in `Config.cpp`.
+### Layer 2: Kconfig Boolean Conflict
+The ESP-IDF Kconfig system uses **boolean selectors** (`CONFIG_WL_SECTOR_SIZE_4096=y` vs `CONFIG_WL_SECTOR_SIZE_512=y`) to determine the final value. The base Arduino sdkconfig template has `CONFIG_WL_SECTOR_SIZE_4096=y` hardcoded. Without unsetting it, the generated `sdkconfig.defaults` contained conflicting entries — both `_4096=y` AND `_512=y` — causing the ESP-IDF build to silently fall back to 4096.
 
-## 2. The 18KB Heap Drop and `ma=36852` Fragmentation Trap
-**Timeline from the logs:**
-1. The `SD_MMC.begin()` command allocates approximately 18KB of contiguous memory when mounting the SD card, dropping `ma` immediately.
-2. In a previous patch, it was advised to change `CONFIG_WL_SECTOR_SIZE=512` in the `sdkconfig.defaults` file to reduce this allocation to ~4KB. 
-3. **The Miss:** Modifying `sdkconfig.defaults` in this project *did absolutely nothing*. The project uses PlatformIO with `pioarduino` to do a "hybrid compile". As indicated in the `platformio.ini` comments, the builder script takes configuration solely from the `custom_sdkconfig` property in `platformio.ini` and overwrites `sdkconfig.defaults` during the build process. Precompiled libraries `libfatfs.a` and `libsdmmc.a` were loaded using the default 4096 sector size, causing the 18KB SD mount bloat to remain.
-4. Additionally, because the 18KB block takes up a huge chunk of the 59KB max contiguous block (`ma=59380`), any tiny asynchronous allocation (such as LwIP TCP sockets retaining data, or dynamic SMB buffer creation) made *during* the multi-minute background upload splits the remaining heap.
-5. When the SD card is finally released, the 18KB block is freed, but it cannot merge with the rest of the free space due to the mid-upload fragmentation. This permanently traps `ma` at exactly `36852` bytes.
+### Layer 3: Arduino SD Library Compatibility
+Arduino's `SD_MMC.cpp` and `SD.cpp` use the deprecated FatFs R0.13 macro `_MAX_SS` instead of the current R0.15 `FF_MAX_SS`. When `_MAX_SS` is undefined (evaluates to 0), the preprocessor evaluates `#if 0 != 512` → true, taking the `fsinfo->ssize` code path — but `ssize` only exists when `FF_MAX_SS != FF_MIN_SS`. With our fix making both 512, this field is removed, causing a compile error.
 
-**Required Fix:**
-- Add `CONFIG_WL_SECTOR_SIZE=512` and `CONFIG_FATFS_SECTOR_512=y` strictly to the `custom_sdkconfig` section inside `platformio.ini`. This will correctly trigger the framework builder to recompile the IDF libraries and properly truncate the SD buffer overhead down to ~4KB. 
+## Fix Applied
 
-## Next Steps
-This concludes the review and reassessment. No code changes have been applied in this session. When you are ready, follow these specific items to update the repository and resolve both critical stability bugs.
+| File | Change |
+|------|--------|
+| `sdkconfig.project` (NEW) | External config file with all 5 WL/FATFS overrides including `# CONFIG_X is not set` entries |
+| `platformio.ini` | `file://sdkconfig.project` in `custom_sdkconfig` block; `-D_MAX_SS=FF_MAX_SS` build flag |
+
+## Verification
+
+- `sdkconfig.defaults` now correctly shows `CONFIG_WL_SECTOR_SIZE_512=y` and `# CONFIG_WL_SECTOR_SIZE_4096 is not set`
+- Build succeeded (2:49, exit 0)
+- `FATFS.win[]` and `FIL.buf[]` are now 512 bytes each (down from 4096), saving ~3.5KB per FATFS struct + ~3.5KB per open FIL
+
+## Previous Findings (Still Valid)
+
+1. `pendingFolders` in `UploadStateManager` is a static array — no dynamic leak
+2. `ma=36852` is the temporary heap low-watermark during concurrent SD mount + TLS/SMB connections
+3. The 3-5.txt.tmp log shows `ma` not recovering after unmount (real fragmentation from TLS/SMB allocation interleaving)
+
+## Expected Impact
+
+The SD mount heap drop should decrease from ~18KB to significantly less, giving more headroom for TLS and SMB connections during upload sessions.

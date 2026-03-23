@@ -1,105 +1,21 @@
-# ============================================================================
-# CPAP Data Uploader — SDK Configuration Reference
-# ============================================================================
+# sdkconfig.project — project-level ESP-IDF overrides
+# This file is referenced from platformio.ini via "file://sdkconfig.project"
+# in the custom_sdkconfig block. Using a file instead of inline entries
+# preserves "# CONFIG_X is not set" lines that PlatformIO's INI parser
+# would otherwise strip as comments.
 #
-# This file is a HUMAN-READABLE REFERENCE for our custom SDK settings.
-# It is NOT used by the build system.
+# ── FATFS / Wear-Levelling Sector Size ──
+# Override the default 4096-byte sector to 512-byte.
+# This reduces contiguous heap consumed by FATFS.win[] and FIL.buf[]
+# during SD card mount: each buffer shrinks from 4096 → 512 bytes.
+# Without these overrides, SD_MMC.begin() drops max_alloc by ~18KB.
 #
-# The actual build settings live in platformio.ini under "custom_sdkconfig".
-# The pioarduino hybrid compile merges those entries with the Arduino base
-# sdkconfig and writes the result to "sdkconfig.defaults" (a build artifact,
-# gitignored, overwritten every build).
-#
-# This file exists so developers can understand WHY each setting was chosen
-# without wading through platformio.ini's terse key=value format.
-# ============================================================================
-
-# ── Power management ─────────────────────────────────────────────────────────
-# Enable the ESP-IDF power management framework. Required for DFS (Dynamic
-# Frequency Scaling) and automatic light-sleep. Without this, esp_pm_configure()
-# returns ESP_ERR_NOT_SUPPORTED.
-CONFIG_PM_ENABLE=y
-
-# ── Tickless idle ────────────────────────────────────────────────────────────
-# Required for auto light-sleep. When all FreeRTOS tasks are idle for longer
-# than IDLE_TIME_BEFORE_SLEEP ticks, and all PM locks are released, the CPU
-# enters light-sleep automatically.
-#
-# The original GPIO wakeup conflict with PCNT on CS_SENSE (GPIO 33) is resolved
-# by suspending the PCNT unit in IDLE/COOLDOWN states (releasing its PM lock)
-# and relying on FreeRTOS tickless idle for periodic timer-based wakeup.
-CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
-CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
-
-# ── Core dump to flash ──────────────────────────────────────────────────────
-# Save panic backtraces to the coredump partition (64KB at 0x3F0000).
-# Read with: espcoredump.py info_corefile -t elf <firmware.elf>
-# ELF format gives the richest backtrace info including task stacks.
-CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
-CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
-CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
-
-# ── Bluetooth removal ───────────────────────────────────────────────────────
-# Compile-time removal of the entire Bluetooth stack. Saves ~60KB flash and
-# prevents BT task creation. The CPAP uploader has no BT functionality.
-CONFIG_BT_ENABLED=n
-
-# ── FreeRTOS tick rate ───────────────────────────────────────────────────────
-# Arduino ESP32 CMakeLists.txt (~line 405) enforces 1000 Hz. Cannot be
-# overridden — delay(), millis(), micros() depend on it. Setting it here
-# explicitly to document the constraint.
-CONFIG_FREERTOS_HZ=1000
-
-# ── WiFi PHY TX power cap ───────────────────────────────────────────────────
-# Cap PHY-level TX power at 10 dBm (minimum allowed by Kconfig, range 10-20).
-# Reduces transmit current spikes. Runtime WiFi.setTxPower() can go lower
-# (down to WIFI_POWER_MINUS_1dBm / -1 dBm) for further savings.
-CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10
-
-# ── LWIP / WiFi buffer tuning ───────────────────────────────────────────────
-# Reduced from defaults to save heap. These values were validated during the
-# replatform and handle our typical upload traffic (HTTP/TLS + SMB).
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
-CONFIG_LWIP_PBUF_POOL_SIZE=12
-CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=32
-CONFIG_LWIP_TCP_RECVMBOX_SIZE=8
-CONFIG_LWIP_UDP_RECVMBOX_SIZE=6
-
-# ── Brownout detector threshold ─────────────────────────────────────────────
-# Use the default brownout level 0 (~2.43V). Level 7 (~2.74V) was tested but
-# triggered too many resets on power-constrained CPAP hardware. Level 0 gives
-# the widest voltage headroom while still protecting against deep rail collapse.
-# Users with severe brownout issues can set BROWNOUT_DETECT=OFF in config.txt
-# to disable the detector entirely (at their own risk).
-CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y
-
-# ── mbedTLS configuration ───────────────────────────────────────────────────
-# The pioarduino hybrid compile recompiles BOTH IDF libs AND the Arduino
-# NetworkClientSecure wrapper against the same generated sdkconfig.h.
-# This means struct-size-changing options are NOW SAFE (ABI-consistent).
-# Evidence: .pio/build/*/lib243/NetworkClientSecure/ssl_client.cpp.d shows
-# compilation against the package sdkconfig.h with our custom values.
-#
-# Asymmetric buffers: 16KB IN (required by TLS spec for full records) but
-# only 4KB OUT (our uploads chunk at 4096 bytes). Saves ~12KB per connection.
-CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
-CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
-CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
-#
-# Disable peer certificate storage after handshake — we never call
-# mbedtls_ssl_get_peer_cert() post-handshake. Saves ~1-2KB per connection.
-CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
-#
-# Cipher algorithm removal: forces AES-GCM negotiation which uses the ESP32's
-# hardware AES accelerator (faster + lower power).
-CONFIG_MBEDTLS_CHACHA20_C=n
-CONFIG_MBEDTLS_POLY1305_C=n
-CONFIG_MBEDTLS_CHACHAPOLY_C=n
-
-# ── WiFi sleep optimizations ────────────────────────────────────────────────
-# Place WiFi TBTT/beacon processing in IRAM for faster sleep/wake transitions.
-# Costs ~1.3KB IRAM but reduces average current during modem-sleep.
-CONFIG_ESP_WIFI_SLP_IRAM_OPT=y
-# Reduce minimum WiFi active time after wake (default 50ms → 8ms).
-# Allows faster return to modem-sleep after processing beacon/data.
-CONFIG_ESP_WIFI_SLP_DEFAULT_MIN_ACTIVE_TIME=8
+# IMPORTANT: Both the Kconfig boolean selectors (_4096/_512) and the
+# raw value (CONFIG_WL_SECTOR_SIZE) must be set. The base Arduino
+# sdkconfig has _4096=y; without explicitly unsetting it, the ESP-IDF
+# build system ignores the raw value override.
+# CONFIG_WL_SECTOR_SIZE_4096 is not set
+CONFIG_WL_SECTOR_SIZE_512=y
+CONFIG_WL_SECTOR_SIZE=512
+# CONFIG_FATFS_SECTOR_4096 is not set
+CONFIG_FATFS_SECTOR_512=y
