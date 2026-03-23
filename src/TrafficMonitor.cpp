@@ -160,6 +160,10 @@ bool TrafficMonitor::hasActivityLatch() const {
 
 void TrafficMonitor::clearActivityLatch() {
     _activityLatch = false;
+    _lastSampleActive = false;
+    if (!_suspended && _initialized && _pcntUnit != nullptr) {
+        pcnt_unit_clear_count(_pcntUnit);
+    }
 }
 
 void TrafficMonitor::suspend() {
