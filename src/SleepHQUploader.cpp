@@ -523,7 +523,7 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
     // Prefer one persistent TLS session across the entire import.
     // Reconnecting per large file increases TLS handshake churn and heap fragmentation risk.
     if (g_debugMode) {
-        bool lowMemory = (maxAlloc < 50000);
+        bool lowMemory = (maxAlloc < 20000);
         if (!lowMemory) {
             lowMemoryKeepAliveWarned = false;
         } else if (!lowMemoryKeepAliveWarned) {

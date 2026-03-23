@@ -491,7 +491,7 @@ bool SMBUploader::createDirectory(const String& path) {
     // IMPORTANT: Do not skip create/check in low-memory mode, otherwise we can
     // incorrectly report success and then fail smb2_open with PATH_NOT_FOUND.
     uint32_t maxAlloc = ESP.getMaxAllocHeap();
-    if (g_debugMode && maxAlloc < 50000) {
+    if (g_debugMode && maxAlloc < 20000) {
         LOGF("[SMB] Low memory (%u bytes), validating/creating directory: %s",
              maxAlloc,
              cleanPath.c_str());
@@ -639,7 +639,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             if (parentDir != lastVerifiedParentDir) {
                 if (!createDirectory(parentDir)) {
                     uint32_t maxAllocNow = ESP.getMaxAllocHeap();
-                    if (maxAllocNow < 50000) {
+                    if (maxAllocNow < 20000) {
                         LOG_WARNF("[SMB] Parent directory check/create deferred under low memory (%u bytes): %s",
                                   maxAllocNow,
                                   parentDir.c_str());
@@ -674,7 +674,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
                 // context and retry once to clear any stale libsmb2 state.
                 if (!dirReady) {
                     uint32_t maxAllocNow = ESP.getMaxAllocHeap();
-                    if (maxAllocNow < 50000) {
+                    if (maxAllocNow < 20000) {
                         LOG_WARN("[SMB] Low memory during directory recovery; reconnecting SMB context and retrying once");
                         disconnect();
                         feedUploadHeartbeat();
