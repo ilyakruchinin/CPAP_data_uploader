@@ -20,6 +20,7 @@ TrafficMonitor::TrafficMonitor()
     , _totalActiveSamples(0)
     , _totalIdleSamples(0)
     , _suspended(false)
+    , _activityLatch(false)
 {
 }
 
@@ -114,6 +115,7 @@ void TrafficMonitor::update() {
     // Update idle tracking
     if (_lastSampleActive) {
         _consecutiveIdleMs = 0;
+        _activityLatch = true;
     } else {
         _consecutiveIdleMs += elapsed;
         if (_consecutiveIdleMs > _longestIdleMs) {
@@ -150,6 +152,14 @@ bool TrafficMonitor::isIdleFor(uint32_t ms) {
 
 uint32_t TrafficMonitor::getConsecutiveIdleMs() {
     return _consecutiveIdleMs;
+}
+
+bool TrafficMonitor::hasActivityLatch() const {
+    return _activityLatch;
+}
+
+void TrafficMonitor::clearActivityLatch() {
+    _activityLatch = false;
 }
 
 void TrafficMonitor::suspend() {

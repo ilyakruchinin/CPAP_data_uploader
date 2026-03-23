@@ -879,10 +879,11 @@ void handleListening() {
     // Any non-idle PCNT activity clears the suppression flag, allowing the
     // next idle detection to trigger a new upload cycle.
     if (g_noWorkSuppressed) {
-        if (trafficMonitor.isBusy()) {
+        if (trafficMonitor.isBusy() || trafficMonitor.hasActivityLatch()) {
             // Bus activity detected — CPAP is doing something. Clear suppression
             // so the next idle detection triggers a fresh upload attempt.
             g_noWorkSuppressed = false;
+            trafficMonitor.clearActivityLatch();
             LOG("[FSM] No-work suppression cleared — new bus activity detected");
         }
 
@@ -1247,6 +1248,7 @@ void handleReleasing() {
     // This prevents an endless reboot cycle when all backends are already synced.
     if (g_nothingToUpload) {
         g_nothingToUpload = false;
+        trafficMonitor.clearActivityLatch();  // Clear ESP-generated activity before entering cooldown
         LOGF("[FSM] Nothing to upload — entering cooldown without reboot (fh=%u ma=%u)",
              (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
         cooldownStartedAt = millis();
@@ -1275,6 +1277,7 @@ void handleReleasing() {
             LOG_WARN("[FSM] Heap fragmented — contiguous block below 35KB. Will reboot if it drops below 32KB.");
         }
         uploadCycleHadTimeout = false;
+        trafficMonitor.clearActivityLatch();  // Clear ESP-generated activity before entering cooldown
         cooldownStartedAt = millis();
         transitionTo(UploadState::COOLDOWN);
         return;
