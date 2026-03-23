@@ -620,11 +620,13 @@ UploadResult FileUploader::runFullSession(SDCardManager* sdManager, int maxMinut
         strncpy(g_activeBackendStatus.name, "SMB", sizeof(g_activeBackendStatus.name) - 1);
         LOG("[FileUploader] === Phase 2: SMB Session ===");
 
-        // Allocate SMB buffer dynamically based on current heap state
+        // Allocate SMB buffer dynamically based on current heap state.
+        // With ma=36852 being the safe floor (due to TLS/lwIP pegging), we can
+        // comfortably allocate 8KB out of the 36KB block for faster SMB speeds.
         uint32_t currentMa = ESP.getMaxAllocHeap();
-        size_t smbBufSize = (currentMa > 80000) ? 8192 :
-                            (currentMa > 50000) ? 4096 :
-                            (currentMa > 30000) ? 2048 : 1024;
+        size_t smbBufSize = (currentMa > 30000) ? 8192 :
+                            (currentMa > 20000) ? 4096 :
+                            (currentMa > 15000) ? 2048 : 1024;
         LOGF("[FileUploader] SMB phase heap: fh=%u ma=%u, buffer=%u",
              (unsigned)ESP.getFreeHeap(), (unsigned)currentMa, (unsigned)smbBufSize);
         if (!smbUploader->allocateBuffer(smbBufSize)) {

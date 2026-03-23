@@ -66,10 +66,11 @@ if (!smbWork && !cloudWork) {
 
 ### Memory Optimization
 - **Sequential backends**: CLOUD then SMB — TLS is released before libsmb2 starts, preventing concurrent socket/heap pressure
+- **FATFS 512-Byte Sectors**: A 3-tiered workaround (in `platformio.ini` and `sdkconfig.project`) forces `CONFIG_WL_SECTOR_SIZE=512`. This shrinks the `FATFS` struct, preventing an 18KB contiguous heap drop during SD mount.
 - **TLS pre-warm before SD mount**: mbedTLS gets first pick of unfragmented heap (~36KB contiguous). See `docs/specs/tls-prewarm-pcnt-recheck.md`
 - **Safety TLS cleanup**: Before SMB phase, unconditional `resetConnection()` ensures pre-warmed-but-unused TLS doesn't conflict with libsmb2 (errno:9)
 - **Soft reboot between sessions**: Restores full contiguous heap via `esp_restart()` (fast-boot path skips delays)
-- **Buffer management**: Dynamic SMB buffer sizing based on heap
+- **Buffer management**: Dynamic SMB buffer sizing (8KB, 4KB, 2KB, 1KB) based on the highly-stable `ma=36852` safe fragmentation floor.
 - **TLS reuse**: Persistent connections for cloud operations within a phase
 
 ### Mark-Complete Strategy

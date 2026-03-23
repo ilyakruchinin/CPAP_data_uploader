@@ -1,8 +1,12 @@
 # sdkconfig.project — project-level ESP-IDF overrides
-# This file is referenced from platformio.ini via "file://sdkconfig.project"
-# in the custom_sdkconfig block. Using a file instead of inline entries
-# preserves "# CONFIG_X is not set" lines that PlatformIO's INI parser
-# would otherwise strip as comments.
+#
+# This file is Layer 1 of a 3-tier workaround to reduce FATFS/WL sector sizes
+# from 4096 to 512 (saving ~18KB heap during SD mount). For full context, see
+# platformio.ini and docs/archive/56-POST-IMP-G31A.md.
+#
+# We use this external file referenced via "file://sdkconfig.project" in the
+# custom_sdkconfig block because PlatformIO's INI parser silently strips
+# "# CONFIG_X is not set" lines as comments, but the builder reads file:// raw.
 #
 # ── FATFS / Wear-Levelling Sector Size ──
 # Override the default 4096-byte sector to 512-byte.
