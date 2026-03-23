@@ -185,10 +185,12 @@ void transitionTo(UploadState newState) {
     
     // ── POWER: Manage PM lock + PCNT for auto light-sleep ──
     // Hold the lock in active states (CPU must stay awake for PCNT, SD I/O, network).
-    // Release in IDLE and COOLDOWN so auto light-sleep can engage between DTIM intervals.
+    // Release in IDLE so auto light-sleep can engage between DTIM intervals.
     // Also suspend/resume the PCNT unit — its ESP_PM_APB_FREQ_MAX lock blocks light-sleep.
-    bool newStateIsLowPower = (newState == UploadState::IDLE || newState == UploadState::COOLDOWN);
-    bool oldStateIsLowPower = (currentState == UploadState::IDLE || currentState == UploadState::COOLDOWN);
+    // NOTE: COOLDOWN is no longer treated as a low-power state to prevent the PCNT
+    // from missing CPAP activity while the FSM is waiting out the cooldown timer.
+    bool newStateIsLowPower = (newState == UploadState::IDLE);
+    bool oldStateIsLowPower = (currentState == UploadState::IDLE);
     
     if (newStateIsLowPower && !oldStateIsLowPower) {
         trafficMonitor.suspend();
@@ -1387,8 +1389,11 @@ void loop() {
     
     // Update traffic monitor only in states that need activity detection
     // LISTENING: needs idle detection to trigger uploads
+    // COOLDOWN: needs to catch activity so the FSM doesn't falsely suppress retries
     // MONITORING: needs live data for web UI
-    if (currentState == UploadState::LISTENING || currentState == UploadState::MONITORING) {
+    if (currentState == UploadState::LISTENING || 
+        currentState == UploadState::MONITORING ||
+        currentState == UploadState::COOLDOWN) {
         trafficMonitor.update();
     }
 

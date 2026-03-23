@@ -199,10 +199,14 @@ void TrafficMonitor::resetIdleTracking() {
     _secondPulseAccumulator = 0;
     _lastSecondTime = millis();
     // Drain any pulses accumulated so the first update() sample starts clean.
+    // Translate any drained pulses into the activity latch so we don't drop them.
     // Skip if suspended — resume() already clears the count.
     if (!_suspended) {
         int drain = 0;
         pcnt_unit_get_count(_pcntUnit, &drain);
+        if (drain > 0) {
+            _activityLatch = true;
+        }
         pcnt_unit_clear_count(_pcntUnit);
     }
 }
