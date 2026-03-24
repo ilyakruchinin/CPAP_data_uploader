@@ -23,7 +23,7 @@ We are currently gathering statistics on which models work reliably. **If your m
 | **AirSense 11** | Singapore | `R390-447/1` | 39520 | AIR11M1G22 | ✅ **100%** | Fully working |
 | **AirSense 11** | Singapore | `R390-447/1` | 39523 | AIR11M1U | ✅ **95%** | Stable since v1.0i-beta1 |
 | **AirSense 11** | Australia | `R390-453/1` | 39532 | AIR114GT | ✅ **100%** | Fully working |
-| **AirSense 10** | Australia | `R370-4102/1` | 37043 | AIR104G | ✅ **100%** | Fully working |
+| **AirSense 10** | Australia | `R370-4102/1` | 37043 | AIR104G | ✅ **100%** | Fully working (SX567-0306 Airbreak) |
 | **AirSense 10** | Singapore | `R370-4201/1` | 37127 | *(not specified/Europe)* | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0401). Resumes normal function afterwards. |
 | **AirSense 10** | Singapore | `R370-4207/1` | 37160 | AIR104GU | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0402). Resumes normal function afterwards. |
 | **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not provided)* | ✅ **100%** | Fully working |
