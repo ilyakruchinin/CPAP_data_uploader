@@ -21,8 +21,8 @@ We are currently gathering statistics on which models work reliably. **If your m
 | **AirSense 11** | Singapore | `R390-420/1` | 39480 | *(not specified)* | ✅ **100%** | Fully working |
 | **AirSense 11** | Singapore | `R390-447/1` | 39520 | AIR11M1G22 | ✅ **100%** | Fully working |
 | **AirSense 11** | Singapore | `R390-447/1` | 39523 | AIR11M1U | ✅ **95%** | Stable since v1.0i-beta1 |
-| **AirSense 11** | Singapore | `R390-447/1` | 39517 | AIR11M1G22 | ❌ **30%** | Has known power delivery issues. Fails on most machines. |
-| ↳ *(modded)* | — | — | ↳ 39517 🔧 | — | ⚠️ **50%** | *With 1uF SD Extender Mod and `BROWNOUT_DETECT=OFF`* |
+| **AirSense 11** | Singapore | `R390-447/1` | 39517 | AIR11M1G22 | ❌ **35%** | Has known power delivery issues. Fails on most machines. |
+| ↳ *(modded)* | — | — | ↳ 39517 🔧 | — | ⚠️ **65%** | *With 1uF SD Extender Mod and `BROWNOUT_DETECT=OFF`* |
 | **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not specified)* | ✅ **100%** | Fully working |
 | **AirSense 10** | Singapore | `R370-4201/1` | 37127 | *(not specified)* | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0401). Resumes normal function afterwards. |
 | **AirSense 10** | Singapore | `R370-4207/1` | 37160 | AIR104GU | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0402). Resumes normal function afterwards. |
