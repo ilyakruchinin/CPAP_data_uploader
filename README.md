@@ -9,15 +9,26 @@ Automatically upload CPAP therapy data from your SD card to a network share or S
 
 ## ⚠️ **IMPORTANT COMPATIBILITY NOTICE**
 
-### **AirSense 11 Power Compatibility**
-Some **Singapore-made AirSense 11 machines** may not provide sufficient power to the SD card adapter, which can cause spontaneous reboots or WiFi connection failures:
+### **Power Compatibility & Known Hardware Limits**
 
-- **Potentially affected models:**
-  - Platform: `R390-447/1`
-  - REF: `39517`
-  - Modem (WMOD / FCC ID): `AIR11M1G22`
-- **How to check:** Look at the label on the back/bottom of your AirSense 11 device. The platform code (e.g. R390-...) is usually near the "Made in XXX" text.
-- **Status:** If your machine matches these specific codes, you may experience power issues. Adjusting firmware power settings (`WIFI_TX_PWR`, `WIFI_PWR_SAVING`, `BROWNOUT_DETECT`, `ENABLE_1BIT_SD_MODE`) can help, but may still not be enough to fully resolve the hardware limitation on this specific variant (will likely require hardware modification).
+Some machines (particularly certain Singapore-made AirSense 10 and 11 models) have severe SD slot power delivery limitations. If your CPAP cannot provide enough power, the ESP32 chip will reset itself, causing frequent disconnects or spontaneous reboots during therapy.
+
+We are currently gathering statistics on which models work reliably. **If your model is not listed below, please report your experience to help us improve this data.**
+
+| Model | Made In | Platform | REF | Modem | Success rate | Notes |
+| :--- | :--- | :--- | :--- | :--- | :---: | :--- |
+| **AirSense 11** | Australia | `R390-453/1` | 39532 | AIR114GT | ✅ **100%** | Fully working |
+| **AirSense 11** | Singapore | `R390-420/1` | 39480 | *(not specified)* | ✅ **100%** | Fully working |
+| **AirSense 11** | Singapore | `R390-447/1` | 39520 | AIR11M1G22 | ✅ **100%** | Fully working |
+| **AirSense 11** | Singapore | `R390-447/1` | 39523 | AIR11M1U | ✅ **95%** | Stable since v1.0i-beta1 |
+| **AirSense 11** | Singapore | `R390-447/1` | 39517 | AIR11M1G22 | ❌ **30%** | Has known power delivery issues. Fails on most machines. |
+| ↳ *(modded)* | — | — | ↳ 39517 🔧 | — | ⚠️ **50%** | *With 1uF SD Extender Mod and `BROWNOUT_DETECT=OFF`* |
+| **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not specified)* | ✅ **100%** | Fully working |
+| **AirSense 10** | Singapore | `R370-4201/1` | 37127 | *(not specified)* | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0401). Resumes normal function afterwards. |
+| **AirSense 10** | Singapore | `R370-4207/1` | 37160 | AIR104GU | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0402). Resumes normal function afterwards. |
+
+> 🔧 **Hardware Modification Work in Progress**
+> One of our users is currently testing an **SD Card Extender mod** to add more capacitance to the power line. Initial tests with a pre-installed 1uF capacitor show promising results (improving the R390-447/1 REF 39517 from 30% to 50% success rate). We are waiting for further testing with increased capacitance, which may fully resolve power issues for the problematic models. Investigations are also ongoing to see if a capacitor mod (or a newer AirSense firmware) might resolve the mid-therapy reboot issue on the Singapore AirSense 10s.
 
 **👇 Click to expand:**
 
@@ -46,15 +57,7 @@ Some **Singapore-made AirSense 11 machines** may not provide sufficient power to
 
 </details>
 
-### **Confirmed Working**
-- ✅ **All AirSense 10 models**
-- ✅ **Australian-made AirSense 11 models**
-- ✅ **Some Singapore-made AirSense 11 models**
-  - For example, machines with REF `39523` with modem `AIR11M1U` have been stable since v1.0i-beta1
-
-> **Versions between v0.11.0 and v1.0i:** Added progressively more aggressive power optimizations (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility, which allowed some previously incompatible models to work.
-
-**If you have a Singapore-made AirSense 11 with REF** `39517` **and modem** `AIR11M1G22`, **please check your device label and report your experience to help us gather more compatibility data.**
+> **Versions between v0.11.0 and v1.0i:** Added progressively more aggressive power optimizations (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility, which allowed some previously incompatible models to work. Firmware configurations like `BROWNOUT_DETECT=OFF` can also help on borderline machines.
 
 ---
 
