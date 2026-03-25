@@ -15,7 +15,7 @@ Automatically upload CPAP therapy data from your SD card to a network share or S
 > [!NOTE]
 > **AirSense 10 units** ➔ see note below table.
 
-> [!WARNING]
+> [!CAUTION]
 > **AirSense 11 with REF 39517** ➔ most units have severe SD slot power delivery limitations. If your CPAP cannot provide enough power, the ESP32 chip will reset itself, causing frequent disconnects or spontaneous reboots (resulting in "**SD Card Error**").
 
 We are currently gathering statistics on which models work reliably. **If your model is not listed below, please report your experience to help us improve this data.**
@@ -34,8 +34,10 @@ We are currently gathering statistics on which models work reliably. **If your m
 | **AirSense 10** | Singapore | `R370-4207/1` | 37160 | AIR104GU | ✅ **100%** | ℹ️ Fully working, see notes |
 | **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not specified / Australia)* | ✅ **100%** | ℹ️ Fully working, see notes |
 
+> [!NOTE]
 > ℹ️ **AirSense 10 Note:** AirSense 10 machines (unlike AirSense 11) power-cycle the SD card slot every 60 seconds while actively blowing air. This causes the ESP32 card to constantly reboot during therapy, which will degrade the Web UI experience while you are sleeping. However, **this does not affect functionality** — once you stop therapy (take off the mask or stop the machine from blowing air), the card will boot up normally and complete the upload as expected.
 
+> [!TIP]
 > 🔧 **Hardware Modification Work in Progress**
 > One of our users is currently testing an **SD Card Extender mod** to add more capacitance to the power line. Initial tests show promising results (improving the R390-447/1 REF 39517 from 35% to 65% success rate). We are waiting for further testing with increased capacitance, which may fully resolve power issues for the problematic models. Investigations are also ongoing to see if a capacitor mod (or a newer AirSense firmware) might resolve the mid-therapy reboot issue on AirSense 10 units.
 
