@@ -23,7 +23,7 @@ We are currently gathering statistics on which models work reliably. **If your m
 **👇👇👇 Click to expand:**
 <details>
 <summary>
-  <img src="./docs/logo/animated-arrow.svg" alt="Point" width="25" style="vertical-align: middle;"/> 
+  <img src="./docs/logo/animated-arrow.svg?v3" alt="Point" width="25" style="vertical-align: middle;"/> 
   <b style="font-size: 1.2em; vertical-align: middle;">Detailed Model Compatibility Statistics</b>
 </summary>
 
