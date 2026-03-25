@@ -27,7 +27,7 @@ We are currently gathering statistics on which models work reliably. **If your m
 | **AirSense 10** | Australia | `R370-4102/1` | 37043 | AIR104G | ⚠️ **100%** | ⚠️ Investigating (SX567-0306 Airbreak) (ye) |
 | **AirSense 10** | Singapore | `R370-4201/1` | 37127 | *(not specified/Europe)* | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0401). Resumes normal function afterwards. |
 | **AirSense 10** | Singapore | `R370-4207/1` | 37160 | AIR104GU | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0402). Resumes normal function afterwards. |
-| **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not provided)* | ⚠️ **100%** | ⚠️ Investigating (ro) |
+| **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not provided)* | ⚠️ **100%** | ⚠️ Investigating (SX567-0306) (ro) |
 
 > 🔧 **Hardware Modification Work in Progress**
 > One of our users is currently testing an **SD Card Extender mod** to add more capacitance to the power line. Initial tests with a pre-installed 1uF capacitor show promising results (improving the R390-447/1 REF 39517 from 35% to 65% success rate). We are waiting for further testing with increased capacitance, which may fully resolve power issues for the problematic models. Investigations are also ongoing to see if a capacitor mod (or a newer AirSense firmware) might resolve the mid-therapy reboot issue on the Singapore AirSense 10s.
