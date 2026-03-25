@@ -70,6 +70,7 @@ private:
     int cooldownMinutes;           // Y: minutes to release SD between upload cycles
     bool enable1BitSdMode;         // Whether to use 1-bit SDIO mode instead of 4-bit
     bool minimizeReboots;           // Skip elective reboots between upload sessions
+    bool flushLogsDuringUpload;      // Continue periodic log flushes during uploads (default: false)
     
     // Cached endpoint type flags (computed once during loadFromSD)
     bool _hasSmbEndpoint;
@@ -82,8 +83,8 @@ private:
     WifiPowerSaving wifiPowerSaving;
     BrownoutDetectMode brownoutDetectMode;
     
-    // Credential storage mode flags
-    bool storePlainText;
+    // Credential masking mode flags
+    bool maskCredentials;
     bool credentialsInFlash;
     
     // Preferences object for secure credential storage
@@ -157,6 +158,7 @@ public:
     int getCooldownMinutes() const;
     bool getEnable1BitSdMode() const;
     bool getMinimizeReboots() const;
+    bool getFlushLogsDuringUpload() const;
     bool isSmartMode() const;
     
     // Power management getters
@@ -165,8 +167,8 @@ public:
     WifiPowerSaving getWifiPowerSaving() const;
     BrownoutDetectMode getBrownoutDetectMode() const;
     
-    // Credential storage mode getters
-    bool isStoringPlainText() const;
+    // Credential masking mode getters
+    bool isMaskingCredentials() const;
     bool areCredentialsInFlash() const;
     
 private:

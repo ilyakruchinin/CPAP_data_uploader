@@ -2,6 +2,7 @@
 #define TRAFFIC_MONITOR_H
 
 #include <Arduino.h>
+#include <driver/pulse_cnt.h>
 
 /**
  * TrafficMonitor - PCNT-based SD bus activity detector
@@ -31,11 +32,20 @@ public:
     void begin(int pin);              // Initialize PCNT on given GPIO
     void update();                    // Call every loop() — non-blocking ~100ms sample
     
+    // Power management: suspend/resume PCNT for light-sleep
+    // suspend() stops and disables the PCNT unit, releasing its ESP_PM_APB_FREQ_MAX
+    // lock so auto light-sleep can engage. resume() re-enables and restarts counting.
+    void suspend();                   // Call when entering IDLE/COOLDOWN
+    void resume();                    // Call when leaving IDLE/COOLDOWN
+    bool isSuspended() const;         // True if PCNT is suspended
+    
     // Activity detection
     bool isBusy();                    // True if activity detected in last sample window
     bool isIdleFor(uint32_t ms);      // True if no activity for at least ms milliseconds
     uint32_t getConsecutiveIdleMs();  // How long has the bus been silent?
     void resetIdleTracking();         // Reset silence counter (e.g., on state transition)
+    bool hasActivityLatch() const;    // True if any activity occurred since the latch was last cleared
+    void clearActivityLatch();        // Clear the activity latch
     
     // Sample buffer for SD Activity Monitor web UI
     // Buffer is only allocated when monitoring mode is active (saves ~2.4KB RAM)
@@ -61,6 +71,8 @@ public:
 private:
     int _pin;
     bool _initialized;
+    pcnt_unit_handle_t _pcntUnit;
+    pcnt_channel_handle_t _pcntChannel;
     
     // 100ms sampling
     unsigned long _lastSampleTime;
@@ -70,6 +82,8 @@ private:
     
     // Idle tracking
     uint32_t _consecutiveIdleMs;
+    bool _suspended;
+    bool _activityLatch;
     
     // 1-second aggregation for sample buffer
     unsigned long _lastSecondTime;

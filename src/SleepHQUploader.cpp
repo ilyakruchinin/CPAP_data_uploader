@@ -6,8 +6,9 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "NetworkRecovery.h"
-#include <esp32/rom/md5_hash.h>
+#include <esp_rom_md5.h>
 #include <esp_task_wdt.h>
+#include <lwip/sockets.h>
 
 // GTS Root R4 - Google Trust Services root CA certificate (expires June 22, 2036)
 // Used for TLS validation of sleephq.com (which uses Google Trust Services)
@@ -74,11 +75,10 @@ void SleepHQUploader::resetTLS() {
     if (tlsClient) {
         tlsClient->stop();
         delay(100);  // Let lwIP process the FIN/RST before freeing
-        delete tlsClient;
-        tlsClient = nullptr;
     }
     // Give lwIP TCP stack time to release socket FDs and clean up TIME_WAIT
     delay(500);
+    // Re-use existing wrapper instead of delete/new — avoids heap micro-fragmentation
     setupTLS();
 }
 
@@ -93,12 +93,28 @@ void SleepHQUploader::configureTLS() {
         tlsClient->setCACert(GTS_ROOT_R4_CA);
     }
     
-    // Set reasonable timeout for ESP32 - increased to 60s for slow networks
-    tlsClient->setTimeout(60);  // 60 seconds
+    // Socket-level timeout for TLS operations. Must be below the 30s task-WDT
+    // to ensure a single blocking TLS call can't trigger a watchdog reset.
+    tlsClient->setTimeout(20);  // 20 seconds
 }
 
 void SleepHQUploader::resetConnection() {
     resetTLS();
+}
+
+void SleepHQUploader::setSendTimeout() {
+    // Set SO_SNDTIMEO on the underlying TCP socket after TLS connect.
+    // WiFiClientSecure::setTimeout() only sets SO_RCVTIMEO (read timeout);
+    // without SO_SNDTIMEO, write() on a zombie connection blocks indefinitely,
+    // starving the 30s task WDT → watchdog reboot (confirmed by core dump).
+    if (!tlsClient) return;
+    int fd = tlsClient->fd();
+    if (fd >= 0) {
+        struct timeval tv;
+        tv.tv_sec = 10;
+        tv.tv_usec = 0;
+        lwip_setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
 }
 
 void SleepHQUploader::parseHostPort(char* host, size_t hostLen, int& port) {
@@ -140,11 +156,18 @@ bool SleepHQUploader::preWarmTLS() {
     uint32_t ma = ESP.getMaxAllocHeap();
     LOGF("[SleepHQ] Pre-warm: connecting to %s:%d (fh=%u, ma=%u)", host, port, fh, ma);
 
+    // Feed task WDT before TLS handshake — can take 14+ seconds at low heap.
+    // Gives the 30s WDT a full window for the handshake to complete.
+    esp_task_wdt_reset();
+
     if (!tlsClient->connect(host, port)) {
+        esp_task_wdt_reset();  // Feed after failed handshake attempt
         LOG_WARN("[SleepHQ] Pre-warm: TLS connect failed (non-fatal, will retry during upload)");
         return false;
     }
 
+    esp_task_wdt_reset();  // Feed after successful handshake
+    setSendTimeout();
     LOGF("[SleepHQ] Pre-warm: TLS connected (fh=%u, ma=%u)",
          ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     return true;
@@ -417,8 +440,8 @@ String SleepHQUploader::computeContentHash(fs::FS &sd, const String& localPath, 
     // Snapshot file size at open time - only hash this many bytes
     unsigned long snapshotSize = file.size();
     
-    struct MD5Context md5ctx;
-    MD5Init(&md5ctx);
+    md5_context_t md5ctx;
+    esp_rom_md5_init(&md5ctx);
     
     // Hash exactly snapshotSize bytes (not file.available() which can grow)
     uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE_MAX];
@@ -430,18 +453,18 @@ String SleepHQUploader::computeContentHash(fs::FS &sd, const String& localPath, 
         }
         size_t bytesRead = file.read(buffer, toRead);
         if (bytesRead == 0) break;  // EOF or read error
-        MD5Update(&md5ctx, buffer, bytesRead);
+        esp_rom_md5_update(&md5ctx, buffer, bytesRead);
         totalHashed += bytesRead;
     }
     file.close();
     hashedSize = totalHashed;
     
     // Append filename to hash
-    MD5Update(&md5ctx, (const uint8_t*)fileName.c_str(), fileName.length());
+    esp_rom_md5_update(&md5ctx, (const uint8_t*)fileName.c_str(), fileName.length());
     
     // Finalize
     uint8_t digest[16];
-    MD5Final(digest, &md5ctx);
+    esp_rom_md5_final(digest, &md5ctx);
     
     // Convert to hex string
     char hashStr[33];
@@ -500,7 +523,7 @@ bool SleepHQUploader::upload(const String& localPath, const String& remotePath,
     // Prefer one persistent TLS session across the entire import.
     // Reconnecting per large file increases TLS handshake churn and heap fragmentation risk.
     if (g_debugMode) {
-        bool lowMemory = (maxAlloc < 50000);
+        bool lowMemory = (maxAlloc < 20000);
         if (!lowMemory) {
             lowMemoryKeepAliveWarned = false;
         } else if (!lowMemoryKeepAliveWarned) {
@@ -593,6 +616,11 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
         // Connect if the keep-alive connection is dead
         if (!tlsClient->connected()) {
             uint32_t maxAlloc = ESP.getMaxAllocHeap();
+            // 36KB is the minimum contiguous heap for a TLS handshake (16KB IN +
+            // 16KB OUT mbedTLS buffers + ~4KB SSL context overhead).  During active
+            // SMB transfers the observed steady-state floor is ~38900 bytes, which
+            // recovers after the transfer completes.  Since SMB and TLS never run
+            // simultaneously, this guard only fires if heap is persistently fragmented.
             if (maxAlloc < 36000) {
                 LOG_ERRORF("[SleepHQ] Insufficient contiguous heap for SSL (%u bytes), skipping request", maxAlloc);
                 return false;
@@ -621,6 +649,8 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
             }
             LOGF("[SleepHQ] TLS connected (fh=%u, ma=%u)",
                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+            setSendTimeout();
+            esp_task_wdt_reset();  // Feed after handshake before header writes
         }
 
         // ── Send HTTP request via raw TLS (zero heap allocation) ─────────
@@ -630,6 +660,7 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
 
             n = snprintf(hdrBuf, sizeof(hdrBuf), "%s %s HTTP/1.1\r\n", method.c_str(), path.c_str());
             tlsClient->write((const uint8_t*)hdrBuf, n);
+            esp_task_wdt_reset();
 
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Host: %s\r\n", host);
             tlsClient->write((const uint8_t*)hdrBuf, n);
@@ -639,6 +670,7 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
                 tlsClient->write((const uint8_t*)accessToken.c_str(), accessToken.length());
                 tlsClient->write((const uint8_t*)"\r\n", 2);
             }
+            esp_task_wdt_reset();
 
             tlsClient->write((const uint8_t*)"Accept: application/vnd.api+json\r\n", 34);
 
@@ -651,10 +683,12 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
             }
             tlsClient->write((const uint8_t*)hdrBuf, n);
             tlsClient->write((const uint8_t*)"Connection: keep-alive\r\n\r\n", 26);
+            esp_task_wdt_reset();
 
             if (bodyLen > 0) {
                 tlsClient->write((const uint8_t*)body.c_str(), bodyLen);
             }
+            esp_task_wdt_reset();
             tlsClient->flush();
         }
 
@@ -665,6 +699,7 @@ bool SleepHQUploader::httpRequest(const String& method, const String& path,
         // ── Wait for response ────────────────────────────────────────────
         unsigned long timeout = millis() + 15000;
         while (!tlsClient->available() && millis() < timeout) {
+            esp_task_wdt_reset();
             delay(10);
         }
         if (!tlsClient->available()) {
@@ -883,7 +918,14 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         if (!tlsClient->connected()) {
             LOGF("[SleepHQ] Streaming: establishing TLS connection (attempt %d, free: %u, max_alloc: %u)",
                  attempt + 1, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+            // Feed watchdogs before TLS handshake — gives full 30s WDT window
+            esp_task_wdt_reset();
+            {
+                extern volatile unsigned long g_uploadHeartbeat;
+                g_uploadHeartbeat = millis();
+            }
             if (!tlsClient->connect(host, port)) {
+                esp_task_wdt_reset();  // Feed after failed handshake
                 LOG_ERROR("[SleepHQ] Failed to connect for streaming upload");
                 
                 if (attempt == 0) {
@@ -896,6 +938,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                         while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
                             extern volatile unsigned long g_uploadHeartbeat;
                             g_uploadHeartbeat = millis();  // Feed software watchdog
+                            esp_task_wdt_reset();          // Feed task WDT during WiFi wait
                             delay(100);
                         }
                         if (WiFi.status() == WL_CONNECTED) {
@@ -921,6 +964,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 }
                 return false;
             }
+            esp_task_wdt_reset();  // Feed after successful handshake
+            setSendTimeout();
         } else {
             LOG_DEBUG("[SleepHQ] Streaming: reusing existing TLS connection (keep-alive)");
         }
@@ -931,14 +976,17 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             int n;
             n = snprintf(hdrBuf, sizeof(hdrBuf), "POST %s HTTP/1.1\r\n", path.c_str());
             tlsClient->write((const uint8_t*)hdrBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Host: %s\r\n", host);
             tlsClient->write((const uint8_t*)hdrBuf, n);
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Authorization: Bearer %s\r\n", accessToken.c_str());
             tlsClient->write((const uint8_t*)hdrBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Accept: application/vnd.api+json\r\n");
             tlsClient->write((const uint8_t*)hdrBuf, n);
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Content-Type: multipart/form-data; boundary=%s\r\n", boundary);
             tlsClient->write((const uint8_t*)hdrBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(hdrBuf, sizeof(hdrBuf), "Content-Length: %lu\r\n", totalLength);
             tlsClient->write((const uint8_t*)hdrBuf, n);
             if (useKeepAlive) {
@@ -947,6 +995,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 tlsClient->write((const uint8_t*)"Connection: close\r\n\r\n", 21);
             }
         }
+        esp_task_wdt_reset();  // Feed WDT after HTTP header writes
         
         // Send multipart preamble — stack buffer to avoid heap churn
         {
@@ -955,14 +1004,17 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             n = snprintf(partBuf, sizeof(partBuf), "--%s\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n%s\r\n",
                          boundary, fnStr);
             tlsClient->write((const uint8_t*)partBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(partBuf, sizeof(partBuf), "--%s\r\nContent-Disposition: form-data; name=\"path\"\r\n\r\n%s\r\n",
                          boundary, dirPath);
             tlsClient->write((const uint8_t*)partBuf, n);
+            esp_task_wdt_reset();
             n = snprintf(partBuf, sizeof(partBuf), "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
                          "Content-Type: application/octet-stream\r\n\r\n",
                          boundary, fnStr);
             tlsClient->write((const uint8_t*)partBuf, n);
         }
+        esp_task_wdt_reset();  // Feed WDT after multipart preamble writes
         
         // Re-open and stream file
         file = sd.open(filePath, FILE_READ);
@@ -971,8 +1023,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             return false;
         }
         
-        struct MD5Context md5ctx;
-        MD5Init(&md5ctx);
+        md5_context_t md5ctx;
+        esp_rom_md5_init(&md5ctx);
         
         uint8_t buffer[CLOUD_UPLOAD_BUFFER_SIZE_MAX];
         // Adaptive chunk size: smaller reads when heap is constrained
@@ -1003,7 +1055,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             readRetries = 0; // Reset retry counter on success
             
             // Update checksum with file data
-            MD5Update(&md5ctx, buffer, bytesRead);
+            esp_rom_md5_update(&md5ctx, buffer, bytesRead);
             
             // Write to TLS with retry and partial write handling
             size_t remainingToWrite = bytesRead;
@@ -1018,6 +1070,10 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                     writePtr += written;
                     totalSent += written;
                     writeRetries = 0; // Reset retry counter on success
+                    // Feed WDT after each successful partial write — a single
+                    // tlsClient->write() can block for seconds when TCP flow
+                    // control stalls, and we must not starve the 30s task WDT.
+                    esp_task_wdt_reset();
                 } else {
                     // Write failed or returned 0 (buffer full / EAGAIN)
                     if (!tlsClient->connected()) {
@@ -1028,6 +1084,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                     
                     if (writeRetries < 10) {
                         LOG_WARNF("[SleepHQ] Write returned 0/fail at %lu/%lu, retrying (%d/10)...", totalSent, fileSize, writeRetries + 1);
+                        esp_task_wdt_reset();  // feed WDT during retry back-off
                         delay(500); // Wait longer for socket buffer to drain
                         writeRetries++;
                         yield();
@@ -1044,7 +1101,8 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 break;
             }
             
-            // Feed software watchdog during large file streaming
+            // Feed both hardware and software watchdogs during large file streaming
+            esp_task_wdt_reset();
             extern volatile unsigned long g_uploadHeartbeat;
             g_uploadHeartbeat = millis();
             
@@ -1089,11 +1147,11 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
         }
         
         // Append filename to hash: content_hash = MD5(file_content + filename)
-        MD5Update(&md5ctx, (const uint8_t*)fnStr, strlen(fnStr));
+        esp_rom_md5_update(&md5ctx, (const uint8_t*)fnStr, strlen(fnStr));
         
         // Finalize checksum — use stack buffer, no String allocation
         uint8_t digest[16];
-        MD5Final(digest, &md5ctx);
+        esp_rom_md5_final(digest, &md5ctx);
         char hashStr[33];
         for (int i = 0; i < 16; i++) {
             sprintf(hashStr + (i * 2), "%02x", digest[i]);
@@ -1104,6 +1162,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             *calculatedChecksum = String(hashStr);
         }
         
+        esp_task_wdt_reset();  // Feed WDT before footer writes
         // Send footer with hash — stack buffer to avoid heap churn
         {
             char partBuf[384];
@@ -1111,15 +1170,19 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
             n = snprintf(partBuf, sizeof(partBuf), "\r\n--%s\r\nContent-Disposition: form-data; name=\"content_hash\"\r\n\r\n",
                          boundary);
             tlsClient->write((const uint8_t*)partBuf, n);
+            esp_task_wdt_reset();
             tlsClient->write((const uint8_t*)hashStr, 32);
             n = snprintf(partBuf, sizeof(partBuf), "\r\n--%s--\r\n", boundary);
             tlsClient->write((const uint8_t*)partBuf, n);
         }
+        esp_task_wdt_reset();
         tlsClient->flush();
+        esp_task_wdt_reset();
         
         // Read response status line
         unsigned long timeout = millis() + 30000;
         while (!tlsClient->available() && millis() < timeout) {
+            esp_task_wdt_reset();
             delay(10);
         }
 
@@ -1207,6 +1270,7 @@ bool SleepHQUploader::httpMultipartUpload(const String& path, const String& file
                 while (WiFi.status() != WL_CONNECTED && millis() - startWait < 10000) {
                     extern volatile unsigned long g_uploadHeartbeat;
                     g_uploadHeartbeat = millis();
+                    esp_task_wdt_reset();
                     delay(100);
                 }
             }

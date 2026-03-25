@@ -85,7 +85,7 @@ Power defaults are optimised for AirSense 11 compatibility (low peak current). M
 
 | Key | Default | Description |
 |---|---|---|
-| `STORE_CREDENTIALS_PLAIN_TEXT` | `false` | Set to `true` to store credentials in plain text in `config.txt` instead of encrypted NVS flash. **Only for debugging or boards without NVS support.** |
+| `MASK_CREDENTIALS` | `false` | When `true`, credentials are migrated from `config.txt` to ESP32 NVS flash and replaced with `***STORED_IN_FLASH***`. When `false` (default), credentials remain as plaintext in `config.txt` — the safest option for development and reflashing, since a full (non-OTA) flash erases NVS. **Note:** The old key `STORE_CREDENTIALS_PLAIN_TEXT` is no longer recognised. |
 
 ---
 
@@ -101,7 +101,8 @@ Power defaults are optimised for AirSense 11 compatibility (low peak current). M
 
 | Key | Default | Description |
 |---|---|---|
-| `PERSISTENT_LOGS` | `false` | Set to `true` to periodically flush the in-memory log buffer to the ESP32's internal `LittleFS` partition (4-file rotation: `syslog.0..3.txt`, 32 KB each, 128 KB total). Logs are flushed every **10 seconds** while the device is idle; periodic flushes are intentionally deferred during active uploads to reduce flash-write overlap with SD reads, TLS work, and WiFi traffic. Use the **⬇ Download All Logs** button on the Logs tab to download persisted + current log files to your browser. Logs are written to internal flash only, never to the SD card. **Note:** Regardless of this setting, the log buffer is still flushed to LittleFS before reboot, and to `/uploader_error.txt` on the SD card if a boot-time failure prevents WiFi connectivity. If high-volume logging overruns the 8 KB RAM circular buffer before the next LittleFS flush, the persisted syslog will include a `LOG GAP` marker noting that some lines were lost and how many bytes were skipped. |
+| `PERSISTENT_LOGS` | `false` | Set to `true` to periodically flush the in-memory log buffer to the ESP32's internal `LittleFS` partition (4-file rotation: `syslog.0..3.txt`, 32 KB each, 128 KB total). Logs are flushed every **10 seconds** while the device is idle; periodic flushes are deferred during active uploads by default (see `FLUSH_LOGS_DURING_UPLOAD`). Use the **⬇ Download All Logs** button on the Logs tab to download persisted + current log files to your browser. Logs are written to internal flash only, never to the SD card. **Note:** Regardless of this setting, the log buffer is still flushed to LittleFS before reboot, and to `/uploader_error.txt` on the SD card if a boot-time failure prevents WiFi connectivity. If high-volume logging overruns the 8 KB RAM circular buffer before the next LittleFS flush, the persisted syslog will include a `LOG NOTICE` marker noting that some lines were skipped and how many bytes were affected. |
+| `FLUSH_LOGS_DURING_UPLOAD` | `false` | When `false` (default), periodic log flushes to internal flash are paused while an upload is running. This reduces SPI flash write contention with SD reads, TLS encryption, and WiFi traffic — the safest setting for power-constrained setups. When `true`, logs continue to flush every 10 seconds even during uploads, eliminating `LOG NOTICE` gaps in the persisted syslog at the cost of slightly higher power draw and flash wear during upload sessions. |
 | `DEBUG` | `false` | Set to `true` to enable verbose diagnostics: (1) per-folder `Pre-flight scan` lines in the upload log, and (2) `[res fh= ma= fd=]` heap/file-descriptor stats appended to every log line. Leave `false` in normal operation to keep logs concise. |
 
 ---
@@ -112,6 +113,7 @@ The following keys are **no longer used** by the firmware. They will generate a 
 
 | Key | Reason |
 |---|---|
+| `STORE_CREDENTIALS_PLAIN_TEXT` | **Renamed in v2.0i.** Use `MASK_CREDENTIALS` instead (note: inverted semantics — `MASK_CREDENTIALS = true` enables NVS masking, whereas the old key's `true` meant plaintext). |
 | `BOOT_DELAY_SECONDS` | **Removed in v0.9.2.** Cold-boot electrical stabilization is now hardcoded to 15 seconds (a chicken-and-egg problem: the delay happens before the SD card is read, so this value could never actually be applied). |
 | `SCHEDULE` | **Legacy.** Parsed and stored but not used by any firmware logic. Superseded by `UPLOAD_MODE`, `UPLOAD_START_HOUR`, and `UPLOAD_END_HOUR`. |
 | `GMT_OFFSET` | **Removed.** Use `GMT_OFFSET_HOURS`. |
@@ -123,8 +125,13 @@ The following keys are **no longer used** by the firmware. They will generate a 
 
 ## Credential Security
 
-On first boot with a valid config, the firmware automatically:
+By default (`MASK_CREDENTIALS = false`), credentials stay as plaintext in `config.txt`. This is the recommended mode — it survives full firmware flashes without losing WiFi passwords.
+
+If `MASK_CREDENTIALS = true`, the firmware:
 1. Migrates `WIFI_PASSWORD`, `ENDPOINT_PASSWORD`, and `CLOUD_CLIENT_SECRET` to encrypted ESP32 NVS (flash).
 2. Replaces those values in `config.txt` with `***STORED_IN_FLASH***`.
+3. On subsequent boots, loads credentials from NVS instead of `config.txt`.
 
-On subsequent boots, the censored values in `config.txt` are ignored and the real credentials are loaded from NVS. To reset credentials, delete the NVS partition or write new plain-text values back into `config.txt`.
+> **Warning:** A full (non-OTA) firmware flash erases NVS. After such a flash with `MASK_CREDENTIALS = true`, you must re-enter all passwords in `config.txt`. OTA updates are not affected.
+
+If `MASK_CREDENTIALS` is `false` (or absent) and `config.txt` contains `***STORED_IN_FLASH***` as a password, the firmware logs an error prompting you to re-enter the password. It does **not** attempt to recover from NVS.

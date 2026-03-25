@@ -1,14 +1,11 @@
 #include "TrafficMonitor.h"
 #include "Logger.h"
-#include "driver/pcnt.h"
-
-// PCNT unit and channel used for bus activity detection
-#define TRAFFIC_PCNT_UNIT   PCNT_UNIT_0
-#define TRAFFIC_PCNT_CHANNEL PCNT_CHANNEL_0
 
 TrafficMonitor::TrafficMonitor()
     : _pin(-1)
     , _initialized(false)
+    , _pcntUnit(nullptr)
+    , _pcntChannel(nullptr)
     , _lastSampleTime(0)
     , _lastSampleActive(false)
     , _lastPulseCount(0)
@@ -22,6 +19,8 @@ TrafficMonitor::TrafficMonitor()
     , _longestIdleMs(0)
     , _totalActiveSamples(0)
     , _totalIdleSamples(0)
+    , _suspended(false)
+    , _activityLatch(false)
 {
 }
 
@@ -31,46 +30,61 @@ void TrafficMonitor::begin(int pin) {
     // Configure GPIO as input (floating - rely on external pull-ups on SD bus)
     pinMode(_pin, INPUT);
     
-    // Configure PCNT unit
-    pcnt_config_t pcntConfig = {};
-    pcntConfig.pulse_gpio_num = _pin;
-    pcntConfig.ctrl_gpio_num = PCNT_PIN_NOT_USED;
-    pcntConfig.channel = TRAFFIC_PCNT_CHANNEL;
-    pcntConfig.unit = TRAFFIC_PCNT_UNIT;
-    pcntConfig.pos_mode = PCNT_COUNT_INC;   // Count on rising edge
-    pcntConfig.neg_mode = PCNT_COUNT_INC;   // Count on falling edge
-    pcntConfig.lctrl_mode = PCNT_MODE_KEEP;
-    pcntConfig.hctrl_mode = PCNT_MODE_KEEP;
-    pcntConfig.counter_h_lim = 32767;       // Max 16-bit signed
-    pcntConfig.counter_l_lim = 0;
+    // Configure PCNT unit (new IDF 5.x driver)
+    pcnt_unit_config_t unit_config = {};
+    unit_config.high_limit = 32767;       // Max 16-bit signed
+    unit_config.low_limit  = -1;          // Must be negative; we only count up
     
-    esp_err_t err = pcnt_unit_config(&pcntConfig);
+    esp_err_t err = pcnt_new_unit(&unit_config, &_pcntUnit);
     if (err != ESP_OK) {
-        LOG_ERRORF("PCNT config failed: %d", err);
+        LOG_ERRORF("PCNT unit creation failed: %d", err);
         return;
     }
     
-    // Set glitch filter to ignore pulses < ~100ns (filter value = 10 APB clock cycles)
-    err = pcnt_set_filter_value(TRAFFIC_PCNT_UNIT, 10);
+    // Set glitch filter to ignore pulses < ~100ns (filter value in ns)
+    pcnt_glitch_filter_config_t filter_config = {};
+    filter_config.max_glitch_ns = 125;    // ~10 APB cycles at 80 MHz ≈ 125 ns
+    err = pcnt_unit_set_glitch_filter(_pcntUnit, &filter_config);
     if (err != ESP_OK) {
         LOG_WARNF("PCNT filter config failed: %d", err);
     }
-    pcnt_filter_enable(TRAFFIC_PCNT_UNIT);
     
-    // Clear and start counter
-    pcnt_counter_pause(TRAFFIC_PCNT_UNIT);
-    pcnt_counter_clear(TRAFFIC_PCNT_UNIT);
-    pcnt_counter_resume(TRAFFIC_PCNT_UNIT);
+    // Configure PCNT channel on the unit
+    pcnt_chan_config_t chan_config = {};
+    chan_config.edge_gpio_num  = _pin;
+    chan_config.level_gpio_num = -1;       // No control/level GPIO
+    
+    err = pcnt_new_channel(_pcntUnit, &chan_config, &_pcntChannel);
+    if (err != ESP_OK) {
+        LOG_ERRORF("PCNT channel creation failed: %d", err);
+        pcnt_del_unit(_pcntUnit);
+        _pcntUnit = nullptr;
+        return;
+    }
+    
+    // Count on both rising and falling edges (same as legacy pos_mode/neg_mode = INC)
+    pcnt_channel_set_edge_action(_pcntChannel,
+        PCNT_CHANNEL_EDGE_ACTION_INCREASE,   // Rising edge
+        PCNT_CHANNEL_EDGE_ACTION_INCREASE);  // Falling edge
+    // No control GPIO — keep counting regardless of level
+    pcnt_channel_set_level_action(_pcntChannel,
+        PCNT_CHANNEL_LEVEL_ACTION_KEEP,      // High level
+        PCNT_CHANNEL_LEVEL_ACTION_KEEP);     // Low level
+    
+    // Enable and start counter
+    pcnt_unit_enable(_pcntUnit);
+    pcnt_unit_clear_count(_pcntUnit);
+    pcnt_unit_start(_pcntUnit);
     
     _lastSampleTime = millis();
     _lastSecondTime = millis();
     _initialized = true;
     
-    LOGF("TrafficMonitor initialized on GPIO %d (PCNT unit %d)", _pin, TRAFFIC_PCNT_UNIT);
+    LOGF("TrafficMonitor initialized on GPIO %d", _pin);
 }
 
 void TrafficMonitor::update() {
-    if (!_initialized) return;
+    if (!_initialized || _suspended) return;
     
     unsigned long now = millis();
     
@@ -81,9 +95,9 @@ void TrafficMonitor::update() {
     _lastSampleTime = now;
     
     // Read and clear PCNT counter
-    int16_t count = 0;
-    pcnt_get_counter_value(TRAFFIC_PCNT_UNIT, &count);
-    pcnt_counter_clear(TRAFFIC_PCNT_UNIT);
+    int count = 0;
+    pcnt_unit_get_count(_pcntUnit, &count);
+    pcnt_unit_clear_count(_pcntUnit);
     
     _lastPulseCount = (count > 0) ? (uint16_t)count : 0;
     _lastSampleActive = (_lastPulseCount > 0);
@@ -101,6 +115,7 @@ void TrafficMonitor::update() {
     // Update idle tracking
     if (_lastSampleActive) {
         _consecutiveIdleMs = 0;
+        _activityLatch = true;
     } else {
         _consecutiveIdleMs += elapsed;
         if (_consecutiveIdleMs > _longestIdleMs) {
@@ -139,17 +154,65 @@ uint32_t TrafficMonitor::getConsecutiveIdleMs() {
     return _consecutiveIdleMs;
 }
 
+bool TrafficMonitor::hasActivityLatch() const {
+    return _activityLatch;
+}
+
+void TrafficMonitor::clearActivityLatch() {
+    _activityLatch = false;
+    _lastSampleActive = false;
+    if (!_suspended && _initialized && _pcntUnit != nullptr) {
+        pcnt_unit_clear_count(_pcntUnit);
+    }
+}
+
+void TrafficMonitor::suspend() {
+    if (!_initialized || _suspended) return;
+    
+    // Stop counting, then disable the unit.
+    // pcnt_unit_disable() releases the ESP_PM_APB_FREQ_MAX lock,
+    // allowing DFS to drop to 40 MHz and auto light-sleep to engage.
+    pcnt_unit_stop(_pcntUnit);
+    pcnt_unit_disable(_pcntUnit);
+    _suspended = true;
+    LOG_DEBUG("[POWER] PCNT suspended — APB lock released for light-sleep");
+}
+
+void TrafficMonitor::resume() {
+    if (!_initialized || !_suspended) return;
+    
+    // Re-enable the unit (reacquires ESP_PM_APB_FREQ_MAX lock),
+    // clear stale count accumulated while disabled, then restart.
+    pcnt_unit_enable(_pcntUnit);
+    pcnt_unit_clear_count(_pcntUnit);
+    pcnt_unit_start(_pcntUnit);
+    _suspended = false;
+    _lastSampleTime = millis();
+    _lastSecondTime = millis();
+    _secondPulseAccumulator = 0;
+    LOG_DEBUG("[POWER] PCNT resumed — APB lock reacquired");
+}
+
+bool TrafficMonitor::isSuspended() const {
+    return _suspended;
+}
+
 void TrafficMonitor::resetIdleTracking() {
     _consecutiveIdleMs = 0;
     _lastSampleTime = millis();          // Prevent stale elapsed after COOLDOWN
     _secondPulseAccumulator = 0;
     _lastSecondTime = millis();
-    // Drain any pulses accumulated during COOLDOWN/IDLE so the first
-    // update() sample starts clean.  Without this, a 16-bit PCNT overflow
-    // during a 10-minute COOLDOWN could read as 0 → false idle.
-    int16_t drain = 0;
-    pcnt_get_counter_value(TRAFFIC_PCNT_UNIT, &drain);
-    pcnt_counter_clear(TRAFFIC_PCNT_UNIT);
+    // Drain any pulses accumulated so the first update() sample starts clean.
+    // Translate any drained pulses into the activity latch so we don't drop them.
+    // Skip if suspended — resume() already clears the count.
+    if (!_suspended) {
+        int drain = 0;
+        pcnt_unit_get_count(_pcntUnit, &drain);
+        if (drain > 0) {
+            _activityLatch = true;
+        }
+        pcnt_unit_clear_count(_pcntUnit);
+    }
 }
 
 const ActivitySample* TrafficMonitor::getSampleBuffer() const {

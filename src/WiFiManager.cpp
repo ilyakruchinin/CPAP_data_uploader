@@ -6,7 +6,9 @@
 #include <ESPmDNS.h>
 #include <esp_wifi.h>
 
-WiFiManager::WiFiManager() : connected(false), mdnsStarted(false) {}
+volatile uint8_t WiFiManager::_lastDisconnectReason = 0;
+
+WiFiManager::WiFiManager() : connected(false), mdnsStarted(false), _pendingTxPower(0), _hasPendingTxPower(false) {}
 
 void WiFiManager::setupEventHandlers() {
     WiFi.onEvent(onWiFiEvent);
@@ -37,6 +39,7 @@ void WiFiManager::onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
             
         case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
             uint8_t reason = info.wifi_sta_disconnected.reason;
+            _lastDisconnectReason = reason;
             LOG_WARNF("WiFi Event: Disconnected from AP (reason: %d)", reason);
             
             // Log human-readable disconnect reasons
@@ -128,6 +131,18 @@ void WiFiManager::onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
                 case WIFI_REASON_CONNECTION_FAIL:
                     LOG_WARN("Disconnect reason: Connection failed");
                     break;
+                case WIFI_REASON_AP_TSF_RESET:
+                    LOG_WARN("Disconnect reason: AP TSF reset");
+                    break;
+                case WIFI_REASON_ROAMING:
+                    LOG_WARN("Disconnect reason: Roaming");
+                    break;
+                case WIFI_REASON_ASSOC_COMEBACK_TIME_TOO_LONG:
+                    LOG_WARN("Disconnect reason: Association comeback time too long (PMF/802.11w)");
+                    break;
+                case WIFI_REASON_SA_QUERY_TIMEOUT:
+                    LOG_WARN("Disconnect reason: SA query timeout (PMF/802.11w)");
+                    break;
                 default:
                     LOG_WARNF("Disconnect reason: Unknown (%d)", reason);
                     break;
@@ -184,12 +199,50 @@ bool WiFiManager::connectStation(const String& ssid, const String& password) {
     LOG_DEBUG("WiFi protocol restricted to 802.11g/n (802.11b disabled)");
     
     WiFi.begin(ssid.c_str(), password.c_str());
+    
+    // Apply deferred TX power AFTER WiFi.begin() — WiFi.mode(WIFI_STA) is async
+    // and the STA isn't fully started until the STA_START event fires. begin()
+    // blocks until STA is active, so setTxPower() works reliably here.
+    // This caps TX power during the association/DHCP phase.
+    if (_hasPendingTxPower) {
+        WiFi.setTxPower((wifi_power_t)_pendingTxPower);
+        LOG_DEBUGF("WiFi TX power applied: %d (deferred from applyTxPowerEarly)", (int)_pendingTxPower);
+        _hasPendingTxPower = false;
+    }
 
+    _lastDisconnectReason = 0;
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
         delay(500);
         LOG_DEBUG(".");
         attempts++;
+    }
+
+    // ── PMF fallback: reason 208 (ASSOC_COMEBACK_TIME_TOO_LONG) ──
+    // ESP-IDF 5.x sets PMF (Protected Management Frames / 802.11w) capable=true
+    // by default. Some WiFi 6 / WPA3-transitional routers send an association
+    // comeback time that exceeds the ESP-IDF threshold, causing reason 208.
+    // This didn't exist in ESP-IDF 4.x. Retry with PMF disabled.
+    if (WiFi.status() != WL_CONNECTED &&
+        _lastDisconnectReason == WIFI_REASON_ASSOC_COMEBACK_TIME_TOO_LONG) {
+        LOG_WARN("PMF association comeback timeout (reason 208) — retrying with PMF disabled");
+        wifi_config_t wifi_conf;
+        if (esp_wifi_get_config(WIFI_IF_STA, &wifi_conf) == ESP_OK) {
+            wifi_conf.sta.pmf_cfg.capable = false;
+            wifi_conf.sta.pmf_cfg.required = false;
+            esp_wifi_set_config(WIFI_IF_STA, &wifi_conf);
+            esp_wifi_disconnect();
+            esp_wifi_connect();
+            attempts = 0;
+            while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+                delay(500);
+                LOG_DEBUG(".");
+                attempts++;
+            }
+            if (WiFi.status() == WL_CONNECTED) {
+                LOG_WARN("Connected after disabling PMF — router may not fully support 802.11w");
+            }
+        }
     }
 
     if (WiFi.status() == WL_CONNECTED) {
@@ -331,8 +384,11 @@ void WiFiManager::setMaxPowerSave() {
     }
 }
 void WiFiManager::applyTxPowerEarly(WifiTxPower txPower) {
-    // Pre-initialize WiFi STA mode and set TX power before connectStation()
-    // to prevent full-power spikes during the initial scan and association.
+    // Store the desired TX power for deferred application inside connectStation().
+    // We cannot call WiFi.setTxPower() here because WiFi.mode(WIFI_STA) hasn't
+    // been called yet (or hasn't fully started), which causes the warning:
+    //   "Neither AP or STA has been started"
+    // connectStation() applies it right after WiFi.mode(WIFI_STA).
     wifi_power_t espTxPower;
     switch (txPower) {
         case WifiTxPower::POWER_MAX:    espTxPower = WIFI_POWER_11dBm;       break; // PHY caps at 10 dBm
@@ -342,11 +398,9 @@ void WiFiManager::applyTxPowerEarly(WifiTxPower txPower) {
         case WifiTxPower::POWER_LOWEST: espTxPower = WIFI_POWER_MINUS_1dBm;  break;
         default:                        espTxPower = WIFI_POWER_5dBm;        break;
     }
-    // Pre-init WiFi so TX power can be set before begin()
-    WiFi.mode(WIFI_STA);
-    WiFi.setTxPower(espTxPower);
-    WiFi.disconnect(true);  // Disconnect but keep STA mode active
-    LOG_DEBUGF("WiFi TX power pre-set to %d (before association)", (int)espTxPower);
+    _pendingTxPower = (int8_t)espTxPower;
+    _hasPendingTxPower = true;
+    LOG_DEBUGF("WiFi TX power deferred: %d (will apply in connectStation)", (int)espTxPower);
 }
 
 void WiFiManager::applyPowerSettings(WifiTxPower txPower, WifiPowerSaving powerSaving) {

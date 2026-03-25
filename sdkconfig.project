@@ -1,0 +1,25 @@
+# sdkconfig.project — project-level ESP-IDF overrides
+#
+# This file is Layer 1 of a 3-tier workaround to reduce FATFS/WL sector sizes
+# from 4096 to 512 (saving ~18KB heap during SD mount). For full context, see
+# platformio.ini and docs/archive/56-POST-IMP-G31A.md.
+#
+# We use this external file referenced via "file://sdkconfig.project" in the
+# custom_sdkconfig block because PlatformIO's INI parser silently strips
+# "# CONFIG_X is not set" lines as comments, but the builder reads file:// raw.
+#
+# ── FATFS / Wear-Levelling Sector Size ──
+# Override the default 4096-byte sector to 512-byte.
+# This reduces contiguous heap consumed by FATFS.win[] and FIL.buf[]
+# during SD card mount: each buffer shrinks from 4096 → 512 bytes.
+# Without these overrides, SD_MMC.begin() drops max_alloc by ~18KB.
+#
+# IMPORTANT: Both the Kconfig boolean selectors (_4096/_512) and the
+# raw value (CONFIG_WL_SECTOR_SIZE) must be set. The base Arduino
+# sdkconfig has _4096=y; without explicitly unsetting it, the ESP-IDF
+# build system ignores the raw value override.
+# CONFIG_WL_SECTOR_SIZE_4096 is not set
+CONFIG_WL_SECTOR_SIZE_512=y
+CONFIG_WL_SECTOR_SIZE=512
+# CONFIG_FATFS_SECTOR_4096 is not set
+CONFIG_FATFS_SECTOR_512=y

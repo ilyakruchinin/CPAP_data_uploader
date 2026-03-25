@@ -86,6 +86,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 #reboot-overlay p{color:#a0c0b0;font-size:.84em;line-height:1.5}
 @keyframes rbPulse{0%,100%{border-color:#2f8f57}50%{border-color:#44ff44}}
 @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+@keyframes mtPulse{0%,100%{border-color:#cc3333}50%{border-color:#ff6666}}
 .log-spinner{display:inline-block;width:14px;height:14px;border:2px solid #2a475e;border-top-color:#66c0f4;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:6px}
 #mon-active-banner{display:none;background:#2a1a2a;border:1px solid #8b4dbb;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center;animation:monPulse 2.5s ease-in-out infinite}
 #mon-active-banner h3{color:#bb88ff;font-size:1em;margin-bottom:6px}
@@ -164,8 +165,9 @@ nav button:hover:not(.act){background:#3a5a7e}
 </svg>
 </div>
 <p class=sub id=sub>Connecting...</p>
-<div id=reboot-overlay><h3>&#8635; Device is unreachable or rebooting&hellip;</h3><p>If the device is rebooting, this is normal &mdash; it may reboot periodically by design to maintain stability and will be back online in a few seconds.<br>If it has been powered off or moved out of WiFi range, this page will reconnect automatically once the device is reachable again.</p></div>
+<div id=reboot-overlay><h3>&#8635; Connection lost &mdash; reconnecting&hellip;</h3><p>Trying to reconnect to the device now.<br>This can happen if your phone or browser paused this page in the background, if the device is temporarily busy, or if it is restarting or briefly unavailable.<br>If everything is normal, this page should recover automatically within a few seconds.</p></div>
 <div id=mon-active-banner><h3>&#128270; SD Access Monitoring is active</h3><p>All automatic uploads are <strong>paused</strong> while monitoring is running.<br>Go to the <strong>SD Access</strong> tab and click <strong>Stop</strong> to resume normal operation.</p></div>
+<div id=multitab-banner style="display:none;background:#3a1a1a;border:1px solid #cc3333;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center;animation:mtPulse 2.5s ease-in-out infinite"><h3 style="color:#ff6666;font-size:1em;margin-bottom:6px">&#9888; Multiple tabs/browsers detected</h3><p style="color:#c0a0a0;font-size:.84em;line-height:1.5">This device has very limited memory. Multiple connections cause <strong>heap fragmentation</strong>, network contention, and can trigger <strong>watchdog reboots</strong> during uploads.<br>Please <strong>close all other tabs/browsers</strong> connected to this device. This tab has throttled its polling to reduce impact.</p></div>
 <div id=brownout-banner style="display:none;background:#3a2a0a;border:1px solid #cc8800;border-radius:10px;padding:14px 18px;margin-bottom:14px;text-align:center"><h3 style="color:#ffaa00;font-size:1em;margin-bottom:6px">&#9888; Brownout Detection Disabled</h3><p style="color:#c0b090;font-size:.84em;line-height:1.5">BROWNOUT_DETECT is set to OFF in config.txt. The device will <strong>not</strong> reset on power drops &mdash; this may cause data corruption.</p></div>
 <nav>
 <button id=t-dash onclick="tab('dash')" class=act>Dashboard</button>
@@ -423,7 +425,44 @@ Recommended <strong style="color:#44ff44">INACTIVITY_SECONDS</strong>: <span id=
 
 <script>
 var cfg={},monPoll=null,logPoll=null,curTab='dash',monActive=false;
-var heapHistory=[],MAX_HEAP_SAMPLES=60,currentFsmState='',prevHelpHtml='';
+var heapHistory=[],MAX_HEAP_HISTORY_MS=120000,HEAP_GAP_THRESHOLD_MS=6500,currentFsmState='',prevHelpHtml='';
+var _mtInstanceId=('00000000'+Math.floor(Math.random()*0x100000000).toString(16)).slice(-8).toUpperCase();
+var _mtBirthMs=Date.now();
+function _mkTabId(){
+  try{
+    var k='cpap-tab-id',v=sessionStorage.getItem(k);
+    if(v&&/^[0-9a-fA-F]{4}$/.test(v))return v.toUpperCase();
+    v=('0000'+Math.floor(Math.random()*65536).toString(16)).slice(-4).toUpperCase();
+    sessionStorage.setItem(k,v);
+    return v;
+  }catch(e){
+    return ('0000'+Math.floor(Math.random()*65536).toString(16)).slice(-4).toUpperCase();
+  }
+}
+function _setTabId(v){
+  _mtTabId=v;
+  try{sessionStorage.setItem('cpap-tab-id',v);}catch(e){}
+}
+function _newTabIdExcept(oldId){
+  var next=oldId;
+  while(next===oldId)next=('0000'+Math.floor(Math.random()*65536).toString(16)).slice(-4).toUpperCase();
+  return next;
+}
+function _apiUrl(path){return path+(path.indexOf('?')>=0?'&':'?')+'tid='+encodeURIComponent(_mtTabId)+'&iid='+encodeURIComponent(_mtInstanceId);}
+function _apiFetch(path,opts){
+  opts=opts||{};
+  var headers=opts.headers||{};
+  headers['X-Tab-Id']=_mtTabId;
+  headers['X-Tab-Instance']=_mtInstanceId;
+  opts.headers=headers;
+  if(!opts.cache)opts.cache='no-store';
+  if(typeof AbortController!=='undefined'&&!opts.signal){
+    var ac=new AbortController();
+    opts.signal=ac.signal;
+    setTimeout(function(){ac.abort();},5000);
+  }
+  return fetch(_apiUrl(path),opts);
+}
 function tab(t){
   ['dash','logs','cfg','mon','mem','ota'].forEach(function(x){
     document.getElementById(x).classList.toggle('on',x===t);
@@ -432,7 +471,7 @@ function tab(t){
   curTab=t;
   if(t==='logs'){
     if(!backfillDone){
-      fetchBackfill();
+      _tryBackfill();
     }else{
       fetchLogs();
       if(!sseConnected){startSse();}
@@ -465,13 +504,23 @@ function badgeHtml(st){var s=st.toLowerCase(),c='bi';
 function set(id,html,inner){var el=document.getElementById(id);if(el){if(inner===false)el.innerHTML=html;else el.textContent=html;}}
 function seti(id,html){set(id,html,false);}
 
-var statusFailCount=0,rebootExpected=false;
+var statusFailCount=0,rebootExpected=false,lastStatusOkMs=0;
 function renderStatus(d){
+  lastStatusOkMs=Date.now();
   statusFailCount=0;
   document.getElementById('reboot-overlay').style.display='none';
   rebootExpected=false;
+  var _prevSt=currentFsmState;
   var _newSt=d.state||'';
   currentFsmState=_newSt;
+  // Auto-trigger deferred backfill when upload finishes
+  var _wasBusy=(_prevSt==='UPLOADING'||_prevSt==='ACQUIRING');
+  var _nowBusy=(_newSt==='UPLOADING'||_newSt==='ACQUIRING');
+  if(_wasBusy&&!_nowBusy&&_backfillDeferred&&curTab==='logs'){
+    _backfillDeferred=false;backfillDone=false;
+    clientLogBuf=[];lastSeenLine='';
+    _tryBackfill();
+  }
   seti('d-st',badgeHtml(currentFsmState||'?'));
   var ins=d.in_state_sec||0;set('d-ins',ins<60?ins+'s':Math.floor(ins/60)+'m '+ins%60+'s');
   var mode=(cfg.upload_mode||'—').toUpperCase();
@@ -572,47 +621,61 @@ function renderStatus(d){
   var ma=maV?Math.round(maV/1024)+' KB':'\u2014';
   set('d-fh',fh);set('d-ma',ma);
   set('hd-fh',fh);set('hd-ma',ma);
-  if(fhV){heapHistory.push({fh:fhV,ma:maV});if(heapHistory.length>MAX_HEAP_SAMPLES)heapHistory.shift();}
+  var now=Date.now(),cutoff=now-MAX_HEAP_HISTORY_MS;
+  if(fhV){heapHistory.push({fh:fhV,ma:maV,ts:now});while(heapHistory.length&&heapHistory[0].ts<cutoff)heapHistory.shift();}
   var c0=d.cpu0||0,c1=d.cpu1||0;
   set('hd-c0',c0+'%');set('hd-c1',c1+'%');
-  cpuHistory.push({c0:c0,c1:c1});if(cpuHistory.length>MAX_HEAP_SAMPLES)cpuHistory.shift();
+  cpuHistory.push({c0:c0,c1:c1,ts:now});while(cpuHistory.length&&cpuHistory[0].ts<cutoff)cpuHistory.shift();
   if(curTab==='mem'){updateHeapChart();updateCpuChart();}
   var bb=document.getElementById('brownout-banner');
   if(bb)bb.style.display=(cfg.brownout_detect_mode==='OFF')?'block':'none';
+  _mtSyncServerTabs(d.recent_tabs);
 }
 
 var statusTimer=null;
 function pollStatus(){
-  fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+  _apiFetch('/api/status').then(function(r){return r.json();}).then(function(d){
     renderStatus(d);
   }).catch(function(){
     statusFailCount++;
-    if(statusFailCount>=5||rebootExpected){
+    if(statusFailCount>=3||rebootExpected){
       document.getElementById('reboot-overlay').style.display='block';
-      seti('d-st','<span class="badge bc">REBOOTING</span>');
+      seti('d-st','<span class="badge bc">RECONNECTING</span>');
     } else {
       seti('d-st','<span class="badge bc">OFFLINE</span>');
     }
   });
 }
-function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,3000);}}
-document.addEventListener('visibilitychange',function(){if(!document.hidden){statusFailCount=0;}});
+function _statusPollMs(){return _mtDup?15000:3000;}
+function _restartStatusPoll(){if(statusTimer){clearInterval(statusTimer);statusTimer=setInterval(pollStatus,_statusPollMs());}}
+function startStatusPoll(){if(!statusTimer){pollStatus();statusTimer=setInterval(pollStatus,_statusPollMs());}}
+document.addEventListener('visibilitychange',function(){
+  if(!document.hidden){
+    statusFailCount=0;
+    document.getElementById('reboot-overlay').style.display='none';
+    pollStatus();
+    _restartStatusPoll();
+  }
+});
 
 var cpuHistory=[];
+function tsToX(ts,tMin,tMax,W){return tMin===tMax?W/2:((ts-tMin)/(tMax-tMin))*(W-2)+1;}
 function updateHeapChart(){
   var svg=document.getElementById('heap-svg');
   if(!svg||heapHistory.length<2)return;
-  var W=600,H=200,n=heapHistory.length;
+  var W=600,H=200,now=Date.now();
+  var tMin=now-MAX_HEAP_HISTORY_MS,tMax=now;
   var maxVal=0;
   heapHistory.forEach(function(s){if(s.fh>maxVal)maxVal=s.fh;});
   if(maxVal<65536)maxVal=65536;
   var ptsFh='',ptsMa='';
   heapHistory.forEach(function(s,i){
-    var x=((W-2)*i/(MAX_HEAP_SAMPLES-1)+1).toFixed(1);
+    var x=tsToX(s.ts,tMin,tMax,W).toFixed(1);
     var yFh=(H-(s.fh/maxVal)*(H-14)-6).toFixed(1);
     var yMa=(H-(s.ma/maxVal)*(H-14)-6).toFixed(1);
-    ptsFh+=(i===0?'M':'L')+x+' '+yFh;
-    ptsMa+=(i===0?'M':'L')+x+' '+yMa;
+    var gap=i>0&&(s.ts-heapHistory[i-1].ts)>HEAP_GAP_THRESHOLD_MS;
+    ptsFh+=(i===0||gap?'M':'L')+x+' '+yFh;
+    ptsMa+=(i===0||gap?'M':'L')+x+' '+yMa;
   });
   var grid='';
   [0.25,0.5,0.75].forEach(function(f){
@@ -634,14 +697,16 @@ function updateHeapChart(){
 function updateCpuChart(){
   var svg=document.getElementById('cpu-svg');
   if(!svg||cpuHistory.length<2)return;
-  var W=600,H=150,n=cpuHistory.length;
+  var W=600,H=150,now=Date.now();
+  var tMin=now-MAX_HEAP_HISTORY_MS,tMax=now;
   var ptsC0='',ptsC1='';
   cpuHistory.forEach(function(s,i){
-    var x=((W-2)*i/(MAX_HEAP_SAMPLES-1)+1).toFixed(1);
+    var x=tsToX(s.ts,tMin,tMax,W).toFixed(1);
     var y0=(H-(s.c0/100)*(H-14)-6).toFixed(1);
     var y1=(H-(s.c1/100)*(H-14)-6).toFixed(1);
-    ptsC0+=(i===0?'M':'L')+x+' '+y0;
-    ptsC1+=(i===0?'M':'L')+x+' '+y1;
+    var gap=i>0&&(s.ts-cpuHistory[i-1].ts)>HEAP_GAP_THRESHOLD_MS;
+    ptsC0+=(i===0||gap?'M':'L')+x+' '+y0;
+    ptsC1+=(i===0||gap?'M':'L')+x+' '+y1;
   });
   var grid='';
   [25,50,75].forEach(function(pct){
@@ -793,17 +858,12 @@ function _appendLogs(text){
       while(startFrom<lines.length&&!lines[startFrom].trim())startFrom++;
       newLines=lines.slice(startFrom);
     } else {
-      // Genuinely new reboot — insert separator.
-      // Search backwards from boot banner for the === BOOT separator
-      // (written by enableLogSaving on boot) to capture pre-reboot context
-      // like "Rebooting for clean state reset..." that's only in NAND syslog.
+      // Genuinely new reboot detected. Signal newBootDetected so fetchLogs()
+      // clears the buffer and triggers a full /api/logs/full backfill.
+      // The server provides correctly-ordered multi-boot history including
+      // pre-reboot context from NAND syslog — no client-side stitching needed.
       newBootDetected=true;
-      var ctxStart=bootIdx;
-      for(var j=bootIdx-1;j>=Math.max(0,bootIdx-60);j--){
-        if(lines[j].indexOf('=== BOOT ')>=0){ctxStart=Math.max(0,j-10);break;}
-      }
-      clientLogBuf.push('','\u2500\u2500\u2500 DEVICE REBOOTED \u2500\u2500\u2500','');
-      newLines=lines.slice(ctxStart);
+      return;
     }
   } else {
     // No boot banner in response. Two sub-cases:
@@ -844,9 +904,35 @@ function _renderLogBuf(){
   if(logAtBottom)b.scrollTop=b.scrollHeight;
 }
 var sseSource=null,sseConnected=false,backfillDone=false,backfillRetries=0,sseReconnAttempts=0;
+var _backfillDeferred=false; // true when backfill was skipped due to upload/multi-tab
+function _isUploadBusy(){return currentFsmState==='UPLOADING'||currentFsmState==='ACQUIRING';}
+// Tier 2+3 gating: skip heavy /api/logs/full during upload or multi-tab contention
+function _tryBackfill(){
+  if(_mtThrottled){
+    // Tier 3: multi-tab detected — refuse backfill entirely
+    set('log-st','Close other tabs to load full log history');
+    _backfillDeferred=true;
+    backfillDone=true; // mark done so tab() falls through to polling/SSE
+    fetchLogs();
+    startLogPoll();
+    return;
+  }
+  if(_isUploadBusy()){
+    // Tier 2: upload active — skip NAND backfill, use circular buffer + SSE
+    set('log-st','Upload active — showing live logs only');
+    _backfillDeferred=true;
+    backfillDone=true;
+    fetchLogs();
+    startSse();
+    return;
+  }
+  _backfillDeferred=false;
+  fetchBackfill();
+}
 function fetchLogs(){
   if(curTab!=='logs')return;
-  fetch('/api/logs',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+  if(_mtThrottled&&document.hidden)return;
+  _apiFetch('/api/logs/poll').then(function(r){return r.text();}).then(function(t){
     _appendLogs(t);
     _renderLogBuf();
     // If polling detected a new boot (boot banner found, or lastSeenLine vanished
@@ -857,15 +943,15 @@ function fetchLogs(){
       stopLogPoll();
       // Clear buffer so backfill rebuilds from scratch with full NAND context
       clientLogBuf=[];lastSeenLine='';
-      fetchBackfill();
+      _tryBackfill();
       return;
     }
     set('log-st',(sseConnected?'SSE Live':'Polling')+' \u2022 '+clientLogBuf.length+' lines');
   }).catch(function(){set('log-st','Disconnected');});
 }
 function fetchBackfill(){
-  seti('log-st','<span class="log-spinner"></span>Loading history\u2026');
-  fetch('/api/logs/full',{cache:'no-store'}).then(function(r){
+  seti('log-st','<span class="log-spinner"></span>Loading history…');
+  _apiFetch('/api/logs/recent').then(function(r){
     // Use streaming to show progressive loading feedback
     var reader=r.body?r.body.getReader():null;
     if(!reader) return r.text();
@@ -877,7 +963,7 @@ function fetchBackfill(){
         chunks.push(chunk);
         totalBytes+=result.value.length;
         var lines=0;for(var i=0;i<chunk.length;i++){if(chunk.charCodeAt(i)===10)lines++;}
-        seti('log-st','<span class="log-spinner"></span>Loading\u2026 '+(totalBytes/1024).toFixed(0)+' KB received');
+        seti('log-st','<span class="log-spinner"></span>Loading… '+(totalBytes/1024).toFixed(0)+' KB received');
         return pump();
       });
     }
@@ -887,14 +973,14 @@ function fetchBackfill(){
     _renderLogBuf();
     backfillDone=true;
     backfillRetries=0;
-    set('log-st','Loaded \u2022 '+clientLogBuf.length+' lines');
+    set('log-st','Loaded • '+clientLogBuf.length+' lines');
     startSse();
   }).catch(function(){
     // Device might still be rebooting — retry with exponential backoff
     backfillRetries++;
     if(backfillRetries<6){
       var delay=Math.min(3000*backfillRetries,15000);
-      set('log-st','Device offline \u2014 retry '+backfillRetries+'/5 in '+(delay/1000)+'s\u2026');
+      set('log-st','Device offline — retry '+backfillRetries+'/5 in '+(delay/1000)+'s…');
       setTimeout(function(){if(curTab==='logs'){fetchBackfill();}},delay);
     } else {
       backfillDone=true;
@@ -905,13 +991,14 @@ function fetchBackfill(){
 }
 function startSse(){
   if(sseSource)return;
+  if(_mtThrottled){startLogPoll();return;}
   if(typeof EventSource==='undefined'){startLogPoll();return;}
-  sseSource=new EventSource('/api/logs/stream');
+  sseSource=new EventSource(_apiUrl('/api/logs/stream'));
   sseSource.onopen=function(){
     sseConnected=true;
     sseReconnAttempts=0;
     stopLogPoll();
-    set('log-st','SSE Live \u2022 '+clientLogBuf.length+' lines');
+    set('log-st','SSE Live • '+clientLogBuf.length+' lines');
   };
   sseSource.onmessage=function(e){
     if(!e.data)return;
@@ -925,11 +1012,11 @@ function startSse(){
     sseReconnAttempts++;
     if(sseReconnAttempts<=3){
       var delay=Math.min(2000*sseReconnAttempts,6000);
-      set('log-st','SSE lost \u2014 retry '+sseReconnAttempts+'/3 in '+(delay/1000)+'s\u2026');
+      set('log-st','SSE lost — retry '+sseReconnAttempts+'/3 in '+(delay/1000)+'s…');
       setTimeout(function(){if(curTab==='logs'){startSse();}},delay);
     } else {
       sseReconnAttempts=0;
-      set('log-st','SSE unavailable \u2014 falling back to polling');
+      set('log-st','SSE unavailable — falling back to polling');
       startLogPoll();
     }
   };
@@ -940,7 +1027,7 @@ function stopSse(){
 function clearLogBuf(){clientLogBuf=[];lastSeenLine='';document.getElementById('log-box').textContent='';}
 function downloadSavedLogs(){
   var a=document.createElement('a');
-  a.href='/api/logs/saved';
+  a.href=_apiUrl('/api/logs/download-all');
   a.download='cpap_logs.txt';
   document.body.appendChild(a);a.click();document.body.removeChild(a);
 }
@@ -958,7 +1045,8 @@ function copyLogBuf(){
 document.getElementById('log-box').addEventListener('scroll',function(){
   var b=this;logAtBottom=(b.scrollHeight-b.scrollTop-b.clientHeight)<60;
 });
-function startLogPoll(){if(!logPoll){fetchLogs();logPoll=setInterval(fetchLogs,4000);}}
+function _logPollMs(){return _mtDup?15000:3000;}
+function startLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}if(curTab!=='logs')return;fetchLogs();logPoll=setInterval(fetchLogs,_logPollMs());}
 function stopLogPoll(){if(logPoll){clearInterval(logPoll);logPoll=null;}}
 
 function startMon(){
@@ -1145,9 +1233,132 @@ function handleOtaResult(d,sid){
   otaBusy=false;
   if(d.success){setMsg(sid,'ok','Success! '+d.message);var t=30;var iv=setInterval(function(){t--;setMsg(sid,'ok','Redirecting in '+t+'s...');if(t<=0){clearInterval(iv);location.href='/';}},1000);}
   else setMsg(sid,'er','Failed: '+d.message);
-}
+ }
+ 
+ // ── Multi-tab/browser/device detection ──
+ var _mtDup=false,_mtTabId=_mkTabId();
+ var _mtChan=null,_mtThrottled=false,_mtPeers={},_mtServerDup=false;
+ function _mtAddPeer(msg){
+   if(!msg||!msg.iid||msg.iid===_mtInstanceId)return;
+   if((msg.tid||'').toUpperCase()===_mtTabId)return;
+   _mtPeers[msg.iid]={ts:Date.now(),tid:(msg.tid||'').toUpperCase(),born:msg.born||0};
+ }
+ function _mtDropPeer(iid){if(iid&&_mtPeers[iid])delete _mtPeers[iid];}
+ function _mtHasPeer(){
+   var now=Date.now();
+   for(var id in _mtPeers){if((now-_mtPeers[id].ts)>20000)delete _mtPeers[id];}
+   for(var k in _mtPeers){return true;}
+   return false;
+ }
+ function _mtBroadcast(type,extra){
+   if(!_mtChan)return;
+   var msg={type:type,iid:_mtInstanceId,tid:_mtTabId,born:_mtBirthMs};
+   if(extra)for(var k in extra)msg[k]=extra[k];
+   _mtChan.postMessage(msg);
+ }
+ function _mtMaybeRekey(msg){
+   if(!msg||!msg.iid||msg.iid===_mtInstanceId)return false;
+   var peerTid=(msg.tid||'').toUpperCase();
+   if(!peerTid||peerTid!==_mtTabId)return false;
+   var peerBorn=Number(msg.born)||0;
+   var shouldRekey=(peerBorn>0&&(_mtBirthMs>peerBorn||(_mtBirthMs===peerBorn&&_mtInstanceId>msg.iid)));
+   if(!shouldRekey)return false;
+   var oldTid=_mtTabId;
+   _setTabId(_newTabIdExcept(oldTid));
+   _mtServerDup=false;
+   if(curTab==='logs'){
+     stopSse();
+     stopLogPoll();
+     if(_mtThrottled)startLogPoll();
+     else if(backfillDone)startSse();
+   }
+   _mtBroadcast('rekey',{from:oldTid});
+   return true;
+ }
+ function _mtApplyDupState(){_mtSetDup(_mtHasPeer()||_mtServerDup);}
+ function _mtSyncServerTabs(raw){
+   _mtServerDup=false;
+   if(typeof raw==='string'&&raw){
+     raw.split(',').forEach(function(entry){
+       var parts=entry.split(':');
+       if(parts.length<2)return;
+       var id=(parts[0]||'').toUpperCase();
+       var age=parseInt(parts[1],10);
+       if(id&&id!==_mtTabId&&!isNaN(age)&&age<=20)_mtServerDup=true;
+     });
+   }
+   _mtApplyDupState();
+ }
+ function _mtSetDup(v){
+   if(_mtDup===v)return;_mtDup=v;
+   var b=document.getElementById('multitab-banner');if(b)b.style.display=v?'block':'none';
+   if(v&&!_mtThrottled){
+     _mtThrottled=true;
+     _restartStatusPoll();
+     stopSse();
+     if(curTab==='logs')startLogPoll();
+     toast('Multiple tabs/browsers detected — polling throttled','warn');
+   } else if(!v&&_mtThrottled){
+     _mtThrottled=false;
+     _restartStatusPoll();
+     if(curTab==='logs'){
+       stopLogPoll();
+       if(_backfillDeferred){
+         _backfillDeferred=false;backfillDone=false;
+         clientLogBuf=[];lastSeenLine='';
+         _tryBackfill();
+        } else {
+          startSse();
+        }
+      }
+      toast('Other tabs/browsers closed — resuming normal operation','ok');
+    }
+  }
+  // Layer 1: BroadcastChannel — same-browser, cross-tab
+  var _mtBcPongTimer=null;
+  if(typeof BroadcastChannel!=='undefined'){
+    _mtChan=new BroadcastChannel('cpap-uploader-tab');
+    _mtChan.onmessage=function(e){
+      if(!e.data)return;
+      if(e.data.type==='ping'&&e.data.iid!==_mtInstanceId){
+        _mtAddPeer(e.data);
+        _mtMaybeRekey(e.data);
+        _mtApplyDupState();
+        _mtBroadcast('pong');
+      }
+      if(e.data.type==='pong'&&e.data.iid!==_mtInstanceId){
+        _mtAddPeer(e.data);
+        _mtMaybeRekey(e.data);
+        _mtApplyDupState();
+        if(_mtBcPongTimer){clearTimeout(_mtBcPongTimer);_mtBcPongTimer=null;}
+      }
+      if(e.data.type==='rekey'&&e.data.iid!==_mtInstanceId){
+        _mtAddPeer(e.data);
+        _mtApplyDupState();
+      }
+      if(e.data.type==='close'&&e.data.iid!==_mtInstanceId){
+        _mtDropPeer(e.data.iid);
+        _mtBroadcast('ping');
+        if(_mtBcPongTimer)clearTimeout(_mtBcPongTimer);
+        _mtBcPongTimer=setTimeout(function(){
+          _mtBcPongTimer=null;
+          _mtApplyDupState();
+        },1500);
+      }
+    };
+    _mtBroadcast('ping');
+    window.addEventListener('beforeunload',function(){
+      if(_mtChan)try{_mtBroadcast('close');}catch(e){}
+    });
+    setInterval(function(){
+      if(_mtChan)_mtBroadcast('ping');
+      _mtApplyDupState();
+    },5000);
+  }
 
-loadCfg();
-startStatusPoll();
+ setTimeout(function(){
+   loadCfg();
+   startStatusPoll();
+ },150);
 </script>
 </body></html>)HTMLEOF";

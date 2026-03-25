@@ -5,13 +5,11 @@ The File Uploader (`FileUploader.cpp/.h`) is the central orchestrator that coord
 
 ## Core Architecture
 
-### Single-Backend Session Strategy
-Each upload session runs **exactly one backend** (SMB or Cloud), selected by cycling:
-1. **Backend selection** — at `begin()`, read `.backend_summary.smb` / `.backend_summary.cloud` and pick the backend with the **oldest `sessionStartTs`** (never-run backends have ts=0, so they go first)
-2. **Session start** — write a placeholder summary entry with the current timestamp (advances the cycling pointer even if the session crashes)
-3. **Upload pass** — run only the selected backend
-4. **Session end** — overwrite the summary with full stats (done/total/empty)
-5. **Soft reboot** — FSM always reboots after releasing the SD card, restoring heap
+### Dual-Backend Phased Session Strategy
+Each upload session runs **both backends sequentially** in a single SD card mount:
+1. **Phase 1: CLOUD** — TLS pre-warmed by `uploadTaskFunction` before SD mount (cleanest heap); falls back to on-demand connect if pre-warm failed. OAuth + import creation + folder uploads + finalize.
+2. **Phase 2: SMB** — TLS torn down after cloud phase; clean lwIP sockets and more heap for libsmb2. Mandatory files + DATALOG folder uploads.
+3. **Reboot** — FSM reboots after releasing the SD card to restore heap (unless `MINIMIZE_REBOOTS` or `NOTHING_TO_DO`)
 
 ### Pre-flight Scans
 Before writing the session-start timestamp (and before any network activity), performs SD-only scans across **all configured backends**. Uses a **dedicated `preflightFolderHasWork()`** instead of `scanDatalogFolders()` to avoid several critical false-positive conditions that cause endless reboot loops:
@@ -33,11 +31,13 @@ preflightFolderHasWork() rules (evaluated per folder):
 
 ```cpp
 if (!smbWork && !cloudWork) {
-    return UploadResult::NOTHING_TO_DO;  // → FSM enters COOLDOWN, no reboot
+    return UploadResult::NOTHING_TO_DO;  // → FSM applies Early Suppression & enters COOLDOWN, no reboot
 }
 ```
 - Returns `UploadResult::NOTHING_TO_DO` when every backend is fully synced (or only out-of-window old work remains)
-- The session-start summary is NOT written in this case — cycling pointer does not advance
+- Returns `UploadResult::COMPLETE` when an upload successfully exhausts all pending folders
+- The FSM translates both results into `g_noWorkSuppressed = true`, applying "Early Suppression" to halt further SD card probing until new CPAP activity occurs or the scheduled time window opens
+- The session-start summary is NOT written for NOTHING_TO_DO — cycling pointer does not advance
 - FSM responds by entering `COOLDOWN` directly without an `esp_restart()`, preventing endless reboot cycles
 
 ## Key Features
@@ -67,10 +67,13 @@ if (!smbWork && !cloudWork) {
 - **Checksum tracking**: For mandatory/SETTINGS files
 
 ### Memory Optimization
-- **Single backend per session**: No concurrent SMB+TLS heap pressure
+- **Sequential backends**: CLOUD then SMB — TLS is released before libsmb2 starts, preventing concurrent socket/heap pressure
+- **FATFS 512-Byte Sectors**: A 3-tiered workaround (in `platformio.ini` and `sdkconfig.project`) forces `CONFIG_WL_SECTOR_SIZE=512`. This shrinks the `FATFS` struct, preventing an 18KB contiguous heap drop during SD mount.
+- **TLS pre-warm before SD mount**: mbedTLS gets first pick of unfragmented heap (~36KB contiguous). See `docs/specs/tls-prewarm-pcnt-recheck.md`
+- **Safety TLS cleanup**: Before SMB phase, unconditional `resetConnection()` ensures pre-warmed-but-unused TLS doesn't conflict with libsmb2 (errno:9)
 - **Soft reboot between sessions**: Restores full contiguous heap via `esp_restart()` (fast-boot path skips delays)
-- **Buffer management**: Dynamic SMB buffer sizing based on heap
-- **TLS reuse**: Persistent connections for cloud operations
+- **Buffer management**: Dynamic SMB buffer sizing (8KB, 4KB, 2KB, 1KB) based on the highly-stable `ma=36852` safe fragmentation floor.
+- **TLS reuse**: Persistent connections for cloud operations within a phase
 
 ### Mark-Complete Strategy
 - **Recent folders**: Always marked complete (per-file size entries track changed/new files for next rescan)
@@ -91,27 +94,28 @@ bool begin(fs::FS &sd) {
 }
 ```
 
-### 2. Upload Execution
+### 2. Upload Execution (called by uploadTaskFunction after TLS pre-warm + PCNT re-check + SD mount)
 ```cpp
-UploadResult uploadWithExclusiveAccess(fs::FS &sd, DataFilter filter) {
+UploadResult runFullSession(SDCardManager* sdManager, int maxMinutes, DataFilter filter) {
     // Pre-flight: check ALL backends (SD-only, no network)
-    if (!anyBackendHasWork) return UploadResult::NOTHING_TO_DO;
+    if (!smbWork && !cloudWork) return UploadResult::NOTHING_TO_DO;
     
-    // Write session-start summary (advances cycling pointer)
-    writeBackendSummaryStart(sd, activeBackend, sessionTs);
-    
-    // Run ONLY the active backend (SMB or CLOUD, not both)
-    if (activeBackend == SMB) {
-        uploadMandatoryFilesSmb(...);
-        for (folder : folders) uploadDatalogFolderSmb(...);
-    } else if (activeBackend == CLOUD) {
-        sleephqUploader->begin();  // OAuth + team + import
-        for (folder : folders) uploadDatalogFolderCloud(...);
+    // Phase 1: CLOUD (TLS may already be connected via pre-warm)
+    if (cloudWork) {
+        sleephqUploader->begin();  // OAuth + team + import (uses pre-warmed TLS)
+        for (folder : freshFolders + oldFolders) uploadDatalogFolderCloud(...);
         finalizeCloudImport();
+        sleephqUploader->resetConnection();  // Release TLS for SMB
     }
     
-    // Write full summary (done/total/empty)
-    writeBackendSummaryFull(...);
+    // Safety: release any pre-warmed TLS that wasn't used (no cloud work)
+    if (smbWork && sleephqUploader->isConnected()) resetConnection();
+    
+    // Phase 2: SMB (clean sockets, more heap for libsmb2)
+    if (smbWork) {
+        uploadMandatoryFilesSmb(...);
+        for (folder : freshFolders + oldFolders) uploadDatalogFolderSmb(...);
+    }
     return UploadResult::COMPLETE;
 }
 ```
@@ -165,7 +169,7 @@ UploadResult uploadWithExclusiveAccess(fs::FS &sd, DataFilter filter) {
 - **Connection reuse**: Persistent sessions where possible
 
 ## Integration Points
-- **UploadFSM**: Main state machine calls uploadWithExclusiveAccess
+- **UploadFSM**: Main state machine spawns uploadTaskFunction which calls runFullSession
 - **SDCardManager**: Provides SD access control
 - **Config**: Supplies all backend and timing parameters
 - **WebStatus**: Real-time progress reporting

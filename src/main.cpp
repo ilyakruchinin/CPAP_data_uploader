@@ -1,13 +1,17 @@
 #include <Arduino.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
+#if defined(CONFIG_BT_ENABLED) && CONFIG_BT_ENABLED
 #include <esp_bt.h>
+#endif
 #include <esp_pm.h>
 #include <esp_sleep.h>
 #include <driver/gpio.h>
 #include <driver/rtc_io.h>
 #include <soc/rtc_cntl_reg.h>
+#include <esp32/rom/rtc.h>
 #include <esp_freertos_hooks.h>
+#include <esp_partition.h>
 #include <Preferences.h>
 #include <LittleFS.h>
 
@@ -21,6 +25,7 @@
 
 #include "TrafficMonitor.h"
 #include "UploadFSM.h"
+#include "TlsArena.h"
 #include <ESPmDNS.h>
 
 // True when esp_restart() was the reset cause (ESP_RST_SW).
@@ -77,6 +82,13 @@ unsigned long cooldownStartedAt = 0;
 bool uploadCycleHadTimeout = false;
 bool g_nothingToUpload = false;  // Set when pre-flight finds no work — skip reboot, go to cooldown
 
+// ── No-work suppression ──
+// When the last upload cycle found NOTHING_TO_DO, suppress further attempts
+// until new PCNT bus activity is detected (CPAP wrote new data to SD card).
+// This prevents pointless SD mount + scan cycles every 2 minutes when the
+// CPAP hasn't produced any new data — a significant power savings.
+bool g_noWorkSuppressed = false;
+
 // Monitoring mode flags
 bool monitoringRequested = false;
 bool stopMonitoringRequested = false;
@@ -91,6 +103,12 @@ volatile bool uploadTaskComplete = false;
 volatile UploadResult uploadTaskResult = UploadResult::ERROR;
 TaskHandle_t uploadTaskHandle = nullptr;
 
+// ── Static task stack: allocated in .bss, never touches the dynamic heap ──
+// This eliminates the 12KB heap allocation that was fragmenting the largest
+// contiguous block (ma dropping from ~45KB to ~36KB, causing SD mount failures).
+static StackType_t uploadTaskStack[12288 / sizeof(StackType_t)];
+static StaticTask_t uploadTaskTCB;
+
 // Software watchdog: upload task updates this heartbeat; main loop kills task if stale
 volatile unsigned long g_uploadHeartbeat = 0;
 const unsigned long UPLOAD_WATCHDOG_TIMEOUT_MS = 120000;  // 2 minutes
@@ -104,8 +122,8 @@ esp_pm_lock_handle_t g_pmLock = nullptr;
 // The diagnostics endpoint samples these counters to compute load %.
 volatile uint32_t g_idleCount0 = 0, g_idleCount1 = 0;
 uint32_t g_cpuLoad0 = 0, g_cpuLoad1 = 0;  // 0-100 percent, updated every 2s
-static bool _idleHook0() { g_idleCount0++; return true; }
-static bool _idleHook1() { g_idleCount1++; return true; }
+static bool _idleHook0() { g_idleCount0 = g_idleCount0 + 1; return true; }
+static bool _idleHook1() { g_idleCount1 = g_idleCount1 + 1; return true; }
 
 // ── Reboot reason helper ──
 // Stores a human-readable reason in NVS before esp_restart() so the next
@@ -122,6 +140,7 @@ struct UploadTaskParams {
     SDCardManager* sdManager;
     int maxMinutes;
     DataFilter filter;
+    bool forceTriggered;  // true when upload was manually triggered via web UI
 };
 
 // ============================================================================
@@ -147,6 +166,11 @@ extern volatile bool g_triggerUploadFlag;
 extern volatile bool g_forceRecentOnlyFlag;
 extern volatile bool g_resetStateFlag;
 
+// Latched copy of g_triggerUploadFlag — set when the FSM transitions to
+// ACQUIRING due to a web-UI trigger, before g_triggerUploadFlag is cleared.
+// Read once in handleUploading() to propagate into UploadTaskParams.
+static bool g_uploadWasForceTriggered = false;
+
 // Monitoring trigger flags (defined in WebServer.cpp)
 extern volatile bool g_monitorActivityFlag;
 extern volatile bool g_stopMonitorFlag;
@@ -159,20 +183,30 @@ extern volatile bool g_abortUploadFlag;
 void transitionTo(UploadState newState) {
     LOGF("[FSM] %s -> %s", getStateName(currentState), getStateName(newState));
     
-    // ── POWER: Manage PM lock for auto light-sleep ──
+    // ── POWER: Manage PM lock + PCNT for auto light-sleep ──
     // Hold the lock in active states (CPU must stay awake for PCNT, SD I/O, network).
-    // Release in IDLE and COOLDOWN so auto light-sleep can engage between DTIM intervals.
-    if (g_pmLock) {
-        bool newStateIsLowPower = (newState == UploadState::IDLE || newState == UploadState::COOLDOWN);
-        bool oldStateIsLowPower = (currentState == UploadState::IDLE || currentState == UploadState::COOLDOWN);
-        
-        if (newStateIsLowPower && !oldStateIsLowPower) {
+    // Release in IDLE so auto light-sleep can engage between DTIM intervals.
+    // Also suspend/resume the PCNT unit — its ESP_PM_APB_FREQ_MAX lock blocks light-sleep.
+    // NOTE: COOLDOWN is no longer treated as a low-power state to prevent the PCNT
+    // from missing CPAP activity while the FSM is waiting out the cooldown timer.
+    bool newStateIsLowPower = (newState == UploadState::IDLE);
+    bool oldStateIsLowPower = (currentState == UploadState::IDLE);
+    
+    if (newStateIsLowPower && !oldStateIsLowPower) {
+        trafficMonitor.suspend();
+        if (g_pmLock) {
             esp_pm_lock_release(g_pmLock);
-            LOG_DEBUG("[POWER] PM lock released — light-sleep enabled");
-        } else if (!newStateIsLowPower && oldStateIsLowPower) {
-            esp_pm_lock_acquire(g_pmLock);
-            LOG_DEBUG("[POWER] PM lock acquired — light-sleep inhibited");
         }
+        LOG_DEBUG("[POWER] Low-power state: PM lock released, PCNT suspended — light-sleep enabled");
+        #if CORE_DEBUG_LEVEL >= 3
+        esp_pm_dump_locks(stdout);
+        #endif
+    } else if (!newStateIsLowPower && oldStateIsLowPower) {
+        if (g_pmLock) {
+            esp_pm_lock_acquire(g_pmLock);
+        }
+        trafficMonitor.resume();
+        LOG_DEBUG("[POWER] Active state: PM lock acquired, PCNT resumed — light-sleep inhibited");
     }
     
     currentState = newState;
@@ -182,6 +216,62 @@ void transitionTo(UploadState newState) {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/**
+ * Extract panic details from the coredump partition after a WDT/panic reset.
+ * Scans for the ESP_PANIC_DETAILS ELF note in the raw coredump data and
+ * returns the human-readable panic reason (e.g. "Task watchdog got triggered.
+ * The following tasks/users did not reset the watchdog in time: - upload (CPU 0)").
+ * Returns empty string if no coredump or no panic details found.
+ */
+static String extractPanicDetailsFromCoredump() {
+    const esp_partition_t* part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x03, "coredump");
+    if (!part) return "";
+
+    // Quick check: erased flash is all 0xFF
+    uint8_t magic[4];
+    if (esp_partition_read(part, 0, magic, 4) != ESP_OK) return "";
+    if (magic[0] == 0xFF && magic[1] == 0xFF) return "";  // Empty/erased
+
+    // Scan for "ESP_PANIC_DETAILS" note name in the raw coredump ELF
+    static const char MARKER[] = "ESP_PANIC_DETAILS";
+    const size_t MLEN = sizeof(MARKER) - 1;  // 17 chars
+    const size_t CHUNK = 512;
+    uint8_t buf[CHUNK + 32];  // overlap for cross-chunk boundary matches
+
+    size_t limit = (part->size < 65536) ? part->size : 65536;
+    for (size_t off = 0; off < limit; off += CHUNK) {
+        size_t readSz = CHUNK + 32;
+        if (off + readSz > limit) readSz = limit - off;
+        if (readSz < MLEN) break;
+        if (esp_partition_read(part, off, buf, readSz) != ESP_OK) break;
+
+        for (size_t i = 0; i + MLEN <= readSz; i++) {
+            if (memcmp(buf + i, MARKER, MLEN) != 0) continue;
+
+            // Found marker. ELF NOTE layout:
+            //   namesz(4) + descsz(4) + type(4) + name(aligned to 4) + desc
+            // The header starts 12 bytes before the name.
+            size_t absPos = off + i;
+            if (absPos < 12) continue;
+
+            uint32_t descsz;
+            if (esp_partition_read(part, absPos - 8, &descsz, 4) != ESP_OK) continue;
+            if (descsz == 0 || descsz > 256) continue;
+
+            // "ESP_PANIC_DETAILS\0" = 18 bytes → aligned to 20
+            size_t descAbsOff = absPos + ((MLEN + 1 + 3) & ~3);
+
+            char text[257];
+            size_t toRead = (descsz < sizeof(text) - 1) ? descsz : sizeof(text) - 1;
+            if (esp_partition_read(part, descAbsOff, text, toRead) != ESP_OK) continue;
+            text[toRead] = '\0';
+            return String(text);
+        }
+    }
+    return "";
+}
 
 /**
  * Convert ESP32 reset reason to human-readable string
@@ -227,18 +317,25 @@ void setup() {
     setCpuFrequencyMhz(80);
     
     // ── POWER: Release Bluetooth memory ──
-    // Firmware is WiFi-only. Release BT controller memory (~28 KB DRAM).
-    // Note: CONFIG_BT_ENABLED=n in sdkconfig does NOT strip BT from the Arduino
-    // framework's precompiled libraries. This runtime call is our only effective
-    // mechanism — it frees the BTDM controller's reserved DRAM regions.
+    // Firmware is WiFi-only. With pioarduino (source-compiled), CONFIG_BT_ENABLED=n
+    // strips BT at compile time — no runtime release needed and esp_bt.h is absent.
+    // With the old precompiled framework, runtime release was the only option.
     uint32_t btHeapBefore = ESP.getFreeHeap();
     uint32_t btMaxAllocBefore = ESP.getMaxAllocHeap();
+#if defined(CONFIG_BT_ENABLED) && CONFIG_BT_ENABLED
     esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+#endif
     uint32_t btHeapAfter = ESP.getFreeHeap();
     uint32_t btMaxAllocAfter = ESP.getMaxAllocHeap();
     
     // Initialize serial port
     Serial.begin(115200);
+    
+    // ── Install TLS arena allocator before any TLS/WiFi activity ──
+    // This must happen before WiFi.begin() or any mbedTLS call.
+    // Routes large mbedTLS buffer allocations to a static arena in .bss,
+    // preventing TLS from fragmenting the general heap.
+    tlsArenaInit();
     
     // CRITICAL: Immediately release SD card control to CPAP machine
     // This must happen before any delays to prevent CPAP machine errors
@@ -270,6 +367,44 @@ void setup() {
     esp_reset_reason_t resetReason = esp_reset_reason();
     LOG_INFOF("Reset reason: %s", getResetReasonString(resetReason));
     
+    // ── 2C: Raw per-core reset reasons for finer-grained diagnostics ──
+    // rtc_get_reset_reason() gives the low-level RTC reset cause per CPU core,
+    // which is more granular than esp_reset_reason() (e.g. distinguishes
+    // POWERON_RESET=1 vs RTCWDT_BROWN_OUT_RESET=15 vs SW_CPU_RESET=12).
+    {
+        int rawCore0 = (int)rtc_get_reset_reason(0);
+        int rawCore1 = (int)rtc_get_reset_reason(1);
+        LOG_INFOF("Reset reason (raw): Core0=%d Core1=%d", rawCore0, rawCore1);
+    }
+
+    // ── 2B: NVS boot counter + consecutive power-on reset detection ──
+    // Tracks total boots and consecutive power-on resets (ESP_RST_POWERON).
+    // A high consecutive count indicates external power cycling (e.g. CPAP
+    // periodically cutting SD slot VCC during therapy).  Any non-POWERON
+    // reset (software reboot, watchdog, brownout) breaks the chain.
+    {
+        Preferences bootStats;
+        bootStats.begin("boot_stats", false);
+        uint32_t totalBoots = bootStats.getUInt("total", 0) + 1;
+        bootStats.putUInt("total", totalBoots);
+
+        uint16_t consecutivePOR = bootStats.getUShort("consec_por", 0);
+        if (resetReason == ESP_RST_POWERON) {
+            consecutivePOR++;
+        } else {
+            consecutivePOR = 0;
+        }
+        bootStats.putUShort("consec_por", consecutivePOR);
+        bootStats.end();
+
+        if (resetReason == ESP_RST_POWERON && consecutivePOR > 1) {
+            LOG_WARNF("[BOOT] Boot #%u — consecutive power-on resets: %u (possible external power cycling)",
+                      totalBoots, consecutivePOR);
+        } else {
+            LOG_INFOF("[BOOT] Boot #%u (consecutive power-on resets: %u)", totalBoots, consecutivePOR);
+        }
+    }
+
     // Register CPU idle hooks for load measurement (before any blocking waits)
     esp_register_freertos_idle_hook_for_cpu(_idleHook0, 0);
     esp_register_freertos_idle_hook_for_cpu(_idleHook1, 1);
@@ -288,8 +423,38 @@ void setup() {
         LOG_WARN("[POWER] Brownout-recovery mode ACTIVE — degraded boot to reduce power draw");
     } else if (resetReason == ESP_RST_PANIC) {
         LOG_WARN("System reset due to software panic - check for stability issues");
+        String panicDetails = extractPanicDetailsFromCoredump();
+        if (!panicDetails.isEmpty()) {
+            LOGF("Previous crash: %s", panicDetails.c_str());
+        }
     } else if (resetReason == ESP_RST_WDT || resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT) {
         LOG_WARN("System reset due to watchdog timeout - possible hang or power issue");
+        String panicDetails = extractPanicDetailsFromCoredump();
+        if (!panicDetails.isEmpty()) {
+            LOGF("Previous crash: %s", panicDetails.c_str());
+        }
+    }
+
+    // ── Guard against LittleFS partition-shrink assertion ──
+    // LittleFS asserts (lfs_fs_grow_) if the partition shrank since the last
+    // format. This happens when the partition table changes (e.g. adding a
+    // coredump partition). We store the last known size in NVS and erase the
+    // partition data before mounting if it got smaller.
+    {
+        const esp_partition_t* lfsPart = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+        if (lfsPart) {
+            Preferences lfsMeta;
+            lfsMeta.begin("lfs_meta", false);
+            uint32_t savedSize = lfsMeta.getUInt("part_size", 0);
+            if (savedSize != 0 && lfsPart->size < savedSize) {
+                LOG_WARNF("LittleFS partition shrank (%u -> %u) — erasing for reformat",
+                          savedSize, (unsigned)lfsPart->size);
+                esp_partition_erase_range(lfsPart, 0, lfsPart->size);
+            }
+            lfsMeta.putUInt("part_size", (uint32_t)lfsPart->size);
+            lfsMeta.end();
+        }
     }
 
     // Initialize LittleFS for state and internal logs
@@ -360,10 +525,13 @@ void setup() {
         Preferences resetPrefs;
         resetPrefs.begin("cpap_flags", false);
         
-        // Display and clear stored reboot reason (set by setRebootReason() before esp_restart)
-        String rebootWhy = resetPrefs.getString("reboot_why", "");
-        if (rebootWhy.length() > 0) {
-            LOGF("[BOOT] Reboot reason: %s", rebootWhy.c_str());
+        // Display and clear stored reboot reason (set by setRebootReason() before esp_restart).
+        // Use isKey() first to avoid noisy NVS "NOT_FOUND" error from getString().
+        if (resetPrefs.isKey("reboot_why")) {
+            String rebootWhy = resetPrefs.getString("reboot_why", "");
+            if (rebootWhy.length() > 0) {
+                LOGF("[BOOT] Reboot reason: %s", rebootWhy.c_str());
+            }
             resetPrefs.remove("reboot_why");
         }
 
@@ -481,7 +649,8 @@ void setup() {
     // Setup WiFi event handlers for logging
     wifiManager.setupEventHandlers();
 
-    // Apply TX power BEFORE WiFi.begin() to prevent full-power spikes during association
+    // Defer TX power cap — applied inside connectStation() after WiFi.mode(WIFI_STA)
+    // to avoid "Neither AP or STA has been started" warning.
     wifiManager.applyTxPowerEarly(config.getWifiTxPower());
 
     // Initialize WiFi in station mode
@@ -530,29 +699,26 @@ void setup() {
     }
     
     // ── POWER: Configure Dynamic Frequency Scaling (DFS) + Auto Light-Sleep ──
-    // With CONFIG_PM_ENABLE=y in sdkconfig, the CPU can automatically scale
-    // between min and max frequency when tasks are idle. The WiFi driver holds
-    // a PM lock during active operations, ensuring full speed when needed.
+    // With CONFIG_PM_ENABLE=y and CONFIG_FREERTOS_USE_TICKLESS_IDLE=y, the CPU
+    // automatically scales between min (40 MHz XTAL) and max, and enters
+    // light-sleep when all PM locks are released during FreeRTOS idle periods.
     //
-    // When CPU_SPEED_MHZ=80 (default), max==min==80 → DFS is effectively
-    // disabled, eliminating PLL relock transients that stress the power supply.
-    // Users on non-constrained hardware can set CPU_SPEED_MHZ=160 to re-enable DFS.
+    // The WiFi driver holds its own PM lock at 80 MHz during active RF ops.
+    // The FSM PM lock (ESP_PM_CPU_FREQ_MAX) keeps CPU at max during uploads/TLS.
+    // The PCNT driver holds ESP_PM_APB_FREQ_MAX while enabled (blocks light-sleep).
     //
-    // Auto light-sleep allows the CPU to sleep between WiFi DTIM intervals,
-    // reducing idle current from ~20 mA to ~2-3 mA. A PM lock held in active
-    // FSM states prevents sleep during PCNT counting, SD I/O, and uploads.
-    esp_pm_config_esp32_t pm_config = {
+    // In IDLE/COOLDOWN states, transitionTo() suspends PCNT (releasing its lock)
+    // and releases the FSM lock, allowing both DFS down to 40 MHz and auto
+    // light-sleep. FreeRTOS tickless idle handles timer-based wakeup automatically.
+    // No GPIO wakeup needed — avoids the PCNT/GPIO interrupt conflict.
+    esp_pm_config_t pm_config = {
         .max_freq_mhz = targetCpuMhz,  // Respects CPU_SPEED_MHZ config (default 80)
-        .min_freq_mhz = 80,            // Floor at 80 MHz (WiFi PHY minimum)
-        .light_sleep_enable = true      // Auto light-sleep in IDLE/COOLDOWN states
+        .min_freq_mhz = 40,            // XTAL frequency — DFS floor when all PM locks released
+        .light_sleep_enable = true      // Auto light-sleep when all PM locks released
     };
     esp_err_t pm_err = esp_pm_configure(&pm_config);
     if (pm_err == ESP_OK) {
-        if (targetCpuMhz == 80) {
-            LOG("Power management: CPU locked at 80MHz (no DFS), auto light-sleep enabled");
-        } else {
-            LOGF("Power management: DFS enabled (80-%dMHz), auto light-sleep enabled", targetCpuMhz);
-        }
+        LOGF("Power management: DFS (40-%dMHz) + auto light-sleep ENABLED", targetCpuMhz);
     } else {
         LOGF("PM configuration failed (err=%d), CPU stays at %dMHz", pm_err, getCpuFrequencyMhz());
     }
@@ -565,12 +731,14 @@ void setup() {
     }
     LOGF("CPU frequency: %dMHz", getCpuFrequencyMhz());
     
-    // ── POWER: Configure GPIO wakeup for auto light-sleep ──
-    // GPIO 33 (CS_SENSE) is an RTC GPIO that detects CPAP SD card bus activity.
-    // When the CPU is in light-sleep, a CS_SENSE edge wakes it immediately.
-    gpio_wakeup_enable((gpio_num_t)CS_SENSE, GPIO_INTR_LOW_LEVEL);
-    esp_sleep_enable_gpio_wakeup();
-    LOG_DEBUG("GPIO wakeup configured on CS_SENSE (GPIO 33)");
+    // ── POWER: Light-sleep wakeup strategy ──
+    // No explicit GPIO wakeup is configured. Auto light-sleep wakeup is handled by:
+    //   1. FreeRTOS tickless idle timer (wakes at next scheduled tick/task unblock)
+    //   2. WiFi driver (wakes on DTIM beacon for modem-sleep)
+    // GPIO wakeup on CS_SENSE (GPIO 33) was removed because the PCNT driver owns
+    // that pin. Instead, PCNT is suspended in low-power states (releasing its PM
+    // lock), and FreeRTOS periodic wakes handle activity polling.
+    LOG_DEBUG("[POWER] Light-sleep wakeup: FreeRTOS tickless idle + WiFi DTIM");
     
     // ── POWER: Create PM lock for active FSM states ──
     // Acquired in LISTENING/ACQUIRING/UPLOADING/RELEASING/MONITORING/COMPLETE
@@ -707,6 +875,47 @@ void handleListening() {
     // TrafficMonitor.update() is called in main loop before FSM dispatch
     uint32_t inactivityMs = (uint32_t)config.getInactivitySeconds() * 1000UL;
 
+    // ── No-work suppression ──
+    // After a NOTHING_TO_DO result, we suppress further upload attempts until
+    // new PCNT bus activity is detected (CPAP wrote new data to SD card).
+    // Any non-idle PCNT activity clears the suppression flag, allowing the
+    // next idle detection to trigger a new upload cycle.
+    if (g_noWorkSuppressed) {
+        if (trafficMonitor.isBusy() || trafficMonitor.hasActivityLatch()) {
+            // Bus activity detected — CPAP is doing something. Clear suppression
+            // so the next idle detection triggers a fresh upload attempt.
+            g_noWorkSuppressed = false;
+            trafficMonitor.clearActivityLatch();
+            LOG("[FSM] No-work suppression cleared — new bus activity detected");
+        }
+
+        ScheduleManager* sm = uploader->getScheduleManager();
+
+        // Edge-Trigger: If suppressed but the schedule window JUST opened, wake up!
+        // This prevents Smart Mode from permanently sleeping through the 8AM-10PM 
+        // window if the CPAP wasn't physically used to generate PCNT activity.
+        static bool lastWindowOpen = false;
+        if (sm) {
+            bool currentWindowOpen = sm->canUploadOldData();
+            if (currentWindowOpen && !lastWindowOpen && g_noWorkSuppressed) {
+                g_noWorkSuppressed = false;
+                LOG("[FSM] Schedule window opened \u2014 clearing no-work suppression to scan for old data");
+            }
+            lastWindowOpen = currentWindowOpen;
+        }
+
+        // While suppressed, don't transition to ACQUIRING even if idle
+        // (still allow scheduled mode to exit to IDLE if window closes)
+        if (sm && !sm->isSmartMode()) {
+            if (!sm->isInUploadWindow() || sm->isDayCompleted()) {
+                LOG("[FSM] Scheduled mode — window closed or day completed while listening");
+                g_noWorkSuppressed = false;
+                transitionTo(UploadState::IDLE);
+            }
+        }
+        return;
+    }
+
     // Smart mode logic
     if (config.isSmartMode()) {
         if (trafficMonitor.isIdleFor(inactivityMs)) {
@@ -736,43 +945,122 @@ void handleListening() {
 }
 
 void handleAcquiring() {
-    // The upload task now owns the full lifecycle:
-    //   SD mount → pre-flight scan → phased upload → SD release
-    // Task stack is allocated at high max_alloc (~73KB).  TLS connects
-    // on-demand only when pre-flight confirms cloud work (asymmetric
-    // mbedTLS buffers fit at post-SD-mount heap levels).
+    // The upload task owns the session lifecycle:
+    //   PCNT re-check → SD mount → minimal work probe → upload → SD release
+    // TLS connects on-demand during the cloud phase — the TLS Arena ensures
+    // mbedTLS buffers never fragment the general heap, making mount order irrelevant.
     transitionTo(UploadState::UPLOADING);
 }
 
 // FreeRTOS task function — runs on Core 0 so main loop (Core 1) stays responsive
-// Owns the full session lifecycle: SD mount → pre-flight → upload → SD release
+// Owns the full session lifecycle:
+//   PCNT re-check → SD mount → minimal work probe → upload → SD release
+//
+// ── On-Demand TLS (no pre-warm) ──────────────────────────────────────────────
+// The TLS Arena (TlsArena.cpp) routes large mbedTLS buffer allocations to a
+// static .bss arena, so TLS handshake no longer depends on general heap layout.
+// This means we can safely mount the SD card first, probe for work, and only
+// connect TLS if cloud work actually exists — eliminating the ~15s TLS+SD
+// overhead on no-work cycles.
+//
+// PCNT re-check runs before SD mount to catch CPAP activity that started
+// during the transition from LISTENING → ACQUIRING.
+// ──────────────────────────────────────────────────────────────────────────────
 void uploadTaskFunction(void* pvParameters) {
     UploadTaskParams* params = (UploadTaskParams*)pvParameters;
     
-    g_uploadHeartbeat = millis();
+    // Subscribe this task to the task WDT so esp_task_wdt_reset() calls
+    // (from SleepHQUploader, NetworkRecovery) don't log "task not found".
+    esp_task_wdt_add(NULL);  // NULL = current task
     
-    // NOTE: TLS pre-warm was removed here.  With custom asymmetric mbedTLS
-    // (16 KB IN / 4 KB OUT), the largest single TLS allocation is ~16.7 KB
-    // which fits comfortably at ma≈38900 after SD mount.  The cloud phase's
-    // begin() handles on-demand TLS connection, saving ~11 s and ~28 KB of
-    // heap when pre-flight finds no cloud work.
+    g_uploadHeartbeat = millis();
 
-    // Mount SD card
+    // ── Step 1: PCNT re-check — confirm SD bus is still silent ───────────────
+    // The original silence detection happened in handleListening() (62s+ idle).
+    // Between that detection and now, the CPAP might have started a new SD
+    // transaction.  Re-reading the PCNT idle counter catches this.
+    // NOTE: Once SD_MMC.begin() runs, ESP's own bus activity resets the counter,
+    // making any post-mount check meaningless.  This is the LAST valid check.
+    // When the upload was force-triggered via web UI, the PCNT counter will
+    // almost certainly be below threshold (no silence detection preceded it).
+    // We still log the value for diagnostics but skip the abort.
+    {
+        uint32_t inactivityMs = (uint32_t)config.getInactivitySeconds() * 1000UL;
+        uint32_t currentIdleMs = trafficMonitor.getConsecutiveIdleMs();
+
+        if (currentIdleMs < inactivityMs) {
+            if (params->forceTriggered) {
+                LOGF("[Upload] PCNT re-check: idle=%lums < threshold=%lums — below threshold but force-triggered, proceeding",
+                     (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
+            } else {
+                LOGF("[Upload] PCNT re-check FAILED: idle=%lums < threshold=%lums — CPAP may have resumed",
+                     (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
+                LOG_WARN("[Upload] Aborting upload cycle to avoid SD card conflict");
+
+                uploadTaskResult = UploadResult::NOTHING_TO_DO;
+                uploadTaskComplete = true;
+                esp_task_wdt_delete(NULL);
+                delete params;
+                vTaskDelete(NULL);
+                return;
+            }
+        } else {
+            LOGF("[Upload] PCNT re-check OK: idle=%lums >= threshold=%lums — safe to acquire SD",
+                 (unsigned long)currentIdleMs, (unsigned long)inactivityMs);
+        }
+    }
+
+    // ── Step 2: Mount SD card ────────────────────────────────────────────────
+    LOGF("[Upload] Mounting SD: heap fh=%u ma=%u",
+         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
     if (!params->sdManager->takeControl()) {
         LOG_ERROR("[Upload] Failed to acquire SD card control");
         uploadTaskResult = UploadResult::ERROR;
         uploadTaskComplete = true;
+        esp_task_wdt_delete(NULL);
         delete params;
         vTaskDelete(NULL);
         return;
     }
     LOG("[FSM] SD card control acquired");
+    esp_task_wdt_reset();
+    g_uploadHeartbeat = millis();
 
-    // Phase 1+2: Run phased upload (CLOUD first, then SMB)
+    // ── Step 3: Minimal work probe — check if any backend has pending work ───
+    // Streaming directory check with minimal heap churn. If no work exists,
+    // unmount SD immediately and return NOTHING_TO_DO — no TLS, no task overhead.
+    LOGF("[Upload] Work probe: heap fh=%u ma=%u",
+         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    {
+        auto workResult = params->uploader->hasWorkToUpload(params->sdManager->getFS());
+        esp_task_wdt_reset();
+        g_uploadHeartbeat = millis();
+
+        if (!workResult.hasCloudWork && !workResult.hasSmbWork) {
+            LOG("[Upload] Work probe: no work for any backend — releasing SD");
+            if (params->sdManager->hasControl()) {
+                params->sdManager->releaseControl();
+            }
+            uploadTaskResult = UploadResult::NOTHING_TO_DO;
+            uploadTaskComplete = true;
+            esp_task_wdt_delete(NULL);
+            delete params;
+            vTaskDelete(NULL);
+            return;
+        }
+        LOGF("[Upload] Work probe: cloud=%d smb=%d — proceeding with upload",
+             workResult.hasCloudWork, workResult.hasSmbWork);
+    }
+
+    // ── Step 4: Run phased upload (CLOUD first with on-demand TLS, then SMB) ─
+    // TLS connects on-demand in cloud phase's begin() — the TLS Arena ensures
+    // mbedTLS buffers come from static .bss, not the general heap.
+    LOGF("[Upload] Starting upload session: heap fh=%u ma=%u",
+         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
     UploadResult result = params->uploader->runFullSession(
         params->sdManager, params->maxMinutes, params->filter);
     
-    // Phase 3: Release SD card
+    // Step 5: Release SD card
     if (params->sdManager->hasControl()) {
         params->sdManager->releaseControl();
     }
@@ -780,6 +1068,7 @@ void uploadTaskFunction(void* pvParameters) {
     uploadTaskResult = result;
     uploadTaskComplete = true;
     
+    esp_task_wdt_delete(NULL);  // Unsubscribe before self-delete
     delete params;
     vTaskDelete(NULL);  // Self-delete
 }
@@ -834,44 +1123,64 @@ void handleUploading() {
 #endif
 
         UploadTaskParams* params = new UploadTaskParams{
-            uploader, &sdManager, config.getExclusiveAccessMinutes(), filter
+            uploader, &sdManager, config.getExclusiveAccessMinutes(), filter,
+            g_uploadWasForceTriggered  // propagate manual-trigger state to upload task
         };
+        g_uploadWasForceTriggered = false;  // consumed
         
         uploadTaskComplete = false;
         uploadTaskRunning = true;
         
-        // Unsubscribe IDLE0 from task watchdog — upload task will monopolize Core 0
-        // during TLS handshake (5-15s of CPU-intensive crypto), starving IDLE0.
-        // Without this, IDLE0 can't feed the WDT and the system reboots.
-        esp_task_wdt_delete(xTaskGetIdleTaskHandleForCPU(0));
+        // Relax task watchdog during upload — TLS handshake (5-15s of CPU-intensive
+        // crypto) starves IDLE0 on Core 0. Instead of removing IDLE0 from monitoring
+        // (which causes "task not found" error spam because IDLE0 still calls
+        // esp_task_wdt_reset internally), keep both cores monitored but increase
+        // timeout to 30s. IDLE0 feeds the WDT during socket I/O waits.
+        {
+            esp_task_wdt_config_t wdt_cfg = {
+                .timeout_ms = 30000,
+                .idle_core_mask = (1 << 0) | (1 << 1),  // Both cores
+                .trigger_panic = true
+            };
+            esp_task_wdt_reconfigure(&wdt_cfg);
+        }
         
         // Pin to Core 0 (protocol core) — keeps Core 1 free for main loop + web server
-        // Stack: 12KB — TLS buffers are on heap, task only needs stack for locals.
-        // Created BEFORE TLS pre-warm and SD mount so max_alloc is at its highest.
-        BaseType_t rc = xTaskCreatePinnedToCore(
+        // Stack: 12KB in static .bss — never touches the dynamic heap.
+        // This prevents the task stack from fragmenting the largest contiguous block.
+        uploadTaskHandle = xTaskCreateStaticPinnedToCore(
             uploadTaskFunction,  // Task function
             "upload",            // Name
-            12288,               // Stack size (12KB — verified via HWM logging)
+            sizeof(uploadTaskStack) / sizeof(StackType_t),  // Stack depth in words
             params,              // Parameters
             1,                   // Priority (same as loop task)
-            &uploadTaskHandle,   // Handle
+            uploadTaskStack,     // Static stack buffer
+            &uploadTaskTCB,      // Static task TCB
             0                    // Pin to Core 0
         );
         
-        if (rc != pdPASS) {
-            LOG_ERRORF("[FSM] Failed to create upload task (rc=%ld, free=%u, max_alloc=%u) \u2014 releasing",
-                       (long)rc,
+        if (uploadTaskHandle == nullptr) {
+            LOG_ERRORF("[FSM] Failed to create upload task (free=%u, max_alloc=%u) \u2014 releasing",
                        ESP.getFreeHeap(),
                        ESP.getMaxAllocHeap());
             uploadTaskRunning = false;
             delete params;
-            esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
+            // Restore normal watchdog timeout (task creation failed)
+            {
+                esp_task_wdt_config_t wdt_cfg = {
+                    .timeout_ms = 5000,
+                    .idle_core_mask = (1 << 0) | (1 << 1),  // Both cores
+                    .trigger_panic = true
+                };
+                esp_task_wdt_reconfigure(&wdt_cfg);
+            }
 #ifdef ENABLE_WEBSERVER
             uploader->setWebServer(webServer);
 #endif
             transitionTo(UploadState::RELEASING);
         } else {
-            LOG("[FSM] Upload task started on Core 0 (non-blocking)");
+            LOGF("[FSM] Upload task started on Core 0 (static stack, non-blocking) — heap after: fh=%u ma=%u",
+                 ESP.getFreeHeap(), ESP.getMaxAllocHeap());
         }
     } else if (uploadTaskComplete) {
         // ── Task finished: read result and transition ──
@@ -879,8 +1188,15 @@ void handleUploading() {
         uploadTaskHandle = nullptr;
         g_abortUploadFlag = false;  // Clear abort flag — task has stopped
         
-        // Re-subscribe IDLE0 to task watchdog now that Core 0 is free
-        esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0));
+        // Restore normal watchdog timeout now that Core 0 is free
+        {
+            esp_task_wdt_config_t wdt_cfg = {
+                .timeout_ms = 5000,
+                .idle_core_mask = (1 << 0) | (1 << 1),  // Both cores
+                .trigger_panic = true
+            };
+            esp_task_wdt_reconfigure(&wdt_cfg);
+        }
         
         // Restore web server handling in uploader
 #ifdef ENABLE_WEBSERVER
@@ -891,6 +1207,9 @@ void handleUploading() {
         
         switch (result) {
             case UploadResult::COMPLETE:
+                LOG("[FSM] All folders complete \u2014 suppressing retries until new bus activity");
+                g_nothingToUpload = true;
+                g_noWorkSuppressed = true;
                 transitionTo(UploadState::COMPLETE);
                 break;
             case UploadResult::TIMEOUT:
@@ -902,8 +1221,9 @@ void handleUploading() {
                 transitionTo(UploadState::RELEASING);
                 break;
             case UploadResult::NOTHING_TO_DO:
-                LOG("[FSM] Nothing to upload — releasing SD and entering cooldown (no reboot)");
+                LOG("[FSM] Nothing to upload — suppressing retries until new bus activity");
                 g_nothingToUpload = true;
+                g_noWorkSuppressed = true;  // Don't retry until PCNT detects new CPAP activity
                 transitionTo(UploadState::RELEASING);
                 break;
         }
@@ -930,6 +1250,7 @@ void handleReleasing() {
     // This prevents an endless reboot cycle when all backends are already synced.
     if (g_nothingToUpload) {
         g_nothingToUpload = false;
+        trafficMonitor.clearActivityLatch();  // Clear ESP-generated activity before entering cooldown
         LOGF("[FSM] Nothing to upload — entering cooldown without reboot (fh=%u ma=%u)",
              (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
         cooldownStartedAt = millis();
@@ -943,10 +1264,22 @@ void handleReleasing() {
         unsigned fh = (unsigned)ESP.getFreeHeap();
         unsigned ma = (unsigned)ESP.getMaxAllocHeap();
         LOGF("[FSM] MINIMIZE_REBOOTS: skipping elective reboot after upload (fh=%u ma=%u)", fh, ma);
-        if (ma < 35000) {
-            LOG_WARN("[FSM] Heap fragmented — contiguous block below 35KB. Consider rebooting if uploads fail.");
+        // Heap safety valve: force reboot if contiguous heap is critically low.
+        // 32KB is below the ~36KB minimum needed for TLS handshake and leaves
+        // insufficient margin for SMB PDU allocations + lwIP buffers.
+        // The 38900-byte floor during active SMB transfers is normal and recovers
+        // after transfer completes — this valve only fires if heap stays fragmented.
+        if (ma < 32000) {
+            LOG_WARN("[FSM] Heap critically fragmented (ma < 32KB) — forcing reboot to restore heap");
+            setRebootReason("Heap safety valve (ma < 32KB)");
+            Logger::getInstance().flushBeforeReboot();
+            delay(200);
+            esp_restart();
+        } else if (ma < 35000) {
+            LOG_WARN("[FSM] Heap fragmented — contiguous block below 35KB. Will reboot if it drops below 32KB.");
         }
         uploadCycleHadTimeout = false;
+        trafficMonitor.clearActivityLatch();  // Clear ESP-generated activity before entering cooldown
         cooldownStartedAt = millis();
         transitionTo(UploadState::COOLDOWN);
         return;
@@ -1042,10 +1375,11 @@ void loop() {
     
     // Periodic persisted-log flush (every 10 seconds)
     // Uses multi-file rotation on LittleFS — independent of SD_MMC / upload task.
-    // ── POWER: Skip during active uploads to avoid internal SPI flash writes
-    // overlapping with SD reads, TLS encryption, and WiFi TX bursts.
+    // ── POWER: By default, skip during active uploads to avoid internal SPI flash
+    // writes overlapping with SD reads, TLS encryption, and WiFi TX bursts.
+    // Set FLUSH_LOGS_DURING_UPLOAD=true in config.txt to flush during uploads too.
     // flushBeforeReboot() ensures no logs are lost on post-upload reboot.
-    if (!uploadTaskRunning) {
+    if (!uploadTaskRunning || config.getFlushLogsDuringUpload()) {
         unsigned long currentTime = millis();
         if (currentTime - lastLogFlushTime >= LOG_FLUSH_INTERVAL_MS) {
             Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
@@ -1055,8 +1389,11 @@ void loop() {
     
     // Update traffic monitor only in states that need activity detection
     // LISTENING: needs idle detection to trigger uploads
+    // COOLDOWN: needs to catch activity so the FSM doesn't falsely suppress retries
     // MONITORING: needs live data for web UI
-    if (currentState == UploadState::LISTENING || currentState == UploadState::MONITORING) {
+    if (currentState == UploadState::LISTENING || 
+        currentState == UploadState::MONITORING ||
+        currentState == UploadState::COOLDOWN) {
         trafficMonitor.update();
     }
 
@@ -1156,6 +1493,8 @@ void loop() {
     if (g_triggerUploadFlag && !uploadTaskRunning) {
         LOG("=== Upload Triggered via Web Interface ===");
         g_triggerUploadFlag = false;
+        g_uploadWasForceTriggered = true;  // latch for upload task
+        g_noWorkSuppressed = false;  // Manual trigger always overrides suppression
         uploadCycleHadTimeout = false;
         transitionTo(UploadState::ACQUIRING);
     }

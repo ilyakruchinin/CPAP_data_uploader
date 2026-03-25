@@ -32,10 +32,24 @@ extern volatile uint32_t g_idleCount0, g_idleCount1;
 extern uint32_t g_cpuLoad0, g_cpuLoad1;
 
 namespace {
-static constexpr unsigned long kUploadLogsMinRefreshMs = 3000;
-static constexpr size_t kUploadLogsTailBytes = 2048;
 static constexpr unsigned long kUploadUiMinIntervalMs = 400;
 static constexpr unsigned long kUploadNotFoundMinIntervalMs = 250;
+static constexpr size_t kRecentTabSightingsCount = 12;
+static constexpr unsigned long kSseOwnerLeaseMs = 30000;
+
+struct RecentTabSighting {
+    uint16_t tabId;
+    uint32_t seenAtMs;
+};
+
+static RecentTabSighting g_recentTabSightings[kRecentTabSightingsCount] = {};
+static uint8_t g_recentTabWriteIndex = 0;
+static WiFiClient g_sseClient;
+static volatile bool g_sseActive = false;
+static volatile uint32_t g_sseLastPushedIndex = 0;
+static volatile uint16_t g_sseOwnerTid = 0;
+static volatile uint32_t g_sseOwnerIid = 0;
+static volatile uint32_t g_sseOwnerLastSeenMs = 0;
 
 enum UploadUiSlot : uint8_t {
     kUploadUiSlotRoot = 0,
@@ -78,6 +92,87 @@ void sendUploadRateLimitResponse(WebServer* server,
     // Proactively release socket resources under upload-time pressure.
     server->client().stop();
 }
+
+int hexNibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+bool parseCompactTabId(const String& value, uint16_t* outTabId) {
+    if (!outTabId || value.length() < 4) return false;
+    uint16_t tabId = 0;
+    for (int i = 0; i < 4; i++) {
+        int nibble = hexNibble(value[i]);
+        if (nibble < 0) return false;
+        tabId = (tabId << 4) | (uint16_t)nibble;
+    }
+    *outTabId = tabId;
+    return true;
+}
+
+bool getRequestTabId(WebServer* server, uint16_t* outTabId) {
+    if (!server || !outTabId) return false;
+    if (server->hasArg("tid") && parseCompactTabId(server->arg("tid"), outTabId)) return true;
+    if (server->hasHeader("X-Tab-Id") && parseCompactTabId(server->header("X-Tab-Id"), outTabId)) return true;
+    return false;
+}
+
+bool parseCompactInstanceId(const String& value, uint32_t* outInstanceId) {
+    if (!outInstanceId || value.length() < 8) return false;
+    uint32_t instanceId = 0;
+    for (int i = 0; i < 8; i++) {
+        int nibble = hexNibble(value[i]);
+        if (nibble < 0) return false;
+        instanceId = (instanceId << 4) | (uint32_t)nibble;
+    }
+    *outInstanceId = instanceId;
+    return instanceId != 0;
+}
+
+bool getRequestInstanceId(WebServer* server, uint32_t* outInstanceId) {
+    if (!server || !outInstanceId) return false;
+    if (server->hasArg("iid") && parseCompactInstanceId(server->arg("iid"), outInstanceId)) return true;
+    if (server->hasHeader("X-Tab-Instance") && parseCompactInstanceId(server->header("X-Tab-Instance"), outInstanceId)) return true;
+    return false;
+}
+
+void recordRecentTabSighting(WebServer* server) {
+    uint16_t tabId = 0;
+    if (!getRequestTabId(server, &tabId)) return;
+    g_recentTabSightings[g_recentTabWriteIndex].tabId = tabId;
+    g_recentTabSightings[g_recentTabWriteIndex].seenAtMs = millis();
+    g_recentTabWriteIndex = (uint8_t)((g_recentTabWriteIndex + 1) % kRecentTabSightingsCount);
+}
+
+void buildRecentTabsField(char* output, size_t outputSize, unsigned long nowMs) {
+    if (!output || outputSize == 0) return;
+    output[0] = '\0';
+    size_t used = 0;
+    for (size_t n = 0; n < kRecentTabSightingsCount; n++) {
+        int idx = (int)((g_recentTabWriteIndex + kRecentTabSightingsCount - 1 - n) % kRecentTabSightingsCount);
+        const RecentTabSighting& sighting = g_recentTabSightings[idx];
+        if (sighting.seenAtMs == 0) continue;
+        unsigned long secondsAgo = (nowMs >= sighting.seenAtMs) ? ((nowMs - sighting.seenAtMs) / 1000UL) : 0UL;
+        int wrote = snprintf(output + used, outputSize - used, "%s%04X:%lu",
+                             used ? "," : "", (unsigned)sighting.tabId, secondsAgo);
+        if (wrote <= 0 || (size_t)wrote >= (outputSize - used)) break;
+        used += (size_t)wrote;
+    }
+}
+
+bool isSseOwnerAlive(unsigned long nowMs) {
+    if (!g_sseActive || g_sseOwnerTid == 0 || g_sseOwnerIid == 0 || !g_sseClient.connected()) return false;
+    return (nowMs - g_sseOwnerLastSeenMs) <= kSseOwnerLeaseMs;
+}
+
+void clearSseOwner() {
+    g_sseActive = false;
+    g_sseOwnerTid = 0;
+    g_sseOwnerIid = 0;
+    g_sseOwnerLastSeenMs = 0;
+}
 }
 
 // Constructor
@@ -113,8 +208,8 @@ bool CpapWebServer::begin() {
     server = new WebServer(80);
 
     // Collect Host header so requests to *.local can be redirected to the device IP.
-    const char* headerKeys[] = {"Host"};
-    server->collectHeaders(headerKeys, 1);
+    const char* headerKeys[] = {"Host", "X-Tab-Id", "X-Tab-Instance"};
+    server->collectHeaders(headerKeys, 3);
     
     // Register request handlers
     server->on("/", [this]() {
@@ -157,6 +252,14 @@ bool CpapWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleApiLogs();
     });
+    server->on("/api/logs/buffer", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogs();
+    });
+    server->on("/api/logs/poll", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogs();
+    });
     server->on("/api/monitor-start", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleMonitorStart();
@@ -184,9 +287,21 @@ bool CpapWebServer::begin() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleApiLogsSaved();
     });
+    server->on("/api/logs/download-all", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsSaved();
+    });
     server->on("/api/logs/full", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
         this->handleApiLogsFull();
+    });
+    server->on("/api/logs/recent", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsFull();
+    });
+    server->on("/api/logs/file0", [this]() {
+        if (this->redirectToIpIfMdnsRequest()) return;
+        this->handleApiLogsFile0();
     });
     server->on("/api/logs/stream", [this]() {
         if (this->redirectToIpIfMdnsRequest()) return;
@@ -505,35 +620,21 @@ void CpapWebServer::handleLogs() {
     server->sendHeader("Connection", "close");
     server->send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }
-// GET /api/logs - Raw logs for AJAX
+
+// GET /api/logs - Legacy alias for circular-buffer logs
 void CpapWebServer::handleApiLogs() {
-    // Add CORS headers
+    recordRecentTabSighting(server);
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-    // Send headers with correct content type
     server->send(200, "text/plain; charset=utf-8", " ");
-    // Stream logs directly
     ChunkedPrint chunkedOutput(server);
-
-    if (isUploadInProgress()) {
-        static unsigned long lastLogDumpMs = 0;
-        const unsigned long now = millis();
-        if (lastLogDumpMs == 0 || now - lastLogDumpMs >= kUploadLogsMinRefreshMs) {
-            Logger::getInstance().printLogsTail(chunkedOutput, kUploadLogsTailBytes);
-            lastLogDumpMs = now;
-        } else {
-            chunkedOutput.print("[INFO] Log stream throttled during active upload. Retry shortly.\n");
-        }
-    } else {
-        Logger::getInstance().printLogs(chunkedOutput);
-    }
-
+    Logger::getInstance().printLogs(chunkedOutput);
     server->sendContent("");
 }
 
-// GET /api/logs/saved — flush, then download ALL logs (NAND + circular buffer)
+// GET /api/logs/saved — legacy alias for full log download
 void CpapWebServer::handleApiLogsSaved() {
-    // Flush circular buffer to NAND so the download includes everything
+    recordRecentTabSighting(server);
     Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
 
     addCorsHeaders(server);
@@ -554,41 +655,71 @@ void CpapWebServer::handleApiLogsSaved() {
     server->sendContent("");
 }
 
-// GET /api/logs/full — stream NAND logs + circular buffer (inline, not download)
-// Used by the Web GUI on initial Logs tab open for full historical context.
-// All content is strictly chronological — no out-of-order reboot log insertion.
+// GET /api/logs/full — legacy alias for recent-history backfill
 void CpapWebServer::handleApiLogsFull() {
-    // Flush circular buffer to NAND so content is current
+    recordRecentTabSighting(server);
+    addCorsHeaders(server);
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/plain; charset=utf-8", " ");
+    ChunkedPrint chunked(server);
+
+    Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
+    Logger::getInstance().streamSavedLogs(chunked, 1);
+    Logger::getInstance().printLogs(chunked);
+
+    server->sendContent("");
+}
+
+// GET /api/logs/file0 — stream latest persisted file only (no circular buffer)
+void CpapWebServer::handleApiLogsFile0() {
+    recordRecentTabSighting(server);
     Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
 
     addCorsHeaders(server);
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/plain; charset=utf-8", " ");
     ChunkedPrint chunked(server);
-
-    // Stream all syslog rotation files (oldest → newest)
-    Logger::getInstance().streamSavedLogs(chunked);
-
-    // Append current circular buffer (captures any content since last flush)
-    Logger::getInstance().printLogs(chunked);
-
+    size_t nandBytes = Logger::getInstance().streamSavedLogs(chunked, 1);
+    if (nandBytes == 0) {
+        chunked.print("[No saved log files found on internal flash]\n");
+    }
     server->sendContent("");
 }
 
 // GET /api/logs/stream — SSE endpoint for live log push.
 // Takes over the client socket and stores it globally for main-loop push.
 // Declared in CpapWebServer.h; the actual push happens via pushSseLogs() called from loop().
-//
-// Global SSE client state — single client limit is acceptable (one browser tab).
-static WiFiClient g_sseClient;
-static volatile bool g_sseActive = false;
-static volatile uint32_t g_sseLastPushedIndex = 0;
-
 void CpapWebServer::handleApiLogsStream() {
-    // Take over the raw client socket from WebServer
+    recordRecentTabSighting(server);
+
+    uint16_t requestTabId = 0;
+    if (!getRequestTabId(server, &requestTabId)) {
+        addCorsHeaders(server);
+        server->send(400, "text/plain; charset=utf-8", "Missing or invalid tab ID");
+        return;
+    }
+
+    uint32_t requestInstanceId = 0;
+    if (!getRequestInstanceId(server, &requestInstanceId)) {
+        addCorsHeaders(server);
+        server->send(400, "text/plain; charset=utf-8", "Missing or invalid tab instance ID");
+        return;
+    }
+
+    const unsigned long nowMs = millis();
+    if (isSseOwnerAlive(nowMs) && g_sseOwnerIid != requestInstanceId) {
+        addCorsHeaders(server);
+        server->send(409, "text/plain; charset=utf-8", "Another tab owns the live log stream");
+        return;
+    }
+
+    if (g_sseActive && g_sseClient.connected()) {
+        g_sseClient.stop();
+    }
+    clearSseOwner();
+
     g_sseClient = server->client();
 
-    // Send SSE headers manually — do NOT call server->send() after this
     g_sseClient.print("HTTP/1.1 200 OK\r\n"
                        "Content-Type: text/event-stream\r\n"
                        "Cache-Control: no-cache\r\n"
@@ -596,11 +727,11 @@ void CpapWebServer::handleApiLogsStream() {
                        "Access-Control-Allow-Origin: *\r\n"
                        "\r\n");
 
-    // Snapshot current head so we only push NEW logs going forward
     g_sseLastPushedIndex = Logger::getInstance().getHeadIndex();
+    g_sseOwnerTid = requestTabId;
+    g_sseOwnerIid = requestInstanceId;
+    g_sseOwnerLastSeenMs = nowMs;
     g_sseActive = true;
-
-    // Return without calling server->send() — we own the socket now
 }
 
 // GET /config - serve SPA
@@ -620,6 +751,7 @@ void CpapWebServer::handleStatusPage() {
 // the main loop is frozen, so g_webStatusBuf would be permanently stale.
 // updateStatusSnapshot() is stack-only (no heap) and safe to call here.
 void CpapWebServer::handleApiStatus() {
+    recordRecentTabSighting(server);
     updateStatusSnapshot();
     addCorsHeaders(server);
     server->send(200, "application/json", g_webStatusBuf);
@@ -694,6 +826,9 @@ void CpapWebServer::updateStatusSnapshot() {
         liveActive = true;
     }
 
+    char recentTabs[128];
+    buildRecentTabsField(recentTabs, sizeof(recentTabs), nowMs);
+
     char buf[WEB_STATUS_BUF_SIZE];
     int n = snprintf(buf, sizeof(buf),
         "{\"state\":\"%s\",\"in_state_sec\":%lu,\"uptime\":%lu"
@@ -706,6 +841,7 @@ void CpapWebServer::updateStatusSnapshot() {
         ",\"in_window\":%s"
         ",\"live_active\":%s,\"live_folder\":\"%s\",\"live_up\":%d,\"live_total\":%d"
         ",\"cpu0\":%u,\"cpu1\":%u"
+        ",\"recent_tabs\":\"%s\""
         ",\"firmware\":\"%s\"}",
         st, inStateSec, upSec,
         timeBuf, timeSynced ? "true" : "false",
@@ -719,6 +855,7 @@ void CpapWebServer::updateStatusSnapshot() {
         inWindow ? "true" : "false",
         liveActive ? "true" : "false", liveFolder, liveUp, liveTotal,
         (unsigned)g_cpuLoad0, (unsigned)g_cpuLoad1,
+        recentTabs,
         FIRMWARE_VERSION);
     if (n > 0 && n < (int)sizeof(buf)) {
         memcpy(g_webStatusBuf, buf, n + 1);
@@ -1095,6 +1232,7 @@ void CpapWebServer::handleOTAPage() {
     // Upload function
     html += "function uploadFirmware(file) {";
     html += "  updateInProgress = true;";
+    html += "  var uploadComplete = false;";
     html += "  setStatus('uploadStatus', 'info', 'Uploading firmware... 0%');";
     html += "  const formData = new FormData();";
     html += "  formData.append('firmware', file);";
@@ -1102,6 +1240,7 @@ void CpapWebServer::handleOTAPage() {
     html += "  xhr.upload.addEventListener('progress', function(e) {";
     html += "    if (e.lengthComputable) {";
     html += "      const percent = Math.round((e.loaded / e.total) * 100);";
+    html += "      if (percent >= 100) uploadComplete = true;";
     html += "      setStatus('uploadStatus', 'info', 'Uploading firmware... ' + percent + '%');";
     html += "    }";
     html += "  });";
@@ -1111,7 +1250,13 @@ void CpapWebServer::handleOTAPage() {
     html += "      handleResult(data, 'uploadStatus');";
     html += "    } catch(e) { handleResult({success:false, message:'Invalid response'}, 'uploadStatus'); }";
     html += "  });";
-    html += "  xhr.addEventListener('error', function() { handleResult({success:false, message:'Network error'}, 'uploadStatus'); });";
+    html += "  xhr.addEventListener('error', function() {";
+    html += "    if (uploadComplete) {";
+    html += "      handleResult({success:true, message:'Firmware uploaded. Device is restarting...'}, 'uploadStatus');";
+    html += "    } else {";
+    html += "      handleResult({success:false, message:'Network error'}, 'uploadStatus');";
+    html += "    }";
+    html += "  });";
     html += "  xhr.open('POST', '/ota-upload');";
     html += "  xhr.send(formData);";
     html += "}";
@@ -1156,44 +1301,26 @@ void CpapWebServer::handleOTAPage() {
     server->sendContent("");
 }
 
-// POST /ota-upload - Handle firmware file upload
+// POST /ota-upload - Handle firmware file upload (chunk callback)
+// IMPORTANT: Do NOT call server->send() here — the WebServer framework
+// calls handleOTAUploadComplete() after all chunks are received and expects
+// that function to send the one-and-only HTTP response.  Sending a response
+// from both handlers produces duplicate Content-Length headers.
 void CpapWebServer::handleOTAUpload() {
     static bool uploadError = false;
-    static bool successResponseSent = false;
-    static unsigned long lastUploadAttempt = 0;
-    
-    LOG_DEBUG("[OTA] handleOTAUpload() called");
+    static bool updateFinished = false;
     
     if (!otaManager) {
-        LOG_ERROR("[OTA] OTA manager not initialized");
-        server->send(500, "application/json", "{\"success\":false,\"message\":\"OTA manager not initialized\"}");
+        uploadError = true;
         return;
     }
     
     HTTPUpload& upload = server->upload();
-    LOG_DEBUGF("[OTA] Upload status: %d", upload.status);
     
     if (upload.status == UPLOAD_FILE_START) {
         LOG_DEBUGF("[OTA] UPLOAD_FILE_START - filename: %s, totalSize: %u", upload.filename.c_str(), upload.totalSize);
-        
-        // Only check for "already in progress" during START phase
-        if (otaManager->isUpdateInProgress()) {
-            LOG_ERROR("[OTA] Update already in progress");
-            server->send(400, "application/json", "{\"success\":false,\"message\":\"Update already in progress\"}");
-            return;
-        }
-        
-        // Prevent rapid repeated calls (debounce)
-        unsigned long now = millis();
-        if (now - lastUploadAttempt < 1000) {  // 1 second debounce
-            LOG_WARN("[OTA] Upload attempt too soon, ignoring");
-            server->send(429, "application/json", "{\"success\":false,\"message\":\"Too many requests\"}");
-            return;
-        }
-        lastUploadAttempt = now;
-        
         uploadError = false;
-        successResponseSent = false;
+        updateFinished = false;
         
         if (upload.totalSize == 0) {
             LOG_WARN("[OTA] Total size is 0, using chunked upload mode");
@@ -1202,19 +1329,12 @@ void CpapWebServer::handleOTAUpload() {
         if (!otaManager->startUpdate(upload.totalSize)) {
             LOG_ERROR("[OTA] Failed to start update");
             uploadError = true;
-            return;
         }
         
-        LOG_DEBUG("[OTA] Update started successfully");
-        
     } else if (upload.status == UPLOAD_FILE_WRITE) {
-        LOG_DEBUGF("[OTA] UPLOAD_FILE_WRITE - currentSize: %u, uploadError: %s", 
-                   upload.currentSize, uploadError ? "true" : "false");
-        
         if (!uploadError && !otaManager->writeChunk(upload.buf, upload.currentSize)) {
             LOG_ERROR("[OTA] Failed to write chunk");
             uploadError = true;
-            return;
         }
         
     } else if (upload.status == UPLOAD_FILE_END) {
@@ -1222,61 +1342,40 @@ void CpapWebServer::handleOTAUpload() {
                    upload.totalSize, uploadError ? "true" : "false");
         
         if (uploadError) {
-            LOG_ERROR("[OTA] Upload failed due to previous errors");
             otaManager->abortUpdate();
-            // Don't send response here, handleOTAUploadComplete will handle it
-            return;
-        }
-        
-        if (otaManager->finishUpdate()) {
-            LOG("[OTA] Update completed successfully, restarting...");
-            // Send success response before restarting
-            server->send(200, "application/json", "{\"success\":true,\"message\":\"Update completed! Device will restart in 3 seconds.\"}");
-            successResponseSent = true;
-            
-            // Restart after a short delay
-            delay(3000);
-            ESP.restart();
+        } else if (otaManager->finishUpdate()) {
+            LOG("[OTA] Update completed successfully");
+            updateFinished = true;
         } else {
             LOG_ERROR("[OTA] Failed to finish update");
-            // Don't send response here, handleOTAUploadComplete will handle it
+            uploadError = true;
         }
         
     } else if (upload.status == UPLOAD_FILE_ABORTED) {
         LOG_WARN("[OTA] UPLOAD_FILE_ABORTED");
         otaManager->abortUpdate();
         uploadError = true;
-        // Don't send response here, handleOTAUploadComplete will handle it
-    } else {
-        LOG_DEBUGF("[OTA] Unknown upload status: %d", upload.status);
     }
 }
 
-// POST /ota-upload - Handle completion of firmware file upload
+// POST /ota-upload - Completion handler (sends the sole HTTP response)
+// Called by WebServer after the last upload chunk callback returns.
 void CpapWebServer::handleOTAUploadComplete() {
-    LOG_DEBUG("[OTA] handleOTAUploadComplete() called");
-    
     if (!otaManager) {
-        LOG_ERROR("[OTA] OTA manager not initialized");
         server->send(500, "application/json", "{\"success\":false,\"message\":\"OTA manager not initialized\"}");
         return;
     }
     
-    // This is called after the upload is complete
-    // The actual upload processing happens in handleOTAUpload()
-    // Here we just send the final response if one hasn't been sent already
-    
-    // Check if there was an error during upload
     String error = otaManager->getLastError();
     if (!error.isEmpty()) {
-        LOG_ERROR("[OTA] Upload completed with error");
         server->send(500, "application/json", "{\"success\":false,\"message\":\"Upload failed: " + error + "\"}");
-    } else {
-        // If we reach here and there's no error, it means the update was successful
-        // but the device hasn't restarted yet (which shouldn't normally happen)
-        LOG_DEBUG("[OTA] Upload completed successfully");
-        server->send(200, "application/json", "{\"success\":true,\"message\":\"Upload completed successfully! Device will restart shortly.\"}");
+        return;
     }
+    
+    // Success — send response, then restart
+    server->send(200, "application/json", "{\"success\":true,\"message\":\"Update completed! Device will restart in 3 seconds.\"}");
+    delay(3000);
+    ESP.restart();
 }
 
 // POST /ota-url - Handle firmware download from URL
@@ -1416,7 +1515,7 @@ void pushSseLogs() {
     if (!g_sseActive) return;
 
     if (!g_sseClient.connected()) {
-        g_sseActive = false;
+        clearSseOwner();
         return;
     }
 
@@ -1434,8 +1533,9 @@ void pushSseLogs() {
             lastKeepalive = now;
             if (g_sseClient.connected()) {
                 g_sseClient.print(": keepalive\n\n");
+                g_sseOwnerLastSeenMs = now;
             } else {
-                g_sseActive = false;
+                clearSseOwner();
             }
         }
         return;
@@ -1480,8 +1580,9 @@ void pushSseLogs() {
             // Flush chunk
             if (g_sseClient.connected()) {
                 g_sseClient.write((const uint8_t*)chunk, chunkPos);
+                g_sseOwnerLastSeenMs = now;
             } else {
-                g_sseActive = false;
+                clearSseOwner();
                 break;
             }
             // Start next "data: " prefix
@@ -1495,8 +1596,9 @@ void pushSseLogs() {
                 chunk[chunkPos++] = '\n';
                 if (g_sseClient.connected()) {
                     g_sseClient.write((const uint8_t*)chunk, chunkPos);
+                    g_sseOwnerLastSeenMs = now;
                 } else {
-                    g_sseActive = false;
+                    clearSseOwner();
                     break;
                 }
                 memcpy(chunk, "data: ", 6);
@@ -1511,6 +1613,9 @@ void pushSseLogs() {
         chunk[chunkPos++] = '\n';
         if (g_sseClient.connected()) {
             g_sseClient.write((const uint8_t*)chunk, chunkPos);
+            g_sseOwnerLastSeenMs = now;
+        } else {
+            clearSseOwner();
         }
     }
 

@@ -84,7 +84,8 @@ bool canStartUpload() {
 ```
 
 ### Safety Mechanisms
-- **Immediate abort**: If activity detected during upload
+- **PCNT re-check after TLS pre-warm**: After the upload task pre-warms TLS (~2-4s), it re-reads `getConsecutiveIdleMs()` to confirm the CPAP hasn't started using the SD card during that window. If silence is broken (idle < threshold), the upload cycle aborts before `SD_MMC.begin()`. This is a cross-core read (Core 0 upload task reads, Core 1 main loop updates) — safe because `_consecutiveIdleMs` is a `uint32_t` (32-bit atomic on ESP32). See `docs/specs/tls-prewarm-pcnt-recheck.md`.
+- **Post-mount PCNT is invalid**: Once `SD_MMC.begin()` runs, the ESP's own SD bus activity resets the PCNT counter, making any subsequent silence check meaningless. The pre-mount re-check is the last valid opportunity.
 - **Short sessions**: Respect `EXCLUSIVE_ACCESS_MINUTES` limit
 - **Frequent checks**: Activity monitoring continues during upload
 

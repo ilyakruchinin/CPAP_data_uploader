@@ -7,7 +7,7 @@
 #ifdef UNIT_TEST
 #include "MockMD5.h"
 #else
-#include "esp32/rom/md5_hash.h"
+#include <esp_rom_md5.h>
 #endif
 
 namespace {
@@ -376,8 +376,8 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
         return "";
     }
     
-    struct MD5Context md5_ctx;
-    MD5Init(&md5_ctx);
+    md5_context_t md5_ctx;
+    esp_rom_md5_init(&md5_ctx);
     
     const size_t bufferSize = 4096;
     uint8_t buffer[bufferSize];
@@ -393,7 +393,7 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
             return "";
         }
         
-        MD5Update(&md5_ctx, buffer, bytesRead);
+        esp_rom_md5_update(&md5_ctx, buffer, bytesRead);
         totalBytesRead += bytesRead;
         
         // Yield periodically to prevent watchdog timeout on large files
@@ -409,7 +409,7 @@ String UploadStateManager::calculateChecksum(fs::FS &sd, const String& filePath)
     }
     
     uint8_t hash[16];
-    MD5Final(hash, &md5_ctx);
+    esp_rom_md5_final(hash, &md5_ctx);
     
     file.close();
     

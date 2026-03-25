@@ -119,10 +119,11 @@ bool attemptRecovery() {
 
 ### Dynamic Buffer Sizing
 ```cpp
-uint32_t maxAlloc = ESP.getMaxAllocHeap();
-if (maxAlloc > 50000) smbBufferSize = 8192;
-else if (maxAlloc > 30000) smbBufferSize = 2048;
-else smbBufferSize = 1024;
+// Allocated during Phase 2 start in FileUploader.cpp
+uint32_t currentMa = ESP.getMaxAllocHeap();
+size_t smbBufSize = (currentMa > 30000) ? 8192 :
+                    (currentMa > 20000) ? 4096 :
+                    (currentMa > 15000) ? 2048 : 1024;
 ```
 
 ### Directory Creation

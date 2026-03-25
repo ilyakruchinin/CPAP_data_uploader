@@ -1,20 +1,184 @@
 #include "SMBUploader.h"
 #include "Logger.h"
 #include "NetworkRecovery.h"
+#include <esp_task_wdt.h>
 
 #ifdef ENABLE_SMB_UPLOAD
 
 #include <fcntl.h>  // For O_WRONLY, O_CREAT, O_TRUNC flags
 #include <errno.h>
 #include <string.h>
+#include <sys/poll.h>
 #include <WiFi.h>
 
 // Include libsmb2 headers
-// Note: These will be available when libsmb2 is added as ESP-IDF component
 extern "C" {
     #include "smb2/smb2.h"
     #include "smb2/libsmb2.h"
 }
+
+// ============================================================================
+// Watchdog + heartbeat helpers (needed by both async event loop and upload loop)
+// ============================================================================
+
+extern volatile unsigned long g_uploadHeartbeat;
+extern volatile bool g_abortUploadFlag;
+
+static inline void feedUploadHeartbeat() {
+    esp_task_wdt_reset();
+    g_uploadHeartbeat = millis();
+}
+
+// ============================================================================
+// Async SMB event loop infrastructure
+//
+// All SMB operations use the async API + a shared event loop that polls with
+// 1-second granularity. This ensures:
+//   - WDT is fed every iteration (no single call can block >1s)
+//   - Abort/yield flags are checked between poll cycles
+//   - lwIP gets processing time for the web server on the shared TCP/IP stack
+// ============================================================================
+
+// Callback data for async operations — mirrors libsmb2's internal sync_cb_data
+struct smb2_async_cb_data {
+    int is_finished;
+    int status;
+    void* result;  // For operations that return data (open → smb2fh*, opendir → smb2dir*)
+};
+
+static void smb2_generic_cb(struct smb2_context* smb2, int status,
+                            void* command_data, void* private_data) {
+    struct smb2_async_cb_data* cb = (struct smb2_async_cb_data*)private_data;
+    cb->is_finished = 1;
+    cb->status = status;
+    cb->result = command_data;
+}
+
+// Shared event loop — replaces libsmb2's internal wait_for_reply().
+// Returns 0 on success, -1 on error/timeout, -ECANCELED on abort.
+// smb2_service() internally calls smb2_timeout_pdus() to enforce the
+// protocol-level timeout set via smb2_set_timeout(). Our 1-second poll
+// interval guarantees smb2_service() is called at least once per second,
+// satisfying the libsmb2 timeout requirement.
+static int smb2_run_event_loop(struct smb2_context* smb2,
+                               struct smb2_async_cb_data* cb) {
+    while (!cb->is_finished) {
+        int fd = smb2_get_fd(smb2);
+        if (fd < 0) {
+            return -1;
+        }
+
+        struct pollfd pfd;
+        memset(&pfd, 0, sizeof(pfd));
+        pfd.fd = fd;
+        pfd.events = smb2_which_events(smb2);
+
+        int ret = poll(&pfd, 1, 1000);  // 1s max wait — never blocks longer
+        if (ret < 0) {
+            return -1;
+        }
+
+        if (pfd.revents) {
+            if (smb2_service(smb2, pfd.revents) < 0) {
+                return -1;
+            }
+        }
+
+        // Feed both watchdogs every iteration
+        feedUploadHeartbeat();
+
+        // Check abort flag
+        if (g_abortUploadFlag) {
+            return -ECANCELED;
+        }
+    }
+    return 0;
+}
+
+// ── Async wrapper functions ──
+// Drop-in replacements for sync smb2_*() with identical signatures.
+// Each dispatches the async variant + runs the shared event loop.
+
+static int smb2_connect_share_ev(struct smb2_context* smb2,
+                                 const char* server, const char* share,
+                                 const char* user) {
+    struct smb2_async_cb_data cb = {0, 0, nullptr};
+    int rc = smb2_connect_share_async(smb2, server, share, user,
+                                      smb2_generic_cb, &cb);
+    if (rc < 0) return rc;
+    rc = smb2_run_event_loop(smb2, &cb);
+    if (rc < 0) { cb.status = rc; return rc; }
+    return cb.status;
+}
+
+static int smb2_disconnect_share_ev(struct smb2_context* smb2) {
+    struct smb2_async_cb_data cb = {0, 0, nullptr};
+    int rc = smb2_disconnect_share_async(smb2, smb2_generic_cb, &cb);
+    if (rc < 0) return rc;
+    rc = smb2_run_event_loop(smb2, &cb);
+    if (rc < 0) return rc;
+    return cb.status;
+}
+
+static struct smb2fh* smb2_open_ev(struct smb2_context* smb2,
+                                   const char* path, int flags) {
+    struct smb2_async_cb_data cb = {0, 0, nullptr};
+    int rc = smb2_open_async(smb2, path, flags, smb2_generic_cb, &cb);
+    if (rc < 0) return nullptr;
+    rc = smb2_run_event_loop(smb2, &cb);
+    if (rc < 0 || cb.status < 0) return nullptr;
+    return (struct smb2fh*)cb.result;
+}
+
+static int smb2_close_ev(struct smb2_context* smb2, struct smb2fh* fh) {
+    struct smb2_async_cb_data cb = {0, 0, nullptr};
+    int rc = smb2_close_async(smb2, fh, smb2_generic_cb, &cb);
+    if (rc < 0) return rc;
+    rc = smb2_run_event_loop(smb2, &cb);
+    if (rc < 0) return rc;
+    return cb.status;
+}
+
+static int smb2_write_ev(struct smb2_context* smb2, struct smb2fh* fh,
+                         const uint8_t* buf, uint32_t count) {
+    struct smb2_async_cb_data cb = {0, 0, nullptr};
+    int rc = smb2_write_async(smb2, fh, buf, count, smb2_generic_cb, &cb);
+    if (rc < 0) return rc;
+    rc = smb2_run_event_loop(smb2, &cb);
+    if (rc < 0) return rc;
+    return cb.status;  // Returns bytes written on success (>=0), -errno on error
+}
+
+static int smb2_mkdir_ev(struct smb2_context* smb2, const char* path) {
+    struct smb2_async_cb_data cb = {0, 0, nullptr};
+    int rc = smb2_mkdir_async(smb2, path, smb2_generic_cb, &cb);
+    if (rc < 0) return rc;
+    rc = smb2_run_event_loop(smb2, &cb);
+    if (rc < 0) return rc;
+    return cb.status;
+}
+
+static int smb2_stat_ev(struct smb2_context* smb2, const char* path,
+                        struct smb2_stat_64* st) {
+    struct smb2_async_cb_data cb = {0, 0, nullptr};
+    int rc = smb2_stat_async(smb2, path, st, smb2_generic_cb, &cb);
+    if (rc < 0) return rc;
+    rc = smb2_run_event_loop(smb2, &cb);
+    if (rc < 0) return rc;
+    return cb.status;
+}
+
+static struct smb2dir* smb2_opendir_ev(struct smb2_context* smb2,
+                                       const char* path) {
+    struct smb2_async_cb_data cb = {0, 0, nullptr};
+    int rc = smb2_opendir_async(smb2, path, smb2_generic_cb, &cb);
+    if (rc < 0) return nullptr;
+    rc = smb2_run_event_loop(smb2, &cb);
+    if (rc < 0 || cb.status < 0) return nullptr;
+    return (struct smb2dir*)cb.result;
+}
+
+// Note: smb2_readdir() and smb2_closedir() never block — no async needed.
 
 // Buffer size for file streaming (8KB to avoid fragmentation in mixed-backend mode)
 #define UPLOAD_BUFFER_SIZE 8192
@@ -23,12 +187,7 @@ extern "C" {
 #define SMB_UPLOAD_MAX_ATTEMPTS 2
 #define SMB_WRITE_EAGAIN_RETRIES 6
 #define SMB_WRITE_EAGAIN_BASE_DELAY_MS 20
-
-extern volatile unsigned long g_uploadHeartbeat;
-
-static inline void feedUploadHeartbeat() {
-    g_uploadHeartbeat = millis();
-}
+#define SMB_WRITE_TCP_DRAIN_BYTES 16384  // Pause every 16KB to let lwIP drain TCP send buffer
 
 static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
     if (errorCode == ETIMEDOUT ||
@@ -64,9 +223,18 @@ static bool isRecoverableSmbWriteError(int errorCode, const char* smbError) {
 }
 
 static bool isSmbPduAllocationError(const char* smbError) {
-    return smbError &&
-           (strstr(smbError, "Failed to allocate pdu") != nullptr ||
-            strstr(smbError, "allocate pdu") != nullptr);
+    if (!smbError) return false;
+    // pdu.c: "Failed to allocate pdu" when calloc(sizeof(smb2_pdu)) fails
+    if (strstr(smbError, "Failed to allocate pdu") != nullptr) return true;
+    // libsmb2.c higher-level callers overwrite the pdu.c error with e.g.
+    // "Failed to create query command", "Failed to create write command",
+    // "Failed to create create command", "Failed to create close command".
+    // These all indicate smb2_cmd_*_async() returned NULL due to memory pressure.
+    if (strstr(smbError, "Failed to create") != nullptr &&
+        strstr(smbError, "command") != nullptr) return true;
+    // Encode-level failures: "Failed to allocate create buffer/name/context"
+    if (strstr(smbError, "Failed to allocate") != nullptr) return true;
+    return false;
 }
 
 static bool isTransientSmbSocketBackpressure(int errorCode, const char* smbError) {
@@ -204,7 +372,7 @@ bool SMBUploader::connect() {
     // Connect to server
     LOGF("[SMB] Connecting to //%s/%s", smbServer.c_str(), smbShare.c_str());
     
-    if (smb2_connect_share(smb2, smbServer.c_str(), smbShare.c_str(), nullptr) < 0) {
+    if (smb2_connect_share_ev(smb2, smbServer.c_str(), smbShare.c_str(), nullptr) < 0) {
         const char* error = smb2_get_error(smb2);
         LOGF("[SMB] ERROR: Connection failed: %s", error);
         LOG("[SMB] Possible causes:");
@@ -226,7 +394,7 @@ bool SMBUploader::connect() {
     if (!smbBasePath.isEmpty()) {
         String testPath = "/" + smbBasePath;
         struct smb2_stat_64 st;
-        int stat_result = smb2_stat(smb2, testPath.c_str(), &st);
+        int stat_result = smb2_stat_ev(smb2, testPath.c_str(), &st);
         if (stat_result == 0) {
             if (st.smb2_type == SMB2_TYPE_DIRECTORY) {
                 LOG_DEBUGF("[SMB] Base path verified: %s (exists and is accessible)", testPath.c_str());
@@ -247,7 +415,7 @@ void SMBUploader::disconnect() {
     g_smbConnectionActive = false;
     if (smb2 != nullptr) {
         if (connected) {
-            smb2_disconnect_share(smb2);
+            smb2_disconnect_share_ev(smb2);
             connected = false;
         }
         smb2_destroy_context(smb2);
@@ -323,7 +491,7 @@ bool SMBUploader::createDirectory(const String& path) {
     // IMPORTANT: Do not skip create/check in low-memory mode, otherwise we can
     // incorrectly report success and then fail smb2_open with PATH_NOT_FOUND.
     uint32_t maxAlloc = ESP.getMaxAllocHeap();
-    if (g_debugMode && maxAlloc < 50000) {
+    if (g_debugMode && maxAlloc < 20000) {
         LOGF("[SMB] Low memory (%u bytes), validating/creating directory: %s",
              maxAlloc,
              cleanPath.c_str());
@@ -331,7 +499,7 @@ bool SMBUploader::createDirectory(const String& path) {
     
     // Check if directory already exists
     struct smb2_stat_64 st;
-    int stat_result = smb2_stat(smb2, cleanPath.c_str(), &st);
+    int stat_result = smb2_stat_ev(smb2, cleanPath.c_str(), &st);
     if (stat_result == 0) {
         // Path exists, check if it's a directory
         if (st.smb2_type == SMB2_TYPE_DIRECTORY) {
@@ -372,7 +540,7 @@ bool SMBUploader::createDirectory(const String& path) {
     // Create this directory
     LOGF("[SMB] Creating directory: %s", cleanPath.c_str());
     
-    int mkdir_result = smb2_mkdir(smb2, cleanPath.c_str());
+    int mkdir_result = smb2_mkdir_ev(smb2, cleanPath.c_str());
     if (mkdir_result < 0) {
         const char* error = smb2_get_error(smb2);
 
@@ -385,7 +553,7 @@ bool SMBUploader::createDirectory(const String& path) {
         
         // Check if error is because directory already exists
         // STATUS_INVALID_PARAMETER can mean the directory already exists in some SMB implementations
-        if (smb2_stat(smb2, cleanPath.c_str(), &st) == 0 && st.smb2_type == SMB2_TYPE_DIRECTORY) {
+        if (smb2_stat_ev(smb2, cleanPath.c_str(), &st) == 0 && st.smb2_type == SMB2_TYPE_DIRECTORY) {
             LOG_DEBUGF("[SMB] Directory already exists (mkdir failed but stat succeeded): %s", cleanPath.c_str());
             return true;  // Directory exists, treat as success
         }
@@ -471,7 +639,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             if (parentDir != lastVerifiedParentDir) {
                 if (!createDirectory(parentDir)) {
                     uint32_t maxAllocNow = ESP.getMaxAllocHeap();
-                    if (maxAllocNow < 50000) {
+                    if (maxAllocNow < 20000) {
                         LOG_WARNF("[SMB] Parent directory check/create deferred under low memory (%u bytes): %s",
                                   maxAllocNow,
                                   parentDir.c_str());
@@ -490,7 +658,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         }
 
         // Open remote file for writing
-        struct smb2fh* remoteFile = smb2_open(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
+        struct smb2fh* remoteFile = smb2_open_ev(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
         if (remoteFile == nullptr) {
             const char* error = smb2_get_error(smb2);
 
@@ -506,9 +674,10 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
                 // context and retry once to clear any stale libsmb2 state.
                 if (!dirReady) {
                     uint32_t maxAllocNow = ESP.getMaxAllocHeap();
-                    if (maxAllocNow < 50000) {
+                    if (maxAllocNow < 20000) {
                         LOG_WARN("[SMB] Low memory during directory recovery; reconnecting SMB context and retrying once");
                         disconnect();
+                        feedUploadHeartbeat();
                         delay(150);
                         if (connect()) {
                             dirReady = createDirectory(parentDir);
@@ -521,7 +690,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
                 if (dirReady) {
                     lastVerifiedParentDir = parentDir;
                     feedUploadHeartbeat();
-                    remoteFile = smb2_open(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
+                    remoteFile = smb2_open_ev(smb2, fullRemotePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
                     if (remoteFile != nullptr) {
                         LOG_DEBUGF("[SMB] Recovered missing directory path: %s", parentDir.c_str());
                     } else {
@@ -533,7 +702,8 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             }
 
             if (remoteFile == nullptr) {
-                if (isRecoverableSmbWriteError(errno, error)) {
+                if (isRecoverableSmbWriteError(errno, error) ||
+                    isSmbPduAllocationError(error)) {
                     LOG_WARN("[SMB] Open failed with transport/socket state error; disconnecting SMB context");
                     disconnect();
                 }
@@ -553,7 +723,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         if (!uploadBuffer) {
             LOG("[SMB] ERROR: No upload buffer allocated");
             LOG("[SMB] Call allocateBuffer() before uploading");
-            smb2_close(smb2, remoteFile);
+            smb2_close_ev(smb2, remoteFile);
             localFile.close();
             return false;
         }
@@ -591,7 +761,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             const char* writeError = nullptr;
 
             for (int writeAttempt = 0; writeAttempt <= SMB_WRITE_EAGAIN_RETRIES; ++writeAttempt) {
-                bytesWritten = smb2_write(smb2, remoteFile, uploadBuffer, bytesRead);
+                bytesWritten = smb2_write_ev(smb2, remoteFile, uploadBuffer, bytesRead);
                 if (bytesWritten >= 0) {
                     break;
                 }
@@ -629,7 +799,8 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
                 LOG("[SMB]   - Remote server disk full");
                 LOG("[SMB]   - SMB command timeout");
 
-                bool recoverableTransportError = isRecoverableSmbWriteError(finalErrno, error);
+                bool recoverableTransportError = isRecoverableSmbWriteError(finalErrno, error) ||
+                                                 isSmbPduAllocationError(error);
                 if (recoverableTransportError) {
                     transportErrorDetected = true;
                     skipRemoteClose = true;
@@ -676,6 +847,16 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
             // ── POWER: Yield between chunks to allow DFS frequency scaling ──
             taskYIELD();
 
+            // ── TCP drain: pause periodically to let lwIP process ACKs ──
+            // Without this, writes fill the TCP send buffer (~32KB) faster
+            // than the stack can drain it under low-heap conditions, causing
+            // EAGAIN followed by EBADF as the socket dies from backpressure.
+            if (attemptBytesTransferred >= SMB_WRITE_TCP_DRAIN_BYTES &&
+                (attemptBytesTransferred % SMB_WRITE_TCP_DRAIN_BYTES) < uploadBufferSize) {
+                delay(10);
+                yield();
+            }
+
             // Print progress for large files (every 1MB)
             if (attemptBytesTransferred % (1024 * 1024) == 0) {
                 LOG_DEBUGF("[SMB] Progress: %lu KB / %u KB",
@@ -699,7 +880,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
         // reconnect, skip close to avoid another blocking timeout call.
         if (skipRemoteClose) {
             LOG_WARN("[SMB] Skipping smb2_close after recoverable transport failure; forcing reconnect");
-        } else if (smb2_close(smb2, remoteFile) < 0) {
+        } else if (smb2_close_ev(smb2, remoteFile) < 0) {
             const char* closeError = smb2_get_error(smb2);
             LOGF("[SMB] WARNING: Failed to close remote file: %s", closeError);
             if (isRecoverableSmbWriteError(errno, closeError)) {
@@ -741,6 +922,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
 
         LOG_WARN("[SMB] Reconnecting SMB context after recoverable transport error...");
         disconnect();
+        feedUploadHeartbeat();
         delay(150);
         if (!connect()) {
             LOG_WARN("[SMB] Initial reconnect failed after transport error");
@@ -759,6 +941,7 @@ bool SMBUploader::upload(const String& localPath, const String& remotePath,
                                   SMB_RECONNECT_ATTEMPTS_AFTER_WIFI);
                     }
 
+                    feedUploadHeartbeat();
                     delay(200 * reconnectAttempt);
                     if (connect()) {
                         smbReconnected = true;
@@ -806,7 +989,7 @@ int SMBUploader::countRemoteFiles(const String& remotePath) {
     
     // Check if directory exists
     struct smb2_stat_64 st;
-    int stat_result = smb2_stat(smb2, fullRemotePath.c_str(), &st);
+    int stat_result = smb2_stat_ev(smb2, fullRemotePath.c_str(), &st);
     if (stat_result < 0) {
         const char* error = smb2_get_error(smb2);
         LOG_DEBUGF("[SMB] Directory does not exist or cannot access: %s (%s)", fullRemotePath.c_str(), error);
@@ -819,7 +1002,7 @@ int SMBUploader::countRemoteFiles(const String& remotePath) {
     }
     
     // Open directory for reading
-    struct smb2dir* dir = smb2_opendir(smb2, fullRemotePath.c_str());
+    struct smb2dir* dir = smb2_opendir_ev(smb2, fullRemotePath.c_str());
     if (dir == nullptr) {
         const char* error = smb2_get_error(smb2);
         LOG_DEBUGF("[SMB] Failed to open directory: %s (%s)", fullRemotePath.c_str(), error);
@@ -876,7 +1059,7 @@ bool SMBUploader::getRemoteFileInfo(const String& remotePath, std::map<String, s
     
     // Check if directory exists
     struct smb2_stat_64 st;
-    int stat_result = smb2_stat(smb2, fullRemotePath.c_str(), &st);
+    int stat_result = smb2_stat_ev(smb2, fullRemotePath.c_str(), &st);
     if (stat_result < 0) {
         const char* error = smb2_get_error(smb2);
         LOG_DEBUGF("[SMB] Directory does not exist or cannot access: %s (%s)", fullRemotePath.c_str(), error);
@@ -889,7 +1072,7 @@ bool SMBUploader::getRemoteFileInfo(const String& remotePath, std::map<String, s
     }
     
     // Open directory for reading
-    struct smb2dir* dir = smb2_opendir(smb2, fullRemotePath.c_str());
+    struct smb2dir* dir = smb2_opendir_ev(smb2, fullRemotePath.c_str());
     if (dir == nullptr) {
         const char* error = smb2_get_error(smb2);
         LOG_DEBUGF("[SMB] Failed to open directory: %s (%s)", fullRemotePath.c_str(), error);

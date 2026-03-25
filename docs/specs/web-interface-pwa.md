@@ -124,6 +124,27 @@ The Logs tab maintains a persistent in-browser ring buffer (up to 2000 lines) th
 - **Clear buffer**: Resets the buffer and `lastSeenLine` state.
 - **Tab revisit behavior**: Leaving the Logs tab closes the live SSE stream; returning immediately fetches the latest circular-buffer tail and then re-establishes SSE.
 
+### Upload-Aware Log Loading
+Log backfill (`/api/logs/full`) is gated by a `_tryBackfill()` function that checks two conditions before allowing the heavy NAND log fetch:
+- **During active upload** (FSM state UPLOADING/ACQUIRING): backfill is deferred; the Logs tab falls back to `/api/logs` (circular buffer) + SSE live stream. Status bar shows "Upload active — showing live logs only".
+- **During multi-tab contention** (`_mtThrottled`): backfill is blocked entirely; the Logs tab falls back to polling. Status bar shows "Close other tabs to load full log history".
+- **Auto-resume**: When the upload finishes (state transition detected in `renderStatus()`) or multi-tab contention clears (`_mtSetDup(false)`), deferred backfill is automatically triggered — the buffer is cleared and `_tryBackfill()` is re-invoked.
+
+### Multi-Tab / Multi-Browser Detection
+Three complementary detection layers prevent multiple browser tabs/devices from overwhelming the ESP32:
+1. **BroadcastChannel** (Layer 1): Instant same-browser cross-tab detection (Chrome↔Chrome, FF↔FF). Ping/pong protocol with close notification. Does not work cross-browser.
+2. **SSE sequence counter** (Layer 2): `/api/status` includes `sse_seq` (incremented on each SSE connect server-side). If `sse_seq` advances faster than this tab's own SSE connects, another client is present. Works cross-browser and cross-device.
+3. **SSE rapid-disconnect heuristic** (Layer 3): If SSE connects then drops within 10 seconds while `/api/status` polls still succeed, another client is stealing the single SSE slot.
+
+When multi-tab is detected:
+- Warning banner with pulsing red animation
+- Status polling throttled from 5s → 15s
+- SSE stream stopped
+- Log backfill blocked (deferred until cleared)
+- Toast notification shown
+
+Decay: after **3 consecutive clean polls** (~15–30s), contention state clears automatically. The deferred backfill and SSE resume transparently.
+
 ## API Endpoints
 
 ### Status Endpoints

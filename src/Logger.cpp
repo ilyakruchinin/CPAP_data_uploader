@@ -210,8 +210,8 @@ void Logger::writeToBuffer(const char* data, size_t len) {
         // This ensures tail is advanced before head overwrites it
         if (headIndex - tailIndex >= bufferSize) {
             // Buffer is full - advance tail to make room
-            tailIndex++;
-            totalBytesLost++;
+            tailIndex = tailIndex + 1;
+            totalBytesLost = totalBytesLost + 1;
         }
         
         // Calculate physical position in buffer
@@ -221,20 +221,20 @@ void Logger::writeToBuffer(const char* data, size_t len) {
         buffer[physicalPos] = data[i];
         
         // Advance head index (monotonic counter)
-        headIndex++;
+        headIndex = headIndex + 1;
     }
 
     // Add newline if not already present
     if (len > 0 && data[len - 1] != '\n') {
         // Check if buffer is full BEFORE writing newline
         if (headIndex - tailIndex >= bufferSize) {
-            tailIndex++;
-            totalBytesLost++;
+            tailIndex = tailIndex + 1;
+            totalBytesLost = totalBytesLost + 1;
         }
         
         size_t physicalPos = headIndex % bufferSize;
         buffer[physicalPos] = '\n';
-        headIndex++;
+        headIndex = headIndex + 1;
     }
 
     // Release mutex
@@ -606,15 +606,17 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager, bool forceFlush) {
     }
 
     if (gapBytes > 0) {
-        char gapMessage[320];
+        char gapMessage[448];
         int gapLen = snprintf(
             gapMessage,
             sizeof(gapMessage),
-            "=== LOG GAP ===\n"
-            "Some log lines were not persisted because the RAM log buffer overflowed before the next LittleFS flush.\n"
-            "Bytes lost: %lu\n"
-            "High log volume during active uploads can trigger this because periodic flash flushing is deferred while uploads are running.\n"
-            "=== END LOG GAP ===\n",
+            "=== LOG NOTICE ===\n"
+            "Some detailed log lines were skipped before they could be saved to internal storage.\n"
+            "Approximate bytes skipped: %lu\n"
+            "This can happen during very busy upload periods because log saving is temporarily delayed until the upload finishes.\n"
+            "To keep logs flowing during uploads, set FLUSH_LOGS_DURING_UPLOAD=true in config.txt (may slightly increase power draw).\n"
+            "The uploader continues working normally when this appears.\n"
+            "=== END LOG NOTICE ===\n",
             (unsigned long)gapBytes
         );
         if (gapLen > 0) {
@@ -664,7 +666,7 @@ bool Logger::dumpSavedLogsPeriodic(SDCardManager* sdManager, bool forceFlush) {
 }
 
 // Stream all saved log files (oldest first) to a Print destination
-size_t Logger::streamSavedLogs(Print& output) {
+size_t Logger::streamSavedLogs(Print& output, int maxFiles) {
 #ifdef UNIT_TEST
     return 0;
 #else
@@ -672,8 +674,11 @@ size_t Logger::streamSavedLogs(Print& output) {
     size_t total = 0;
     char path[24];
     uint8_t buf[256];
+    // Determine range: maxFiles=0 means all, maxFiles=1 means only syslog.0, etc.
+    int startIdx = (maxFiles > 0 && maxFiles < SYSLOG_MAX_FILES)
+                   ? (maxFiles - 1) : (SYSLOG_MAX_FILES - 1);
     // Stream from oldest (highest index) to newest (0)
-    for (int i = SYSLOG_MAX_FILES - 1; i >= 0; i--) {
+    for (int i = startIdx; i >= 0; i--) {
         snprintf(path, sizeof(path), "/syslog.%d.txt", i);
         File f = logFileSystem->open(path, FILE_READ);
         if (!f) continue;
