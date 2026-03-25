@@ -16,7 +16,7 @@ Automatically upload CPAP therapy data from your SD card to a network share or S
 > **AirSense 10 units** ➔ see note below table.
 
 > [!CAUTION]
-> **AirSense 11 with REF 39517** ➔ most units have severe SD slot power delivery limitations. If your CPAP cannot provide enough power, the ESP32 chip will reset itself, causing frequent disconnects or spontaneous reboots (resulting in "**SD Card Error**").
+> **AirSense 11 with REF 39517** ➔ Most of these units have severe power limitations on their SD card slot. If the ESP32 card does not receive enough power, it will continually reset. You may experience frequent WiFi disconnects, failed uploads, or a "**SD Card Error**" on your CPAP machine's screen.
 
 We are currently gathering statistics on which models work reliably. **If your model is not listed below, please report your experience to help us improve this data.**
 
