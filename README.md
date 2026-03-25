@@ -20,8 +20,12 @@ Automatically upload CPAP therapy data from your SD card to a network share or S
 
 We are currently gathering statistics on which models work reliably. **If your model is not listed below, please report your experience to help us improve this data.**
 
+**👇👇👇 Click to expand:**
 <details>
-<summary><b>📋 Click to view detailed model compatibility statistics</b></summary>
+<summary>
+  <img src="./docs/logo/animated-arrow.svg" alt="Point" width="25" style="vertical-align: middle;"/> 
+  <b style="font-size: 1.2em; vertical-align: middle;">Detailed Model Compatibility Statistics</b>
+</summary>
 
 | Model | Made In | Platform | REF | Modem | Success rate | Notes |
 | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
@@ -46,7 +50,7 @@ We are currently gathering statistics on which models work reliably. **If your m
 
 </details>
 
-**👇 Click to expand:**
+---
 
 <details>
 <summary><b>🔍 How to tell if your CPAP has power issues</b></summary>
@@ -71,9 +75,10 @@ We are currently gathering statistics on which models work reliably. **If your m
 > [ERROR]  - the CPAP machine cannot provide enough power
 > ```
 
+> **Versions between v0.11.0 and v3.0i:** Added progressively more aggressive power optimizations (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility, which allowed some previously incompatible models to work. Firmware configurations like `BROWNOUT_DETECT=OFF` can also help on borderline machines.
 </details>
 
-> **Versions between v0.11.0 and v3.0i:** Added progressively more aggressive power optimizations (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility, which allowed some previously incompatible models to work. Firmware configurations like `BROWNOUT_DETECT=OFF` can also help on borderline machines.
+
 
 ---
 
