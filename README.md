@@ -16,9 +16,12 @@ Automatically upload CPAP therapy data from your SD card to a network share or S
 > **AirSense 10 units** ➔ see note below table.
 
 > [!CAUTION]
-> **AirSense 11 with REF 39517** ➔ Most of these units have severe power limitations on their SD card slot. If the ESP32 card does not receive enough power, it will continually reset. You may experience frequent WiFi disconnects, failed uploads, or a "**SD Card Error**" on your CPAP machine's screen.
+> **AirSense 11 with REF 39517** ➔ Most of these units have severe power limitations on their SD card slot. If the ESP32 card does not receive enough power, it will continually reset. You may experience frequent WiFi disconnects, failed uploads, or an "**SD Card Error**" on your CPAP machine's screen.
 
 We are currently gathering statistics on which models work reliably. **If your model is not listed below, please report your experience to help us improve this data.**
+
+<details>
+<summary><b>📋 Click to view detailed model compatibility statistics</b></summary>
 
 | Model | Made In | Platform | REF | Modem | Success rate | Notes |
 | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
@@ -40,6 +43,8 @@ We are currently gathering statistics on which models work reliably. **If your m
 > [!TIP]
 > 🔧 **Hardware Modification Work in Progress**
 > One of our users is currently testing an **SD Card Extender mod** to add more capacitance to the power line. Initial tests show promising results (improving the R390-447/1 REF 39517 from 35% to 65% success rate). We are waiting for further testing with increased capacitance, which may fully resolve power issues for the problematic models. Investigations are also ongoing to see if a capacitor mod (or a newer AirSense firmware) might resolve the mid-therapy reboot issue on AirSense 10 units.
+
+</details>
 
 **👇 Click to expand:**
 
@@ -68,7 +73,7 @@ We are currently gathering statistics on which models work reliably. **If your m
 
 </details>
 
-> **Versions between v0.11.0 and v1.0i:** Added progressively more aggressive power optimizations (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility, which allowed some previously incompatible models to work. Firmware configurations like `BROWNOUT_DETECT=OFF` can also help on borderline machines.
+> **Versions between v0.11.0 and v3.0i:** Added progressively more aggressive power optimizations (reduced TX power, 802.11b disabled, Bluetooth disabled, CPU throttled, WiFi modem-sleep enabled) specifically to improve AirSense 11 compatibility, which allowed some previously incompatible models to work. Firmware configurations like `BROWNOUT_DETECT=OFF` can also help on borderline machines.
 
 ---
 
