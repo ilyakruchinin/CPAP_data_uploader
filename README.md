@@ -2,7 +2,8 @@
 
 Automatically upload CPAP therapy data from your SD card to a network share or SleepHQ — **within minutes of taking your mask off.**
 
-* **Supports:** ResMed Series 9, 10, and 11
+* **Supports:** ResMed Series 10 and 11
+  - ℹ️ See note below for some AirSense 10 caveats
 * **Hardware:** [SD WIFI PRO](https://www.fysetc.com/products/fysetc-upgrade-sd-wifi-pro-with-card-reader-module-run-wireless-by-esp32-chip-web-server-reader-uploader-3d-printer-parts) — an ESP32-powered SD card that physically inserts into your CPAP's SD card slot like a regular memory card
 
 ---
@@ -11,7 +12,11 @@ Automatically upload CPAP therapy data from your SD card to a network share or S
 
 ### **Power Compatibility & Known Hardware Limits**
 
-Some machines (particularly certain Singapore-made AirSense 10 and 11 models) have severe SD slot power delivery limitations. If your CPAP cannot provide enough power, the ESP32 chip will reset itself, causing frequent disconnects or spontaneous reboots during therapy.
+> [!NOTE]
+> **AirSense 10 units** ➔ see note below table.
+
+> [!WARNING]
+> **AirSense 11 with REF 39517** ➔ most units have severe SD slot power delivery limitations. If your CPAP cannot provide enough power, the ESP32 chip will reset itself, causing frequent disconnects or spontaneous reboots (resulting in "**SD Card Error**").
 
 We are currently gathering statistics on which models work reliably. **If your model is not listed below, please report your experience to help us improve this data.**
 
@@ -22,12 +27,14 @@ We are currently gathering statistics on which models work reliably. **If your m
 | **AirSense 11** | Singapore | `R390-447/1` | 39517 | AIR11M1G22 | ❌ **35%** | Has known power delivery issues. Fails on most machines. |
 | ↳ *(modded)* | — | — | ↳ 39517 🔧 | — | ⚠️ **65%** | *With 1uF SD Extender Mod and `BROWNOUT_DETECT=OFF`* |
 | **AirSense 11** | Singapore | `R390-447/1` | 39520 | AIR11M1G22 | ✅ **100%** | Fully working |
-| **AirSense 11** | Singapore | `R390-447/1` | 39523 | AIR11M1U | ✅ **95%** | Stable since v1.0i-beta1 |
+| **AirSense 11** | Singapore | `R390-447/1` | 39523 | AIR11M1U | ✅ **100%** | Stable since v1.0i-beta1 (had issues prior) |
 | **AirSense 11** | Australia | `R390-453/1` | 39532 | AIR114GT | ✅ **100%** | Fully working |
-| **AirSense 10** | Australia | `R370-4102/1` | 37043 | AIR104G | ⚠️ **100%** | ⚠️ Investigating (SX567-0306 Airbreak) (ye) |
-| **AirSense 10** | Singapore | `R370-4201/1` | 37127 | *(not specified/Europe)* | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0401). Resumes normal function afterwards. |
-| **AirSense 10** | Singapore | `R370-4207/1` | 37160 | AIR104GU | ⚠️ **100%** | **Working, but with a known issue**: reboots ESP during therapy (SX567-0402). Resumes normal function afterwards. |
-| **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not provided)* | ⚠️ **100%** | ⚠️ Investigating (SX567-0306) (ro) |
+| **AirSense 10** | Australia | `R370-4102/1` | 37043 | AIR104G | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
+| **AirSense 10** | Singapore | `R370-4201/1` | 37127 | *(not specified/Europe)* | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
+| **AirSense 10** | Singapore | `R370-4207/1` | 37160 | AIR104GU | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
+| **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not provided)* | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
+
+> ℹ️ **AirSense 10 Note:** AirSense 10 machines (unlike AirSense 11) power-cycle the SD card slot every 60 seconds while actively blowing air. This causes the ESP32 card to constantly reboot during therapy, which will degrade the Web UI experience while you are sleeping. However, **this does not affect functionality** — once you stop therapy (take off the mask or stop the machine from blowing air), the card will boot up normally and complete the upload as expected.
 
 > 🔧 **Hardware Modification Work in Progress**
 > One of our users is currently testing an **SD Card Extender mod** to add more capacitance to the power line. Initial tests with a pre-installed 1uF capacitor show promising results (improving the R390-447/1 REF 39517 from 35% to 65% success rate). We are waiting for further testing with increased capacitance, which may fully resolve power issues for the problematic models. Investigations are also ongoing to see if a capacitor mod (or a newer AirSense firmware) might resolve the mid-therapy reboot issue on the Singapore AirSense 10s.
