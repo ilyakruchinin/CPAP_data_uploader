@@ -37,7 +37,7 @@ We are currently gathering statistics on which models work reliably. **If your m
 > ℹ️ **AirSense 10 Note:** AirSense 10 machines (unlike AirSense 11) power-cycle the SD card slot every 60 seconds while actively blowing air. This causes the ESP32 card to constantly reboot during therapy, which will degrade the Web UI experience while you are sleeping. However, **this does not affect functionality** — once you stop therapy (take off the mask or stop the machine from blowing air), the card will boot up normally and complete the upload as expected.
 
 > 🔧 **Hardware Modification Work in Progress**
-> One of our users is currently testing an **SD Card Extender mod** to add more capacitance to the power line. Initial tests with a pre-installed 1uF capacitor show promising results (improving the R390-447/1 REF 39517 from 35% to 65% success rate). We are waiting for further testing with increased capacitance, which may fully resolve power issues for the problematic models. Investigations are also ongoing to see if a capacitor mod (or a newer AirSense firmware) might resolve the mid-therapy reboot issue on the Singapore AirSense 10s.
+> One of our users is currently testing an **SD Card Extender mod** to add more capacitance to the power line. Initial tests show promising results (improving the R390-447/1 REF 39517 from 35% to 65% success rate). We are waiting for further testing with increased capacitance, which may fully resolve power issues for the problematic models. Investigations are also ongoing to see if a capacitor mod (or a newer AirSense firmware) might resolve the mid-therapy reboot issue on AirSense 10 units.
 
 **👇 Click to expand:**
 
