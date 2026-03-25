@@ -22,17 +22,17 @@ We are currently gathering statistics on which models work reliably. **If your m
 
 | Model | Made In | Platform | REF | Modem | Success rate | Notes |
 | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
-| **AirSense 11** | Singapore | `R390-420/1` | 39480 | *(not specified/Europe)* | ✅ **100%** | Fully working |
-| **AirSense 11** | Singapore | `R390-451/1` | 39483 | *(not specified/Europe)* | ✅ **100%** | Fully working |
+| **AirSense 11** | Singapore | `R390-420/1` | 39480 | *(not specified / Europe)* | ✅ **100%** | Fully working |
+| **AirSense 11** | Singapore | `R390-451/1` | 39483 | *(not specified / Europe)* | ✅ **100%** | Fully working |
 | **AirSense 11** | Singapore | `R390-447/1` | 39517 | AIR11M1G22 | ❌ **35%** | Has known power delivery issues. Fails on most machines. |
 | ↳ *(modded)* | — | — | ↳ 39517 🔧 | — | ⚠️ **65%** | *With 1uF SD Extender Mod and `BROWNOUT_DETECT=OFF`* |
 | **AirSense 11** | Singapore | `R390-447/1` | 39520 | AIR11M1G22 | ✅ **100%** | Fully working |
 | **AirSense 11** | Singapore | `R390-447/1` | 39523 | AIR11M1U | ✅ **100%** | Stable since v1.0i-beta1 (had issues prior) |
 | **AirSense 11** | Australia | `R390-453/1` | 39532 | AIR114GT | ✅ **100%** | Fully working |
 | **AirSense 10** | Australia | `R370-4102/1` | 37043 | AIR104G | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
-| **AirSense 10** | Singapore | `R370-4201/1` | 37127 | *(not specified/Europe)* | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
+| **AirSense 10** | Singapore | `R370-4201/1` | 37127 | *(not specified / Europe)* | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
 | **AirSense 10** | Singapore | `R370-4207/1` | 37160 | AIR104GU | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
-| **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not specified/Australia)* | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
+| **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not specified / Australia)* | ✅ **100%** | ℹ️ Fully working, see below for AirSense 10 caveats |
 
 > ℹ️ **AirSense 10 Note:** AirSense 10 machines (unlike AirSense 11) power-cycle the SD card slot every 60 seconds while actively blowing air. This causes the ESP32 card to constantly reboot during therapy, which will degrade the Web UI experience while you are sleeping. However, **this does not affect functionality** — once you stop therapy (take off the mask or stop the machine from blowing air), the card will boot up normally and complete the upload as expected.
 
