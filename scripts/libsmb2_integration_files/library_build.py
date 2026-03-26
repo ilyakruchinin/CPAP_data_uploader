@@ -2,7 +2,9 @@ Import("env")
 import os
 
 # Get the library source directory from the environment
-lib_source_dir = env.get("PROJECT_SRC_DIR", "").replace("/src", "/components/libsmb2")
+lib_source_dir = "/components/libsmb2".join(
+    env.get("PROJECT_SRC_DIR", "").rsplit("/src", 1)
+)
 
 # Add include paths relative to library root
 env.Append(CPPPATH=[
