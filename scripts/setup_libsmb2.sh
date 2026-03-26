@@ -59,6 +59,21 @@ mkdir -p components/libsmb2/lib
 cp "$integration_source/lib/esp_compat_wrapper.h" components/libsmb2/lib/
 echo "  ✓ Copied esp_compat_wrapper.h"
 
+# During ESP-IDF component requirements scanning, this file is included in cmake script mode
+# where most commands (add_definitions, add_subdirectory, etc.) are unavailable. 
+# Return early since deps are declared in idf_component.yml
+if ! grep -q "^# Return early for ESP-IDF build" components/libsmb2/CMakeLists.txt ; then
+    {
+        printf '%s\n' \
+            '# Return early for ESP-IDF build' \
+            'if(ESP_PLATFORM AND CMAKE_SCRIPT_MODE_FILE)' \
+            '  return()' \
+            'endif()' \
+            ''
+        cat components/libsmb2/CMakeLists.txt
+    } > components/libsmb2/CMakeLists.txt.tmp && mv components/libsmb2/CMakeLists.txt.tmp components/libsmb2/CMakeLists.txt
+fi
+
 # Check platformio.ini configuration
 echo ""
 echo "Checking platformio.ini configuration..."
