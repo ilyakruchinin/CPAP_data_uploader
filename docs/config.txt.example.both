@@ -27,8 +27,10 @@ INACTIVITY_SECONDS = 125
 EXCLUSIVE_ACCESS_MINUTES = 5
 COOLDOWN_MINUTES = 10
 
-# Timezone
+# Timezone (use TZ_STRING for automatic DST, or GMT_OFFSET_HOURS for simple offset)
+# TZ_STRING = CET-1CEST,M3.5.0,M10.5.0/3
 GMT_OFFSET_HOURS = 0
+# NTP_SERVER = pool.ntp.org
 
 # Advanced Power Settings (defaults are optimized for low power — most users can omit these)
 # CPU_SPEED_MHZ = 80
