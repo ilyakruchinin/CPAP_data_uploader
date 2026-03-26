@@ -13,7 +13,7 @@ Automatically upload CPAP therapy data from your SD card to a network share or S
 ### **Power Compatibility & Known Hardware Limits**
 
 > [!NOTE]
-> **AirSense 10 units** ➔ see note below table.
+> ℹ️ **AirSense 10 units:** These machines power-cycle the SD card slot every 60 seconds while actively blowing air. This causes the ESP32 card to constantly reboot during therapy, which will degrade the Web UI experience while you are sleeping. However, **this does not affect functionality** — once you stop therapy (take off the mask or stop the machine from blowing air), the card will boot up normally and complete the upload as expected.
 
 > [!CAUTION]
 > **AirSense 11 with REF 39517** ➔ Most of these units have severe power limitations on their SD card slot. If the ESP32 card does not receive enough power, it will continually reset. You may experience frequent WiFi disconnects, failed uploads, or an "**SD Card Error**" on your CPAP machine's screen.
@@ -40,9 +40,6 @@ We are currently gathering statistics on which models work reliably. **If your m
 | **AirSense 10** | Singapore | `R370-4201/1` | 37127 | *(not specified / Europe)* | ✅ **100%** | ℹ️ Fully working, see notes |
 | **AirSense 10** | Singapore | `R370-4207/1` | 37160 | AIR104GU | ✅ **100%** | ℹ️ Fully working, see notes |
 | **AirSense 10** | Australia | `R370-449/1` | 37437 | *(not specified / Australia)* | ✅ **100%** | ℹ️ Fully working, see notes |
-
-> [!NOTE]
-> ℹ️ **AirSense 10 Note:** AirSense 10 machines (unlike AirSense 11) power-cycle the SD card slot every 60 seconds while actively blowing air. This causes the ESP32 card to constantly reboot during therapy, which will degrade the Web UI experience while you are sleeping. However, **this does not affect functionality** — once you stop therapy (take off the mask or stop the machine from blowing air), the card will boot up normally and complete the upload as expected.
 
 > [!TIP]
 > 🔧 **Hardware Modification Work in Progress**
