@@ -21,14 +21,16 @@ private:
     // NTP
     unsigned long lastUploadTimestamp;
     bool ntpSynced;
-    const char* ntpServer;
+    String ntpServer;
+    String tzString;
     int gmtOffsetHours;
 
 public:
     ScheduleManager();
     
     // New FSM-aware begin
-    bool begin(const String& mode, int startHour, int endHour, int gmtOffsetHours);
+    bool begin(const String& mode, int startHour, int endHour, int gmtOffsetHours,
+               const String& tzString = "", const String& ntpServer = "pool.ntp.org");
     
     // Legacy begin (backward compat — creates a 2-hour window from uploadHour)
     bool begin(int uploadHour, int gmtOffsetHours);

@@ -271,7 +271,9 @@ bool FileUploader::begin() {
             config->getUploadMode(),
             config->getUploadStartHour(),
             config->getUploadEndHour(),
-            config->getGmtOffsetHours())) {
+            config->getGmtOffsetHours(),
+            config->getTzString(),
+            config->getNtpServer())) {
         LOG("[FileUploader] ERROR: Failed to initialize ScheduleManager");
         return false;
     }

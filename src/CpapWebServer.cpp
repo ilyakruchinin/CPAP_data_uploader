@@ -876,7 +876,8 @@ void CpapWebServer::initConfigSnapshot() {
         ",\"upload_start_hour\":%d,\"upload_end_hour\":%d"
         ",\"inactivity_seconds\":%d"
         ",\"exclusive_access_minutes\":%d,\"cooldown_minutes\":%d"
-        ",\"gmt_offset_hours\":%d,\"max_days\":%d,\"recent_folder_days\":%d"
+        ",\"gmt_offset_hours\":%d,\"tz_string\":\"%s\",\"ntp_server\":\"%s\""
+        ",\"max_days\":%d,\"recent_folder_days\":%d"
         ",\"cloud_configured\":%s"
         ",\"brownout_detect_mode\":\"%s\""
         ",\"firmware\":\"%s\"}",
@@ -888,7 +889,9 @@ void CpapWebServer::initConfigSnapshot() {
         config->getUploadStartHour(), config->getUploadEndHour(),
         config->getInactivitySeconds(),
         config->getExclusiveAccessMinutes(), config->getCooldownMinutes(),
-        config->getGmtOffsetHours(), config->getMaxDays(), config->getRecentFolderDays(),
+        config->getGmtOffsetHours(),
+        config->getTzString().c_str(), config->getNtpServer().c_str(),
+        config->getMaxDays(), config->getRecentFolderDays(),
         hasCloud ? "true" : "false",
         config->getBrownoutDetectMode() == BrownoutDetectMode::OFF ? "OFF" : 
         (config->getBrownoutDetectMode() == BrownoutDetectMode::RELAXED ? "RELAXED" : "ENABLED"),

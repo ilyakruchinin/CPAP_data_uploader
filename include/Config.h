@@ -47,6 +47,8 @@ private:
     String endpointUser;
     String endpointPassword;
     int gmtOffsetHours;
+    String tzString;    // POSIX TZ string, e.g. "CET-1CEST,M3.5.0,M10.5.0/3"
+    String ntpServer;
     bool saveLogs;
     bool debugMode;
     bool isValid;
@@ -132,6 +134,8 @@ public:
     const String& getEndpointUser() const;
     const String& getEndpointPassword() const;
     int getGmtOffsetHours() const;
+    const String& getTzString() const;
+    const String& getNtpServer() const;
     bool getSaveLogs() const;
     bool getDebugMode() const;
     bool valid() const;

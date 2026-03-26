@@ -16,17 +16,26 @@ ScheduleManager::ScheduleManager() :
     gmtOffsetHours(0)
 {}
 
-bool ScheduleManager::begin(const String& mode, int startHour, int endHour, int gmtOffset) {
+bool ScheduleManager::begin(const String& mode, int startHour, int endHour,
+                            int gmtOffset, const String& tz, const String& ntp) {
     this->uploadMode = mode;
     this->uploadStartHour = startHour;
     this->uploadEndHour = endHour;
     this->gmtOffsetHours = gmtOffset;
+    this->tzString = tz;
+    this->ntpServer = ntp;
     
     // Also set legacy uploadHour for backward compat
     this->uploadHour = startHour;
     
-    LOGF("[Schedule] Mode: %s, Window: %d:00-%d:00, GMT%+d",
-         mode.c_str(), startHour, endHour, gmtOffset);
+    if (tzString.length() > 0) {
+        LOGF("[Schedule] Mode: %s, Window: %d:00-%d:00, TZ: %s",
+             mode.c_str(), startHour, endHour, tzString.c_str());
+    } else {
+        LOGF("[Schedule] Mode: %s, Window: %d:00-%d:00, GMT%+d",
+             mode.c_str(), startHour, endHour, gmtOffset);
+    }
+    LOGF("[Schedule] NTP server: %s", ntpServer.c_str());
     
     syncTime();
     return true;
@@ -45,7 +54,8 @@ bool ScheduleManager::begin(int uploadHour, int gmtOffsetHours) {
 }
 
 bool ScheduleManager::syncTime() {
-    LOGF("[NTP] Starting time sync with server: %s", ntpServer);
+    LOGF("[NTP] Starting time sync with server: %s", ntpServer.c_str());
+    LOGF("[NTP] TZ string: %s", tzString.c_str());
     LOGF("[NTP] GMT offset: %d hours", gmtOffsetHours);
     
     // Allow network to stabilize after WiFi connection.
@@ -61,9 +71,14 @@ bool ScheduleManager::syncTime() {
     // ICMP reachability is not required for NTP (uses UDP/123).
     LOG("[NTP] Proceeding directly with UDP NTP sync (ICMP pre-check disabled)");
     
-    // Configure time with NTP server and timezone offset (convert hours to seconds)
-    long gmtOffsetSeconds = gmtOffsetHours * 3600L;
-    configTime(gmtOffsetSeconds, 0, ntpServer);
+    if (tzString.length() > 0) {
+        LOGF("[NTP] Using POSIX timezone: %s", tzString.c_str());
+        configTzTime(tzString.c_str(), ntpServer.c_str());
+    } else {
+        LOGF("[NTP] Using GMT offset: %d hours (no DST)", gmtOffsetHours);
+        long gmtOffsetSeconds = gmtOffsetHours * 3600L;
+        configTime(gmtOffsetSeconds, 0, ntpServer.c_str());
+    }
     
     // Wait for time to be set (with timeout)
     int retries = 0;
@@ -263,10 +278,17 @@ String ScheduleManager::getCurrentLocalTime() const {
         return "Failed to get local time";
     }
     
-    char buffer[32];
-    snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d (GMT%+d)",
-             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
-             gmtOffsetHours);
+    char buffer[48];
+    if (tzString.length() > 0) {
+        snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d (%s)",
+                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+                 timeinfo.tm_isdst > 0 ? "DST" : "STD");
+    } else {
+        snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d (GMT%+d)",
+                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+                 gmtOffsetHours);
+    }
+
     
     return String(buffer);
 }
