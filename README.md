@@ -115,17 +115,22 @@ ENDPOINT_PASSWORD = password
 <details>
 <summary><b>☁️ SleepHQ Cloud</b></summary>
 
+*(Note: A SleepHQ Pro subscription is required. The API keys below are generated from your SleepHQ Account Settings, they are **NOT** your username and password).*
+
 ```ini
 WIFI_SSID = YourWiFiName
 WIFI_PASSWORD = YourWiFiPassword
+
 ENDPOINT_TYPE = CLOUD
-CLOUD_CLIENT_ID = your-client-id
-CLOUD_CLIENT_SECRET = your-client-secret
+CLOUD_CLIENT_ID = your-sleephq-client-id
+CLOUD_CLIENT_SECRET = your-sleephq-client-secret
 ```
 </details>
 
 <details>
 <summary><b>🔄 Both (SMB + SleepHQ simultaneously)</b></summary>
+
+*(Note: A SleepHQ Pro subscription is required. The API keys below are generated from your SleepHQ Account Settings, they are **NOT** your username and password).*
 
 ```ini
 WIFI_SSID = YourWiFiName

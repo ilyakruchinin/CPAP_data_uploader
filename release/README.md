@@ -272,12 +272,20 @@ Insert the SD card into your CPAP machine's SD slot and power it on. The device 
   - `SMB,CLOUD` - Upload to both (simultaneously)
 
 **CLOUD_CLIENT_ID** (required for CLOUD)
-- Your SleepHQ Client ID
+- Your SleepHQ Client ID (this is **NOT** your username)
 - Example: `CLOUD_CLIENT_ID = your-client-id`
 
 **CLOUD_CLIENT_SECRET** (required for CLOUD)
-- Your SleepHQ Client Secret
+- Your SleepHQ Client Secret (this is **NOT** your password)
 - Example: `CLOUD_CLIENT_SECRET = your-client-secret`
+
+> ⚠️ **How to get your SleepHQ API Keys**
+> 1. A **SleepHQ Pro** (paid) subscription is required to use the API.
+> 2. Go to your SleepHQ Dashboard: https://sleephq.com/account
+> 3. Click **"Account Settings"** in the bottom-left corner.
+> 4. Scroll down to the **"API Keys"** section and click **"Add API Key"**.
+> 5. Copy the generated `Client UID` into your config as `CLOUD_CLIENT_ID`
+> 6. Copy the generated `Client Secret` into your config as `CLOUD_CLIENT_SECRET`
 
 **ENDPOINT_USER** (required for SMB)
 - Username for the network share
@@ -717,6 +725,11 @@ In scheduled mode the uploader **only runs during the configured window** (e.g. 
 - Verify file uses correct Key-Value format (see examples)
 
 ### Cloud / SleepHQ Issues
+
+**OAuth failed with HTTP 401 (invalid_client)**
+- You are likely using your SleepHQ account password instead of an API Key.
+- You must generate an API key from the **Account Settings -> API Keys** section on the SleepHQ dashboard.
+- A **SleepHQ Pro** subscription is required to generate and use API keys.
 
 **Authentication Failed**
 - Verify `CLOUD_CLIENT_ID` and `CLOUD_CLIENT_SECRET` in `config.txt`
