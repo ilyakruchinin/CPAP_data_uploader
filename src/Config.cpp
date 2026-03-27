@@ -30,6 +30,7 @@ Config::Config() :
     cooldownMinutes(10),
     enable1BitSdMode(false),  // Default to safer 4-bit mode
     sdCmd0OnRelease(false),   // Default: off (AS11 compat); AS10 users enable via config
+    as10Mode(false),          // Default: off; AS10 users set AS10=true
     minimizeReboots(true),
     flushLogsDuringUpload(false),  // Default: defer log flushes during uploads
     
@@ -230,6 +231,8 @@ void Config::setConfigValue(String key, String value) {
         enable1BitSdMode = (value.equalsIgnoreCase("true") || value == "1");
     } else if (key == "SD_CMD0_ON_RELEASE") {
         sdCmd0OnRelease = (value.equalsIgnoreCase("true") || value == "1");
+    } else if (key == "AS10") {
+        as10Mode = (value.equalsIgnoreCase("true") || value == "1");
     } else if (key == "CPU_SPEED_MHZ") {
         cpuSpeedMhz = value.toInt();
     } else if (key == "WIFI_TX_PWR") {
@@ -394,6 +397,62 @@ bool Config::migrateToSecureStorage(fs::FS &sd) {
     LOG("========================================");
     
     return true;
+}
+
+// Load config from a cached raw string (NVS).  Used by AS10 therapy-safe boot
+// to avoid touching the SD card MUX during rapid power-on reboots.
+// Skips credential migration and config file censoring (no SD access).
+bool Config::loadFromCachedString(const String& rawConfig) {
+    LOG("[AS10] Loading config from NVS cache...");
+
+    int startIdx = 0;
+    int len = (int)rawConfig.length();
+    while (startIdx < len) {
+        int endIdx = rawConfig.indexOf('\n', startIdx);
+        if (endIdx == -1) endIdx = len;
+        String line = rawConfig.substring(startIdx, endIdx);
+        parseLine(line);
+        startIdx = endIdx + 1;
+    }
+
+    // Handle masked credentials: load from Preferences (NVS) if censored
+    if (maskCredentials) {
+        if (initPreferences()) {
+            if (isCensored(wifiPassword)) {
+                wifiPassword = loadCredential(PREFS_KEY_WIFI_PASS, "");
+                LOG("Loaded WiFi password from flash");
+            }
+            if (isCensored(endpointPassword)) {
+                endpointPassword = loadCredential(PREFS_KEY_ENDPOINT_PASS, "");
+                LOG("Loaded endpoint password from flash");
+            }
+            if (isCensored(cloudClientSecret)) {
+                cloudClientSecret = loadCredential(PREFS_KEY_CLOUD_SECRET, "");
+                LOG("Loaded cloud client secret from flash");
+            }
+            credentialsInFlash = true;
+        }
+    }
+
+    // Compute cached endpoint type flags
+    {
+        String upper = endpointType;
+        upper.toUpperCase();
+        _hasSmbEndpoint = (upper.indexOf("SMB") >= 0);
+        _hasCloudEndpoint = (upper.indexOf("CLOUD") >= 0 || upper.indexOf("SLEEPHQ") >= 0);
+        _hasWebdavEndpoint = (upper.indexOf("WEBDAV") >= 0);
+    }
+
+    // Minimal validation — full range checks were done on original load
+    isValid = !wifiSSID.isEmpty();
+
+    if (isValid) {
+        LOG("[AS10] Cached config loaded successfully");
+    } else {
+        LOG_ERROR("[AS10] Cached config invalid (no WiFi SSID)");
+    }
+
+    return isValid;
 }
 
 // Main function to load configuration from SD card
@@ -652,6 +711,7 @@ int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
 int Config::getCooldownMinutes() const { return cooldownMinutes; }
 bool Config::getEnable1BitSdMode() const { return enable1BitSdMode; }
 bool Config::getSdCmd0OnRelease() const { return sdCmd0OnRelease; }
+bool Config::getAS10Mode() const { return as10Mode; }
 bool Config::getMinimizeReboots() const { return minimizeReboots; }
 bool Config::getFlushLogsDuringUpload() const { return flushLogsDuringUpload; }
 bool Config::isSmartMode() const { return uploadMode == "smart"; }

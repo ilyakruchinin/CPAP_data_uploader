@@ -135,6 +135,33 @@ static void setRebootReason(const char* reason) {
     p.end();
 }
 
+// ── AS10: NVS config cache helpers ──
+// Cache raw config.txt content to NVS so rapid power-on reboots (AS10 therapy
+// kill) can load config without touching the SD card MUX.
+static void cacheConfigToNVS(fs::FS& sd) {
+    File f = sd.open("/config.txt", FILE_READ);
+    if (!f) {
+        LOG_WARN("[AS10] Failed to open config.txt for caching");
+        return;
+    }
+    String content = f.readString();
+    f.close();
+
+    Preferences p;
+    p.begin("cfg_cache", false);
+    p.putString("raw", content);
+    p.end();
+    LOGF("[AS10] Config cached to NVS (%d bytes)", content.length());
+}
+
+static String loadCachedConfigFromNVS() {
+    Preferences p;
+    p.begin("cfg_cache", true);  // read-only
+    String content = p.getString("raw", "");
+    p.end();
+    return content;
+}
+
 struct UploadTaskParams {
     FileUploader* uploader;
     SDCardManager* sdManager;
@@ -382,13 +409,14 @@ void setup() {
     // A high consecutive count indicates external power cycling (e.g. CPAP
     // periodically cutting SD slot VCC during therapy).  Any non-POWERON
     // reset (software reboot, watchdog, brownout) breaks the chain.
+    uint16_t consecutivePOR = 0;
     {
         Preferences bootStats;
         bootStats.begin("boot_stats", false);
         uint32_t totalBoots = bootStats.getUInt("total", 0) + 1;
         bootStats.putUInt("total", totalBoots);
 
-        uint16_t consecutivePOR = bootStats.getUShort("consec_por", 0);
+        consecutivePOR = bootStats.getUShort("consec_por", 0);
         if (resetReason == ESP_RST_POWERON) {
             consecutivePOR++;
         } else {
@@ -473,54 +501,32 @@ void setup() {
     
     // Initialize TrafficMonitor (PCNT-based bus activity detection on CS_SENSE pin)
     trafficMonitor.begin(CS_SENSE);
-    
+
+    // ── AS10: Therapy-safe cached boot ──
+    // If this is a rapid power-on reboot (consecutivePOR >= 2) and we have a
+    // cached config with AS10=true, skip the SD card MUX grab entirely.
+    // This breaks the AS10 infinite reboot loop: the CPAP power-cycles the
+    // SD slot (killing the ESP32), the ESP32 reboots and would normally grab
+    // the MUX to read config.txt, destroying the CPAP's SD session again.
+    // By using cached config, we avoid touching the MUX, letting the CPAP's
+    // reinit succeed and therapy continue uninterrupted.
+    bool usedCachedConfig = false;
+    if (resetReason == ESP_RST_POWERON && consecutivePOR >= 2) {
+        String cached = loadCachedConfigFromNVS();
+        if (!cached.isEmpty()) {
+            if (config.loadFromCachedString(cached) && config.getAS10Mode()) {
+                usedCachedConfig = true;
+                LOG_WARN("[AS10] Therapy-safe boot — using cached config, skipping SD card access");
+            }
+        }
+    }
 
     // Determine boot type: software reset (ESP_RST_SW) = soft-reboot / FastBoot.
     // Cold boots (power-on, brownout, watchdog) use distinct reason codes.
     g_heapRecoveryBoot = (esp_reset_reason() == ESP_RST_SW);
     bool fastBoot = g_heapRecoveryBoot;
 
-    // Smart Wait constants — same values for both cold and soft-reboot.
-    // 5 s of continuous SD bus silence required before taking control.
-    // The previous 45s hostile takeover timeout has been removed to prevent filesystem corruption.
-    const unsigned long SMART_WAIT_REQUIRED_MS = 5000;
-
-    auto runSmartWait = [&]() {
-        LOG("Checking for CPAP SD card activity (Smart Wait)...");
-        while (true) {
-            trafficMonitor.update();
-            delay(10);
-            if (trafficMonitor.isIdleFor(SMART_WAIT_REQUIRED_MS)) {
-                LOGF("Smart Wait: %lums of bus silence — CPAP is idle", SMART_WAIT_REQUIRED_MS);
-                break;
-            }
-        }
-    };
-
-    if (fastBoot) {
-        // Soft-reboot: voltages already stable, skip 15 s electrical stabilization.
-        // Smart Wait still runs — CPAP may have been mid-access when the reboot
-        // was triggered and we must wait for it to finish before touching the SD card.
-        LOG("[FastBoot] Software reset — skipping 15s electrical stabilization");
-        runSmartWait();
-    } else {
-        // Cold boot: wait for power-rail stabilization and CPAP boot sequence to settle,
-        // then wait for SD bus silence before attempting to take SD card control.
-        // 8 seconds is sufficient for voltage rails and CPAP initialization.
-        LOG("Waiting 8s for electrical stabilization...");
-        delay(8000);
-        runSmartWait();
-    }
-    
-    LOG("Boot delay complete, attempting SD card access...");
-
-    // Take control of SD card
-    LOG("Waiting to access SD card...");
-    while (!sdManager.takeControl()) {
-        delay(1000);
-    }
-
-    // Check NVS flags from previous boot
+    // ── NVS flags check (always runs — uses Preferences + LittleFS, not SD) ──
     {
         Preferences resetPrefs;
         resetPrefs.begin("cpap_flags", false);
@@ -576,32 +582,78 @@ void setup() {
         }
     }
 
-    // Read config file from SD card
-    LOG("Loading configuration...");
-    if (!config.loadFromSD(sdManager.getFS())) {
-        LOG_ERROR("Failed to load configuration - cannot continue");
-        LOG_ERROR("Please check config.txt file on SD card");
+    if (!usedCachedConfig) {
+        // ── Normal boot path: wait for bus silence, take SD, load config ──
+
+        // Smart Wait constants — same values for both cold and soft-reboot.
+        // 5 s of continuous SD bus silence required before taking control.
+        const unsigned long SMART_WAIT_REQUIRED_MS = 5000;
+
+        auto runSmartWait = [&]() {
+            LOG("Checking for CPAP SD card activity (Smart Wait)...");
+            while (true) {
+                trafficMonitor.update();
+                delay(10);
+                if (trafficMonitor.isIdleFor(SMART_WAIT_REQUIRED_MS)) {
+                    LOGF("Smart Wait: %lums of bus silence — CPAP is idle", SMART_WAIT_REQUIRED_MS);
+                    break;
+                }
+            }
+        };
+
+        if (fastBoot) {
+            LOG("[FastBoot] Software reset — skipping 15s electrical stabilization");
+            runSmartWait();
+        } else {
+            LOG("Waiting 8s for electrical stabilization...");
+            delay(8000);
+            runSmartWait();
+        }
         
-        // ── EMERGENCY BOOT ERROR DUMP ──
-        // Without config, we have no WiFi and no Web UI. We must dump the reason
-        // directly to the SD card so the user can read it on their PC.
-        LOG_ERROR("FATAL ERROR: System halted due to config failure. Please check config.txt.");
-        Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt", "Config load failure");
-        
-        sdManager.releaseControl();
-        
-        // Save logs to internal storage for configuration failures
-        bool dumped = Logger::getInstance().dumpSavedLogs("config_load_failed");
-        if (!dumped) {
-            LOG_WARN("Failed to persist logs (config_load_failed)");
+        LOG("Boot delay complete, attempting SD card access...");
+
+        // Take control of SD card
+        LOG("Waiting to access SD card...");
+        while (!sdManager.takeControl()) {
+            delay(1000);
         }
 
-        // Fail-safe: always force SD switch back to CPAP before aborting setup
-        digitalWrite(SD_SWITCH_PIN, SD_SWITCH_CPAP_VALUE);
-        
-        return;
+        // Read config file from SD card
+        LOG("Loading configuration...");
+        if (!config.loadFromSD(sdManager.getFS())) {
+            LOG_ERROR("Failed to load configuration - cannot continue");
+            LOG_ERROR("Please check config.txt file on SD card");
+            
+            // ── EMERGENCY BOOT ERROR DUMP ──
+            LOG_ERROR("FATAL ERROR: System halted due to config failure. Please check config.txt.");
+            Logger::getInstance().dumpToSD(sdManager.getFS(), "/uploader_error.txt", "Config load failure");
+            
+            sdManager.releaseControl();
+            
+            bool dumped = Logger::getInstance().dumpSavedLogs("config_load_failed");
+            if (!dumped) {
+                LOG_WARN("Failed to persist logs (config_load_failed)");
+            }
+
+            // Fail-safe: always force SD switch back to CPAP before aborting setup
+            digitalWrite(SD_SWITCH_PIN, SD_SWITCH_CPAP_VALUE);
+            
+            return;
+        }
+
+        // Check if a previous boot left an emergency error log on the SD card
+        Logger::getInstance().checkPreviousBootError(sdManager.getFS());
+
+        // Cache config to NVS if AS10 mode is enabled
+        if (config.getAS10Mode()) {
+            cacheConfigToNVS(sdManager.getFS());
+        }
+
+        // Release SD card back to CPAP machine
+        sdManager.releaseControl();
     }
 
+    // ── Common path: config post-processing (runs for both cached and SD boot) ──
     LOG("Configuration loaded successfully");
     g_debugMode = config.getDebugMode();
     if (g_debugMode) {
@@ -610,21 +662,11 @@ void setup() {
     LOG_DEBUGF("WiFi SSID: %s", config.getWifiSSID().c_str());
     LOG_DEBUGF("Endpoint: %s", config.getEndpoint().c_str());
 
-    // Check if a previous boot left an emergency error log on the SD card
-    Logger::getInstance().checkPreviousBootError(sdManager.getFS());
-
-    // Configure LittleFS-backed syslog rotation for optional periodic persistence.
-    // The filesystem pointer is already registered so emergency pre-reboot
-    // flushes can persist logs even with PERSISTENT_LOGS=false.
+    // Configure LittleFS-backed syslog rotation for optional periodic persistence
     Logger::getInstance().enableLogSaving(config.getSaveLogs(), &LittleFS);
     if (config.getSaveLogs()) {
-        // Flush immediately so boot logs (reset reason, Smart Wait, config load)
-        // are captured to NAND before upload activity overwrites the 8KB buffer.
         Logger::getInstance().dumpSavedLogsPeriodic(nullptr);
     }
-
-    // Release SD card back to CPAP machine
-    sdManager.releaseControl();
 
     // Apply power management settings from config
     LOG("Applying power management settings...");
