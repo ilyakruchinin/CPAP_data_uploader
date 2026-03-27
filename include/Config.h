@@ -69,6 +69,7 @@ private:
     int exclusiveAccessMinutes;    // X: max minutes of exclusive SD access
     int cooldownMinutes;           // Y: minutes to release SD between upload cycles
     bool enable1BitSdMode;         // Whether to use 1-bit SDIO mode instead of 4-bit
+    bool sdCmd0OnRelease;           // Send CMD0 (GO_IDLE) before releasing SD card to CPAP (AS10 fix)
     bool minimizeReboots;           // Skip elective reboots between upload sessions
     bool flushLogsDuringUpload;      // Continue periodic log flushes during uploads (default: false)
     
@@ -157,6 +158,7 @@ public:
     int getExclusiveAccessMinutes() const;
     int getCooldownMinutes() const;
     bool getEnable1BitSdMode() const;
+    bool getSdCmd0OnRelease() const;
     bool getMinimizeReboots() const;
     bool getFlushLogsDuringUpload() const;
     bool isSmartMode() const;

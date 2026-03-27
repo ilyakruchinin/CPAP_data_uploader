@@ -29,6 +29,7 @@ Config::Config() :
     exclusiveAccessMinutes(5),
     cooldownMinutes(10),
     enable1BitSdMode(false),  // Default to safer 4-bit mode
+    sdCmd0OnRelease(false),   // Default: off (AS11 compat); AS10 users enable via config
     minimizeReboots(true),
     flushLogsDuringUpload(false),  // Default: defer log flushes during uploads
     
@@ -227,6 +228,8 @@ void Config::setConfigValue(String key, String value) {
         cooldownMinutes = value.toInt();
     } else if (key == "ENABLE_1BIT_SD_MODE") {
         enable1BitSdMode = (value.equalsIgnoreCase("true") || value == "1");
+    } else if (key == "SD_CMD0_ON_RELEASE") {
+        sdCmd0OnRelease = (value.equalsIgnoreCase("true") || value == "1");
     } else if (key == "CPU_SPEED_MHZ") {
         cpuSpeedMhz = value.toInt();
     } else if (key == "WIFI_TX_PWR") {
@@ -648,6 +651,7 @@ int Config::getInactivitySeconds() const { return inactivitySeconds; }
 int Config::getExclusiveAccessMinutes() const { return exclusiveAccessMinutes; }
 int Config::getCooldownMinutes() const { return cooldownMinutes; }
 bool Config::getEnable1BitSdMode() const { return enable1BitSdMode; }
+bool Config::getSdCmd0OnRelease() const { return sdCmd0OnRelease; }
 bool Config::getMinimizeReboots() const { return minimizeReboots; }
 bool Config::getFlushLogsDuringUpload() const { return flushLogsDuringUpload; }
 bool Config::isSmartMode() const { return uploadMode == "smart"; }

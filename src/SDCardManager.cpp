@@ -3,8 +3,10 @@
 #include "pins_config.h"
 #include <SD_MMC.h>
 #include <driver/gpio.h>
+#include <driver/sdmmc_host.h>
+#include <sdmmc_cmd.h>
 
-// Global config reference to check enableSdCmd0Reset
+// Global config reference for SD mode selection
 #include "Config.h"
 extern Config config;
 
@@ -93,28 +95,53 @@ void SDCardManager::releaseControl() {
     unsigned long holdDurationMs = millis() - controlAcquiredAt;
     LOGF("Releasing SD card. Total mount duration: %lu ms", holdDurationMs);
 
-    SD_MMC.end();
-    initialized = false;
-
-    gpio_set_drive_capability((gpio_num_t)SD_CMD_PIN, GPIO_DRIVE_CAP_2);
-    gpio_set_drive_capability((gpio_num_t)SD_CLK_PIN, GPIO_DRIVE_CAP_2);
-    gpio_set_drive_capability((gpio_num_t)SD_D0_PIN, GPIO_DRIVE_CAP_2);
-    gpio_set_drive_capability((gpio_num_t)SD_D1_PIN, GPIO_DRIVE_CAP_2);
-    gpio_set_drive_capability((gpio_num_t)SD_D2_PIN, GPIO_DRIVE_CAP_2);
-    gpio_set_drive_capability((gpio_num_t)SD_D3_PIN, GPIO_DRIVE_CAP_2);
-
-    // If we mounted in 1-bit mode, do a brief 4-bit compatibility remount
-    // so the card's negotiated bus width is restored to 4-bit before the CPAP takes over.
-    if (config.getEnable1BitSdMode()) {
-        if (SD_MMC.begin("/sdcard", SDIO_BIT_MODE_FAST, false, SDMMC_FREQ_DEFAULT, 2)) {
-            SD_MMC.end();
+    // ── AS10 FIX: Send CMD0 (GO_IDLE_STATE) before unmounting ──
+    // The SDMMC peripheral is still initialized at this point.
+    // CMD0 resets the SD card's internal state machine back to "Idle" so that
+    // when the MUX hands the card back to the CPAP, it sees a freshly-reset
+    // card (no stale RCA, no leftover Transfer/Standby state).
+    // Without this, AirSense 10 (STM32-based) hits a 300ms DMA timeout on
+    // the first write because the card ignores commands with the wrong RCA,
+    // triggering its error handler → full SDIO power-cycle.
+    // Disabled by default for AS11 compatibility. Enable via SD_CMD0_ON_RELEASE=true.
+    if (config.getSdCmd0OnRelease()) {
+        sdmmc_command_t cmd = {};
+        cmd.opcode = 0;  // CMD0 (GO_IDLE_STATE)
+        cmd.arg = 0;
+        cmd.flags = SCF_CMD_BC;          // Broadcast, no response expected
+        esp_err_t err = sdmmc_host_do_transaction(1, &cmd);  // Slot 1
+        if (err == ESP_OK) {
+            LOG("[SD] CMD0 (GO_IDLE) sent before release");
         } else {
-            LOG_WARN("SD handoff compatibility remount failed");
+            LOGF("[SD] CMD0 failed (0x%x) — card may not be in idle state", err);
         }
     }
 
+    SD_MMC.end();
+    initialized = false;
+
+    // ── AS10 FIX: Hold SD bus lines high (idle) during MUX transition ──
+    // After SD_MMC.end() the SDMMC peripheral releases the GPIOs, leaving
+    // them floating.  We explicitly set them as inputs with pull-ups so the
+    // bus lines stay HIGH (SD idle convention) until the MUX switches.
+    // This prevents spurious CRC errors from noise/glitches on the AS10.
+    static const int sdPins[] = { SD_CMD_PIN, SD_CLK_PIN, SD_D0_PIN,
+                                  SD_D1_PIN, SD_D2_PIN, SD_D3_PIN };
+    for (int pin : sdPins) {
+        gpio_set_direction((gpio_num_t)pin, GPIO_MODE_INPUT);
+        gpio_set_pull_mode((gpio_num_t)pin, GPIO_PULLUP_ONLY);
+    }
+
+    // ── MUX switch: hand card back to CPAP ──
     setControlPin(false);
     espHasControl = false;
+
+    // Restore GPIO drive strength for the next takeControl() cycle.
+    // This happens AFTER the MUX switch so we don't drive the bus during handoff.
+    for (int pin : sdPins) {
+        gpio_set_drive_capability((gpio_num_t)pin, GPIO_DRIVE_CAP_2);
+    }
+
     LOG("SD card control released to CPAP machine");
 }
 
