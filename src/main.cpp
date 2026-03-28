@@ -620,6 +620,9 @@ void setup() {
             LOG("-> MAIN: Detected 4-Bit Width (Likely AirSense 11)");
         } else {
             LOG("-> MAIN: Detection Failed or Uninitialized Card (Standard Reader / CPAP Off)");
+            LOG_WARN("[EXPERIMENTAL] No RCA found - skipping SD mount, continuing with default config");
+            // Skip SD mount attempts when no RCA found - card is not initialized by CPAP
+            goto skip_sd_mount;
         }
 
         LOG("Attempting SD card access for normal boot...");
@@ -665,7 +668,13 @@ void setup() {
         sdManager.releaseControl();
     }
 
+skip_sd_mount:
     // ── Common path: config post-processing (runs for both cached and SD boot) ──
+    // If we skipped SD mount (no RCA found), load default configuration
+    if (!config.isLoaded()) {
+        LOG_WARN("[EXPERIMENTAL] Loading default configuration (no SD access)");
+        config.loadDefaults();
+    }
     LOG("Configuration loaded successfully");
     g_debugMode = config.getDebugMode();
     if (g_debugMode) {
