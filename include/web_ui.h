@@ -198,7 +198,7 @@ nav button:hover:not(.act){background:#3a5a7e}
 <div class=row><span class=k>Max alloc</span><span id=d-ma class=v></span></div>
 <div class=row><span class=k>WiFi</span><span id=d-wifi class=v></span></div>
 <div class=row><span class=k>Endpoint</span><span id=d-ep class=v></span></div>
-<div class=row><span class=k>GMT offset</span><span id=d-gmt class=v></span></div>
+<div class=row><span class=k>Timezone</span><span id=d-tz class=v></span></div>
 <div class=row><span class=k>Uptime</span><span id=d-up class=v></span></div>
 </div>
 </div>
@@ -581,8 +581,8 @@ function renderStatus(d){
   set('d-time',d.time||'—');
   set('d-fh',d.free_heap?Math.round(d.free_heap/1024)+' KB':'—');
   set('d-ma',d.max_alloc?Math.round(d.max_alloc/1024)+' KB':'—');
-  var gmtOff=cfg.gmt_offset_hours;
-  set('d-gmt',gmtOff!=null?(gmtOff>=0?'+':'')+gmtOff:'—');
+  var tz=cfg.tz_string,gmtOff=cfg.gmt_offset_hours;
+  set('d-tz',tz?tz:(gmtOff!=null?(gmtOff>=0?'GMT+':'GMT')+gmtOff:'—'));
   if(d.wifi){
     var rc=sigClass(d.rssi),rl=sigLabel(d.rssi);
     document.getElementById('d-wifi').innerHTML='<span class='+rc+'>'+rl+' ('+d.rssi+' dBm)</span>';
