@@ -62,9 +62,14 @@ int BusWidthDetector::detectBusWidth() {
         return -1;
     }
 
-    // Set probing clock (4 MHz for reliable, high-speed RCA discovery)
-    sdmmc_host_set_card_clk(SDMMC_HOST_SLOT_1, 4000); 
-    delay(10);
+    // Set probing clock (4 MHz)
+    err = sdmmc_host_set_card_clk(SDMMC_HOST_SLOT_1, 4000); 
+    if (err != ESP_OK) {
+        LOGF("Detector: sdmmc_host_set_card_clk (4 MHz) failed: 0x%x", err);
+        cleanup_and_release(false);
+        return -1;
+    }
+    delay(20);
 
     // 3. Send 80 Initialization Clocks (CIU sync)
     // Critical: Bit 15 (send_init) tells the hardware to send 80 clocks to the card.
@@ -113,10 +118,15 @@ int BusWidthDetector::detectBusWidth() {
         SD_RINTSTS_VAL = 0xFFFFFFFF; // Clear interrupts
         SD_CMD_VAL = cmd13_flags;
 
-        uint32_t sc = 0;
-        while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 2000);
+        // Wait for HW to latch the command (Bit 31 clears when sent)
+        uint32_t latch_sc = 0;
+        while ((SD_CMD_VAL & (1u << 31)) && ++latch_sc < 100);
 
-        if ((SD_RINTSTS_VAL & HW_CMD_DONE) && !(SD_RINTSTS_VAL & SWEEP_ERR_FLAGS)) {
+        uint32_t sc = 0;
+        while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 500);
+
+        uint32_t status = SD_RINTSTS_VAL;
+        if ((status & HW_CMD_DONE) && !(status & SWEEP_ERR_FLAGS)) {
             found_rca = rca;
             rca_found = true;
             card_status = SD_RESP0_VAL;
@@ -139,9 +149,13 @@ int BusWidthDetector::detectBusWidth() {
             SD_RINTSTS_VAL = 0xFFFFFFFF;
             SD_CMD_VAL = cmd13_flags;
 
+            // Wait for HW to latch the command (Bit 31 clears when sent)
+            uint32_t latch_sc = 0;
+            while ((SD_CMD_VAL & (1u << 31)) && ++latch_sc < 100);
+
             uint32_t sc = 0;
-            // hardware timeout (127 cycles) handles this mostly. 150 software polls is ~75us.
-            while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 150);
+            // hardware timeout (127 cycles) handles this mostly. 200 software polls is ~100us.
+            while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 200);
 
             uint32_t status = SD_RINTSTS_VAL;
             if ((status & HW_CMD_DONE) && !(status & SWEEP_ERR_FLAGS)) {
@@ -152,7 +166,11 @@ int BusWidthDetector::detectBusWidth() {
                 break;
             }
             if (status & HW_RTO) timeouts++;
-            if (status & HW_RCRC) crc_errors++;
+            else if (status & HW_RCRC) crc_errors++;
+            else if (!(status & HW_CMD_DONE)) {
+                // This means latch_sc reached 100 or sc reached 200 without HW noticing anything
+                timeouts++; 
+            }
 
             if (rca % 10000 == 0) LOGF("..%uk", rca/1000);
         }
