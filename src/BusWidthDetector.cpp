@@ -98,8 +98,11 @@ int BusWidthDetector::detectBusWidth() {
                            (1 << 29) |   // Use Hold Register
                            (1 << 31);    // Start Command
 
-    // Common RCAs to check first for instant detection
-    uint16_t fast_path[] = {0x0001, 0x1234, 0x0002, 0xC0DE, 0x8000, 0x0000};
+    // Common RCAs to check first for instant detection.
+    // Most SD cards use RCAs 1, 2, or 3. Checking 1-16 first captures 99% of cards.
+    uint16_t fast_path[] = {0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 
+                            0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, 0x000F, 0x0010,
+                            0x1234, 0xC0DE, 0x8000, 0x0000};
     
     for (int i = 0; i < (int)(sizeof(fast_path)/sizeof(fast_path[0])); i++) {
         uint16_t rca = fast_path[i];
@@ -122,9 +125,9 @@ int BusWidthDetector::detectBusWidth() {
     if (found_rca == 0) {
         LOG("Detector: Fast-path missed. Full linear sweep (1->65535)...");
         for (uint16_t rca = 1; rca < 0xFFFF; rca++) {
-            // Periodic 3s total timeout check
-            if ((rca & 0xFF) == 0 && (millis() - start_time > 3000)) {
-                LOG_ERROR("Detector: Sweep reached 3-second safety limit. Aborting.");
+            // Periodic 10s total timeout check (safety buffer for full sweep)
+            if ((rca & 0xFF) == 0 && (millis() - start_time > 10000)) {
+                LOG_ERROR("Detector: Sweep reached 10-second safety limit. Aborting.");
                 break;
             }
 
@@ -133,7 +136,8 @@ int BusWidthDetector::detectBusWidth() {
             SD_CMD_VAL = cmd13_flags;
 
             uint32_t sc = 0;
-            while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 1000);
+            // hardware timeout (127 cycles) handles this mostly. 150 software polls is ~75us.
+            while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 150);
 
             uint32_t status = SD_RINTSTS_VAL;
             if ((status & HW_CMD_DONE) && !(status & SWEEP_ERR_FLAGS)) {
