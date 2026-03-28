@@ -22,6 +22,7 @@
 #include "Logger.h"
 #include "pins_config.h"
 #include "version.h"
+#include "BusWidthDetector.h"
 
 #include "TrafficMonitor.h"
 #include "UploadFSM.h"
@@ -610,7 +611,18 @@ void setup() {
             runSmartWait();
         }
         
-        LOG("Boot delay complete, attempting SD card access...");
+        LOG("Boot delay complete. Running Bus Width Detection...");
+        // EXPERIMENTAL: Stealth detect RCA and Bus Width
+        int detectedBusWidth = BusWidthDetector::detectBusWidth();
+        if (detectedBusWidth == 1) {
+            LOG("-> MAIN: Detected 1-Bit Width (Likely AirSense 10)");
+        } else if (detectedBusWidth == 4) {
+            LOG("-> MAIN: Detected 4-Bit Width (Likely AirSense 11)");
+        } else {
+            LOG("-> MAIN: Detection Failed or Uninitialized Card (Standard Reader / CPAP Off)");
+        }
+
+        LOG("Attempting SD card access for normal boot...");
 
         // Take control of SD card
         LOG("Waiting to access SD card...");
