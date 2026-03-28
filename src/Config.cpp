@@ -10,6 +10,7 @@ const char* Config::CENSORED_VALUE = "***STORED_IN_FLASH***";
 
 Config::Config() : 
     gmtOffsetHours(0),  // Default: UTC
+    ntpServer("pool.ntp.org"),
     saveLogs(false),  // Default: do not persist logs (debugging only)
     debugMode(false),    // Default: suppress verbose pre-flight and heap stats
     isValid(false),
@@ -193,6 +194,10 @@ void Config::setConfigValue(String key, String value) {
         endpointPassword = value;
     } else if (key == "GMT_OFFSET_HOURS") {
         gmtOffsetHours = value.toInt();
+    } else if (key == "TZ_STRING") {
+        tzString = value;
+    } else if (key == "NTP_SERVER") {
+        ntpServer = value;
     } else if (key == "PERSISTENT_LOGS") {
         saveLogs = (value.equalsIgnoreCase("true") || value.toInt() == 1);
     } else if (key == "DEBUG") {
@@ -612,6 +617,8 @@ const String& Config::getEndpointType() const { return endpointType; }
 const String& Config::getEndpointUser() const { return endpointUser; }
 const String& Config::getEndpointPassword() const { return endpointPassword; }
 int Config::getGmtOffsetHours() const { return gmtOffsetHours; }
+const String& Config::getTzString() const { return tzString; }
+const String& Config::getNtpServer() const { return ntpServer; }
 bool Config::getSaveLogs() const { return saveLogs; }
 bool Config::getDebugMode() const { return debugMode; }
 bool Config::valid() const { return isValid; }
