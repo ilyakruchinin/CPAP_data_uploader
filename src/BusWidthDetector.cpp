@@ -62,8 +62,8 @@ int BusWidthDetector::detectBusWidth() {
         return -1;
     }
 
-    // Set probing clock (1 MHz for maximum reliability before discovery)
-    sdmmc_host_set_card_clk(SDMMC_HOST_SLOT_1, 1000); 
+    // Set probing clock (4 MHz for reliable, high-speed RCA discovery)
+    sdmmc_host_set_card_clk(SDMMC_HOST_SLOT_1, 4000); 
     delay(10);
 
     // 3. Send 80 Initialization Clocks (CIU sync)
@@ -80,10 +80,10 @@ int BusWidthDetector::detectBusWidth() {
 
     LOG("Detector: Starting Optimized RCA Sweep...");
     
-    // Set immediate response timeout for the sweep (15 cycles)
-    // This allows us to check 65k RCAs in under 3 seconds.
+    // Set hardware response timeout to 127 card clock cycles.
+    // At 4 MHz, 127 cycles is 31.75\u00b5s, which is enough to capture the 48-bit response.
     uint32_t orig_tmout = SD_TMOUT_VAL;
-    SD_TMOUT_VAL = (orig_tmout & 0xFFFFFF00) | 0x0F;
+    SD_TMOUT_VAL = (orig_tmout & 0xFFFFFF00) | 0x7F;
 
     unsigned long start_time = millis();
     uint16_t found_rca = 0;
@@ -108,7 +108,7 @@ int BusWidthDetector::detectBusWidth() {
         SD_CMD_VAL = cmd13_flags;
 
         uint32_t sc = 0;
-        while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 500);
+        while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 2000);
 
         if ((SD_RINTSTS_VAL & HW_CMD_DONE) && !(SD_RINTSTS_VAL & SWEEP_ERR_FLAGS)) {
             found_rca = rca;
@@ -133,7 +133,7 @@ int BusWidthDetector::detectBusWidth() {
             SD_CMD_VAL = cmd13_flags;
 
             uint32_t sc = 0;
-            while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 300);
+            while (!(SD_RINTSTS_VAL & (HW_CMD_DONE | SWEEP_ERR_FLAGS)) && ++sc < 1000);
 
             uint32_t status = SD_RINTSTS_VAL;
             if ((status & HW_CMD_DONE) && !(status & SWEEP_ERR_FLAGS)) {
