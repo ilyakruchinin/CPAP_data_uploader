@@ -678,6 +678,22 @@ bool Config::getSaveLogs() const { return saveLogs; }
 bool Config::getDebugMode() const { return debugMode; }
 bool Config::valid() const { return isValid; }
 
+void Config::loadDefaults() {
+    LOG("[Config] Loading default configuration settings (Experimental Mode)");
+    
+    // Ensure endpoint type flags are initialized even if default values are empty
+    {
+        String upper = endpointType;
+        upper.toUpperCase();
+        _hasSmbEndpoint = (upper.indexOf("SMB") >= 0);
+        _hasCloudEndpoint = (upper.indexOf("CLOUD") >= 0 || upper.indexOf("SLEEPHQ") >= 0);
+        _hasWebdavEndpoint = (upper.indexOf("WEBDAV") >= 0);
+    }
+    
+    isValid = true;
+    LOG("[Config] Defaults applied, isValid marked TRUE");
+}
+
 // Credential storage mode getters
 bool Config::isMaskingCredentials() const { return maskCredentials; }
 bool Config::areCredentialsInFlash() const { return credentialsInFlash; }

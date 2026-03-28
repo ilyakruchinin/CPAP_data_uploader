@@ -138,6 +138,8 @@ public:
     bool getSaveLogs() const;
     bool getDebugMode() const;
     bool valid() const;
+    bool isLoaded() const { return valid(); }
+    void loadDefaults();
     
     // Cloud upload getters
     const String& getCloudClientId() const;
