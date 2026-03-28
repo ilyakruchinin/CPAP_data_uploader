@@ -491,7 +491,7 @@ void setup() {
         LOG_ERROR("Failed to mount LittleFS - state and logs cannot be saved!");
     } else {
         LOG("LittleFS mounted successfully");
-        Logger::getInstance().enableLogSaving(false, &LittleFS);
+        Logger::getInstance().enableLogSaving(true, &LittleFS); // Enable early to capture boot/detector logs
     }
 
     // Initialize SD card control

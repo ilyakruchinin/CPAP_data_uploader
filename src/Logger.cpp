@@ -505,13 +505,20 @@ void Logger::enableLogSaving(bool enable, fs::FS* logFS) {
         return;
     }
     
+    // Avoid redundant headers if already enabled on the same filesystem
+    if (logSavingEnabled == enable && (logFS == nullptr || logFileSystem == logFS)) {
+        return;
+    }
+
+    bool newlyEnabled = enable && (!logSavingEnabled || logFileSystem != logFS);
     logSavingEnabled = enable;
+    
     if (logFS != nullptr) {
         logFileSystem = logFS;
     }
     
-    if (enable) {
-        // Reset dump tracking when enabling
+    if (newlyEnabled) {
+        // Reset dump tracking when enabling to ensure full buffer is captured
         lastDumpedBytes = 0;
         
         // One-time migration: remove legacy log files from old 2-file scheme
@@ -533,6 +540,9 @@ void Logger::enableLogSaving(bool enable, fs::FS* logFS) {
             if (n > 0) sepFile.write((const uint8_t*)sep, n);
             sepFile.close();
         }
+
+        // Flush the existing RAM buffer to NAND immediately to capture stabilization/SmartWait logs
+        dumpSavedLogsPeriodic(nullptr, true);
     }
 }
 
