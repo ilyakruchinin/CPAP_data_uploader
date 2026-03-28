@@ -40,6 +40,7 @@ int BusWidthDetector::detectBusWidth() {
     esp_err_t err = sdmmc_host_init();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         LOGF("Detector: sdmmc_host_init failed: 0x%x", err);
+        cleanup_and_release(false);
         return -1;
     }
 
@@ -57,6 +58,7 @@ int BusWidthDetector::detectBusWidth() {
     err = sdmmc_host_init_slot(SDMMC_HOST_SLOT_1, &slot_config);
     if (err != ESP_OK) {
         LOGF("Detector: sdmmc_host_init_slot failed: 0x%x", err);
+        cleanup_and_release(false);
         return -1;
     }
 
@@ -149,6 +151,7 @@ int BusWidthDetector::detectBusWidth() {
 
     if (found_rca == 0) {
         LOG("Detector: No RCA found (sweep took " + String(millis() - start_time) + "ms).");
+        cleanup_and_release(false);
         return 0; // Uninitialized or card reader
     }
 
@@ -174,6 +177,7 @@ int BusWidthDetector::detectBusWidth() {
     
     if (!crc_fail_1bit && (SD_RINTSTS_VAL & HW_CMD_DONE)) {
         LOG("Detector: 1-Bit Read SUCCESS -> Confirmed AirSense 10 (1-bit mode)");
+        cleanup_and_release(false);
         return 1;
     }
 
@@ -191,9 +195,25 @@ int BusWidthDetector::detectBusWidth() {
     
     if (success_4bit) {
         LOG("Detector: 4-Bit Read SUCCESS -> Confirmed AirSense 11 (4-bit mode)");
+        cleanup_and_release(false);
         return 4;
     }
 
     LOG("Detector: Both 1-bit and 4-bit probes failed. Card might be in incompatible state.");
+    cleanup_and_release(false);
     return 0;
+}
+
+void BusWidthDetector::cleanup_and_release(bool must_deselect) {
+    LOG("Detector: Cleaning up hardware resources...");
+
+    // Restore SDMMC bus settings
+    SD_CTYPE_VAL = 0; // Reset to 1-bit mode internally
+    
+    // De-initialize slot and host to release resources for Arduino SD_MMC library
+    sdmmc_host_deinit_slot(SDMMC_HOST_SLOT_1);
+    sdmmc_host_deinit();
+    
+    delay(10);
+    LOG("Detector: Hardware de-initialized.");
 }
