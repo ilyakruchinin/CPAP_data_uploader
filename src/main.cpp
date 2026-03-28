@@ -516,8 +516,8 @@ void setup() {
         String cached = loadCachedConfigFromNVS();
         if (!cached.isEmpty()) {
             if (config.loadFromCachedString(cached) && config.getAS10Mode()) {
-                usedCachedConfig = true;
-                LOG_WARN("[AS10] Therapy-safe boot — using cached config, skipping SD card access");
+                // usedCachedConfig = true; // EXPERIMENTAL: Force SD access for Bus Width Detection
+                LOG_WARN("[AS10] Therapy-safe boot — NVS config loaded, but forcing SD access for experimental test");
             }
         }
     }
