@@ -619,10 +619,7 @@ void setup() {
         } else if (detectedBusWidth == 4) {
             LOG("-> MAIN: Detected 4-Bit Width (Likely AirSense 11)");
         } else {
-            LOG("-> MAIN: Detection Failed or Uninitialized Card (Standard Reader / CPAP Off)");
-            LOG_WARN("[EXPERIMENTAL] No RCA found - skipping SD mount, continuing with default config");
-            // Skip SD mount attempts when no RCA found - card is not initialized by CPAP
-            goto skip_sd_mount;
+            LOG("-> MAIN: Detection Failed (Standard Reader / CPAP Off) — falling back to standard SD mount");
         }
 
         LOG("Attempting SD card access for normal boot...");
