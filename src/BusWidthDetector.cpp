@@ -32,7 +32,7 @@ int BusWidthDetector::detectBusWidth() {
     LOG("Detector: Grabbing SD MUX...");
     pinMode(SD_SWITCH_PIN, OUTPUT);
     digitalWrite(SD_SWITCH_PIN, SD_SWITCH_ESP_VALUE); // ESP32 takes the card
-    delay(50); // Settle MUX relay/switch
+    delay(200); // Settle MUX relay/switch (increased for mechanical relays)
 
     // 2. Formal Host and Slot Initialization (Link Layer)
     // We MUST use these functions to route the SDMMC peripheral to the GPIO Matrix.
@@ -87,7 +87,10 @@ int BusWidthDetector::detectBusWidth() {
 
     unsigned long start_time = millis();
     uint16_t found_rca = 0;
+    bool rca_found = false;
     uint32_t card_status = 0;
+    uint32_t timeouts = 0;
+    uint32_t crc_errors = 0;
 
     // CMD13: opcode=13, res_expected=1, check_crc=1, check_idx=1, hold=1, start=1
     uint32_t cmd13_flags = 13 |          // Command 13 (SEND_STATUS)
@@ -115,6 +118,7 @@ int BusWidthDetector::detectBusWidth() {
 
         if ((SD_RINTSTS_VAL & HW_CMD_DONE) && !(SD_RINTSTS_VAL & SWEEP_ERR_FLAGS)) {
             found_rca = rca;
+            rca_found = true;
             card_status = SD_RESP0_VAL;
             LOGF("Detector: Fast-Path HIT! Found RCA 0x%04X", rca);
             break;
@@ -142,10 +146,13 @@ int BusWidthDetector::detectBusWidth() {
             uint32_t status = SD_RINTSTS_VAL;
             if ((status & HW_CMD_DONE) && !(status & SWEEP_ERR_FLAGS)) {
                 found_rca = rca;
+                rca_found = true;
                 card_status = SD_RESP0_VAL;
                 LOGF("Detector: Discovered RCA 0x%04X", rca);
                 break;
             }
+            if (status & HW_RTO) timeouts++;
+            if (status & HW_RCRC) crc_errors++;
 
             if (rca % 10000 == 0) LOGF("..%uk", rca/1000);
         }
@@ -153,8 +160,8 @@ int BusWidthDetector::detectBusWidth() {
 
     SD_TMOUT_VAL = orig_tmout; // Restore original timeout
 
-    if (found_rca == 0) {
-        LOG("Detector: No RCA found (sweep took " + String(millis() - start_time) + "ms).");
+    if (!rca_found) {
+        LOGF("Detector: No RCA found after sweep. Diagnostics: Timeouts=%u, CRC_Errors=%u", timeouts, crc_errors);
         cleanup_and_release(false);
         return 0; // Uninitialized or card reader
     }
